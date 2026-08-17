@@ -527,7 +527,10 @@ async def internal_federation_inbound(body: dict, request: Request):
     lines += ["", "## Sources", f"- Shared over Matrix by {sender} (card_id {_t(card.get('card_id'), 80)}); "
               "not verified locally — treat as partner-provided (unconfirmed)."]
     content = "\n".join(lines)
-    doc_id = f"shared-{_t(card.get('card_id'), 60) or _t(prov.get('event_id'), 60)}"
+    # doc_id is namespaced server-side (threat model F6): the room id is assigned by
+    # the homeserver and unique per partner pair, so a partner-chosen card_id can
+    # never collide with a local document or with another partner's cards.
+    doc_id = f"fed:{_t(prov.get('room_id'), 80) or 'unknown'}:{_t(card.get('card_id'), 60) or _t(prov.get('event_id'), 60)}"
     metadata = {
         "subject": name, "shared_by": sender, "share_scope": card.get("share_scope"),
         "card_id": card.get("card_id"), "schema": card.get("schema"),

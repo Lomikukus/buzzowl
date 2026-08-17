@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Buzzowl — Federation UX mock (Phase 5 spike)</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #1e1e1e; color: #d4d4d4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.55; padding: 1.2rem 1.5rem 3rem; }
+h1 { font-size: 1.05rem; color: #4ec9b0; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 0.2rem; }
+.sub { color: #888; font-size: 0.78rem; margin-bottom: 1.2rem; }
+.screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1rem; align-items: start; }
+.screen { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; overflow: hidden; }
+.screen > .bar { background: #202020; border-bottom: 1px solid #2a2a2a; padding: 0.5rem 0.9rem; font-size: 0.7rem; color: #888; text-transform: uppercase; letter-spacing: 0.08em; display: flex; justify-content: space-between; }
+.screen > .bar b { color: #ccc; }
+.pad { padding: 0.9rem; }
+h2 { font-size: 0.9rem; color: #e6e6e6; margin-bottom: 0.4rem; }
+h3 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin: 0.9rem 0 0.35rem; }
+p, li { font-size: 0.8rem; }
+.note { font-size: 0.72rem; color: #888; }
+.warn { background: #2e2a1a; border-left: 3px solid #d7ba7d; color: #d7ba7d; padding: 0.45rem 0.6rem; border-radius: 4px; font-size: 0.74rem; margin: 0.5rem 0; }
+.danger { background: #3a1a1a; border-left: 3px solid #e06c75; color: #e6a0a5; padding: 0.45rem 0.6rem; border-radius: 4px; font-size: 0.74rem; margin: 0.5rem 0; }
+.ok { color: #6a9955; }
+.btn { background: #252526; border: 1px solid #333; color: #d4d4d4; border-radius: 4px; padding: 0.28rem 0.7rem; font-size: 0.74rem; cursor: pointer; font-family: inherit; }
+.btn.primary { background: #1a3a2e; border-color: #4ec9b0; color: #4ec9b0; }
+.btn.danger { border-color: #e06c75; color: #e06c75; }
+.btn.sm { padding: 0.12rem 0.45rem; font-size: 0.68rem; }
+input[type=text], select { width: 100%; background: #252526; color: #d4d4d4; border: 1px solid #333; border-radius: 4px; padding: 0.38rem 0.5rem; font: inherit; font-size: 0.8rem; }
+.row { display: flex; gap: 0.5rem; align-items: center; margin: 0.35rem 0; }
+.partner { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.6rem; border: 1px solid #2a2a2a; border-radius: 6px; margin-bottom: 0.45rem; background: #202020; }
+.partner .id { font-family: ui-monospace, Menlo, monospace; font-size: 0.74rem; color: #569cd6; }
+.badge { font-size: 0.62rem; padding: 0.06rem 0.35rem; border-radius: 3px; border: 1px solid #333; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+.badge.green { border-color: #6a9955; color: #6a9955; }
+.badge.amber { border-color: #d7ba7d; color: #d7ba7d; }
+.badge.red { border-color: #e06c75; color: #e06c75; }
+.badge.purple { border-color: #c586c0; color: #c586c0; }
+.fp { font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; background: #111; border: 1px solid #333; border-radius: 4px; padding: 0.35rem 0.5rem; letter-spacing: 0.06em; color: #ccc; }
+.emoji { font-size: 1.3rem; letter-spacing: 0.3rem; margin: 0.25rem 0; }
+.toggle { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.toggle .sw { width: 30px; height: 16px; border-radius: 8px; background: #333; position: relative; }
+.toggle .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #888; }
+.toggle.on .sw { background: #1a3a2e; border: 1px solid #4ec9b0; }
+.toggle.on .sw::after { left: 15px; background: #4ec9b0; }
+.scope label { display: flex; gap: 0.4rem; align-items: center; font-size: 0.78rem; margin: 0.15rem 0; }
+.preview { background: #111; border: 1px dashed #333; border-radius: 5px; padding: 0.55rem 0.7rem; font-size: 0.72rem; color: #bbb; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; }
+.card { border: 1px solid #2a2a2a; border-left: 3px solid #c586c0; border-radius: 6px; padding: 0.55rem 0.7rem; margin-bottom: 0.55rem; background: #202020; }
+.card .t { font-size: 0.86rem; color: #e6e6e6; font-weight: 600; }
+.card .m { font-size: 0.7rem; color: #888; margin: 0.15rem 0 0.35rem; }
+.card ul { padding-left: 1rem; font-size: 0.76rem; color: #bbb; }
+.actions { display: flex; gap: 0.4rem; margin-top: 0.45rem; flex-wrap: wrap; }
+.tl { border-left: 2px solid #2a2a2a; margin: 0.4rem 0 0 0.4rem; padding-left: 0.7rem; font-size: 0.72rem; color: #888; }
+.tl div { margin-bottom: 0.15rem; }
+</style>
+</head>
+<body>
+<h1>Federation UX mock — consent, share scope, review queue</h1>
+<div class="sub">Phase 5 spike · static mock, no logic. Principles: consent = explicit accept with fingerprint check · sharing is per client and per partner · received data is badged, read-only, reviewed by a human — <b>never auto-merged</b>.</div>
+
+<div class="screens">
+
+  <!-- 1. Settings › Partners -->
+  <section class="screen">
+    <div class="bar"><span>Settings › <b>Partners</b> (admin)</span><span>screen 1</span></div>
+    <div class="pad">
+      <h2>Connected partners</h2>
+      <p class="note">Each partner is another Buzzowl install. Your install's Matrix ID: <span class="id" style="font-family:monospace;color:#569cd6">@buzzowl:acme-crm.example</span> · homeserver <span class="ok">self-hosted</span></p>
+
+      <div class="partner">
+        <div style="flex:1">
+          <div><b>Globex Partners</b> <span class="badge green">verified</span> <span class="badge green">connected</span></div>
+          <div class="id">@buzzowl:globex-crm.example</div>
+          <div class="note">room since 2026-08-17 · 3 clients shared by you · 1 received · last activity 2 h ago</div>
+        </div>
+        <button class="btn sm">Details</button>
+        <button class="btn sm danger">Disconnect</button>
+      </div>
+
+      <div class="partner" style="border-color:#d7ba7d">
+        <div style="flex:1">
+          <div><b>Solaris Consulting</b> <span class="badge amber">pending — verify fingerprint</span></div>
+          <div class="id">@buzzowl:solaris.example</div>
+          <div class="note">invited you 12 min ago. Before accepting, confirm the fingerprint with them out-of-band (phone/video):</div>
+          <div class="fp">A7F3 92C1 0B4E … 8D2A &nbsp;·&nbsp; device <b>QYNBZHSMQS</b></div>
+          <div class="emoji" title="SAS emoji — read them out to each other">🐢 🍋 🚀 ⚓ 🎩 🐝 🔑</div>
+          <div class="note">They must see the same 7 emoji for <i>your</i> bot. Accepting = you agree to receive client cards from Solaris and pin this device key. New/unknown devices of theirs will be blocked and you'll be alerted.</div>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn primary">✓ Fingerprints match — accept &amp; pin</button>
+        <button class="btn">Not now</button>
+        <button class="btn danger">Reject</button>
+      </div>
+      <div class="warn">By connecting you become independent controllers exchanging business-contact data. Review the <u>partner data-sharing terms</u> (EU/EEA partners only in v1).</div>
+
+      <h3>Invite a partner</h3>
+      <div class="row"><input type="text" placeholder="@buzzowl:partner-homeserver.example"><button class="btn">Invite</button></div>
+      <p class="note">Ask the partner admin for their install's Matrix ID (shown on their Partners page). Nothing is shared by inviting — sharing is chosen per client later.</p>
+    </div>
+  </section>
+
+  <!-- 2. Client page › Share -->
+  <section class="screen">
+    <div class="bar"><span>Client › <b>Acme Corp</b> › Share</span><span>screen 2</span></div>
+    <div class="pad">
+      <h2>Share this client with a partner</h2>
+      <p class="note">Only <b>you</b> decide, per client and per partner. Partners see a read-only card; they can never edit your data. You can unshare any time (they'll get a retract request; their copy is deleted by their Buzzowl automatically, but you cannot force it technically).</p>
+
+      <div class="partner">
+        <div style="flex:1"><b>Globex Partners</b> <span class="badge green">verified</span><div class="note">shared since 2026-08-17 · last update sent 08:41</div></div>
+        <span class="toggle on"><span class="sw"></span><span class="note">sharing</span></span>
+      </div>
+      <div class="partner">
+        <div style="flex:1"><b>Solaris Consulting</b> <span class="badge amber">unverified</span><div class="note">verify the partner first (Settings › Partners)</div></div>
+        <span class="toggle" style="opacity:0.5"><span class="sw"></span><span class="note">off</span></span>
+      </div>
+
+      <h3>What is shared (scope)</h3>
+      <div class="scope">
+        <label><input type="checkbox" checked disabled> Company profile (industry, website, location, summary) — always</label>
+        <label><input type="checkbox" checked> Business contacts (name, role, business email)</label>
+        <label><input type="checkbox"> … incl. phone numbers</label>
+        <label><input type="checkbox" checked> Findings summary (titles, dates, source links)</label>
+        <label><input type="checkbox"> Full research documents (encrypted files, ≤ 5 MB each)</label>
+        <label style="color:#666"><input type="checkbox" disabled> Meeting notes / transcripts / private notes / outreach mails / deals — <b>never shareable</b></label>
+      </div>
+
+      <h3>Preview of the card Globex receives</h3>
+      <div class="preview">Acme Corp — Manufacturing / Industrial Automation
+Berlin, DE · https://acme.example
+Summary: Strategic account; automation initiative underway…
+Contacts (2): Jane Doe · CTO · jane.doe@acme.example
+              John Smith · Head of Operations
+Findings (1): 2026-08-01 [pain_point] Unplanned downtime on line 3 — source ↗
+Shared by Acme Sales GmbH · schema 1 · 848 bytes (limit 40 KiB)</div>
+      <div class="actions"><button class="btn primary">Update card now</button><button class="btn danger">Unshare (retract)</button></div>
+      <div class="tl">
+        <div>08:41 card update sent → Globex (m.replace)</div>
+        <div>08:39 card shared → Globex · <span class="ok">delivered, decrypted on their side</span></div>
+        <div>08:39 sharing enabled by Demo Rep</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. Inbox › Shared with you -->
+  <section class="screen">
+    <div class="bar"><span>Inbox › <b>Shared with you</b> (review queue)</span><span>screen 3</span></div>
+    <div class="pad">
+      <h2>Incoming client cards <span class="badge purple">2 to review</span></h2>
+      <p class="note">Cards from partners are stored read-only and badged. Nothing is merged into your clients until you decide. Agents see them only as "partner-provided (unconfirmed)".</p>
+
+      <div class="card">
+        <div class="t">Acme Corp <span class="badge purple">shared by Acme Sales GmbH</span> <span class="badge green">verified device</span></div>
+        <div class="m">received 2026-08-17 08:39 · scope: profile, contacts, findings summary · card 308809b1… · updated 08:41</div>
+        <ul>
+          <li>Manufacturing / Industrial Automation · Berlin, DE · acme.example</li>
+          <li>Contacts: Jane Doe (CTO), John Smith (Head of Operations)</li>
+          <li>1 finding: Unplanned downtime on line 3 (pain point, 2026-08-01)</li>
+        </ul>
+        <div class="warn">You received personal data of 2 contacts <b>not from them</b>. Inform them at first contact, at the latest within one month (GDPR Art. 14). Provenance is recorded for you.</div>
+        <div class="actions">
+          <button class="btn primary">Link to existing client ▾</button>
+          <button class="btn">Create as new client (copy)</button>
+          <button class="btn">Keep as reference only</button>
+          <button class="btn danger">Dismiss &amp; delete</button>
+        </div>
+      </div>
+
+      <div class="card" style="border-left-color:#e06c75">
+        <div class="t">Wayne Enterprises <span class="badge purple">shared by Solaris Consulting</span> <span class="badge red">unverified device</span></div>
+        <div class="m">received 09:02 · held: sender device is not the pinned key</div>
+        <div class="danger">Held for review: this card came from a device you have not verified. Do not act on it until you confirmed Solaris' fingerprint (Settings › Partners). Contents hidden.</div>
+        <div class="actions"><button class="btn">Go to Partners</button><button class="btn danger">Delete</button></div>
+      </div>
+
+      <h3>Recently linked</h3>
+      <div class="tl">
+        <div>Globex Financial ← Globex Partners · linked to your client "Globex Financial" by Demo Rep · 2026-08-16</div>
+        <div>Umbrella Health ← Globex Partners · retracted by sender 2026-08-15 · your copy deleted, audit stub kept</div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
