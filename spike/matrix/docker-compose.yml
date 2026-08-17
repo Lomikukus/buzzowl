@@ -1,0 +1,63 @@
+# Buzzowl Phase 5 spike — dev Synapse + two "Buzzowl installs" (bots) on one network.
+# Run via ./run.sh (generates the Synapse config first). Nothing here is production.
+name: buzzowl-spike-matrix
+
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: buzzowl_spike_synapse
+    environment:
+      SYNAPSE_SERVER_NAME: synapse
+      SYNAPSE_REPORT_STATS: "no"
+    volumes:
+      - ./data/synapse:/data
+    ports:
+      - "127.0.0.1:8008:8008"     # local inspection only (curl /_matrix/client/versions)
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8008/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # Install B — receiver. Started first so its device keys exist before A sends.
+  instance-b:
+    build: .
+    image: buzzowl-spike-matrix-bot
+    container_name: buzzowl_spike_instance_b
+    depends_on:
+      synapse: { condition: service_healthy }
+    environment:
+      ROLE: receiver
+      BOT_USER: buzzowl-b
+      BOT_PASSWORD: spike-b-pass
+      PARTNER_MXID: "@buzzowl-a:synapse"
+      ORG_NAME: "Globex Partners"
+      HOMESERVER: http://synapse:8008
+      TIMEOUT_S: "180"
+      # Optional: hand received cards to a running Buzzowl (host) as shared_external docs
+      BUZZOWL_URL: ${BUZZOWL_URL:-}
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:-}
+      BUZZOWL_ORG_ID: ${BUZZOWL_ORG_ID:-0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/b:/store
+
+  # Install A — sender. Waits for B to accept the invite, then shares.
+  instance-a:
+    build: .
+    image: buzzowl-spike-matrix-bot
+    container_name: buzzowl_spike_instance_a
+    depends_on:
+      synapse: { condition: service_healthy }
+      instance-b: { condition: service_started }
+    environment:
+      ROLE: sender
+      BOT_USER: buzzowl-a
+      BOT_PASSWORD: spike-a-pass
+      PARTNER_MXID: "@buzzowl-b:synapse"
+      ORG_NAME: "Acme Sales GmbH"
+      HOMESERVER: http://synapse:8008
+      TIMEOUT_S: "150"
+    volumes:
+      - ./data/a:/store

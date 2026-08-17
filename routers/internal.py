@@ -476,6 +476,78 @@ async def internal_client_timeline(org_id: int, client_name: str, request: Reque
 
 
 # ---------------------------------------------------------------------------
+# POST /api/internal/federation/inbound — Phase 5 SPIKE: card received over Matrix
+# ---------------------------------------------------------------------------
+
+@router.post("/federation/inbound")
+async def internal_federation_inbound(body: dict, request: Request):
+    """Store a client card received from a partner install as a read-only, badged
+    `shared_external` document. NEVER merges into local clients — a human links or
+    copies explicitly from the review queue. Remote content is untrusted: rendered
+    as escaped markdown text, never HTML; agents get it only with provenance.
+    Body: {org_id, card: {schema, kind, card_id, sender_org, client{...}, contacts[], ...},
+           provenance: {room_id, event_id, sender, verified_device, ...}}"""
+    _check_token(request)
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    org_id = body.get("org_id")
+    card = body.get("card") or {}
+    prov = body.get("provenance") or {}
+    if not org_id or not isinstance(card, dict):
+        raise HTTPException(status_code=400, detail="org_id and card required")
+    if card.get("kind") != "client_card" or not isinstance(card.get("client"), dict):
+        raise HTTPException(status_code=400, detail="unsupported card")
+    client = card["client"]
+    name = str(client.get("name") or "").strip()[:200]
+    if not name:
+        raise HTTPException(status_code=400, detail="card.client.name required")
+
+    def _t(v, n=500):  # remote strings: plain text only, length-capped
+        return str(v or "").replace("\r", " ").replace("\n", " ").strip()[:n]
+
+    sender = _t(card.get("sender_org"), 120) or _t(prov.get("sender"), 120) or "partner"
+    lines = [f"# {name} — shared by {sender}", "",
+             f"_Received {_t(prov.get('received_at'), 40)} via Matrix room `{_t(prov.get('room_id'), 80)}`; "
+             f"event `{_t(prov.get('event_id'), 80)}`; sender device verified: {prov.get('verified_device')}._", "",
+             "## Profile"]
+    for k in ("industry", "website", "location", "summary"):
+        if client.get(k):
+            lines.append(f"- **{k}**: {_t(client.get(k))}")
+    contacts = [c for c in (card.get("contacts") or []) if isinstance(c, dict)][:50]
+    if contacts:
+        lines += ["", "## Contacts (shared)"]
+        for c in contacts:
+            lines.append("- " + " · ".join(_t(c.get(k), 120) for k in ("name", "role", "email") if c.get(k)))
+    finds = [f for f in (card.get("findings_summary") or []) if isinstance(f, dict)][:50]
+    if finds:
+        lines += ["", "## Findings summary (as shared)"]
+        for f in finds:
+            lines.append(f"- {_t(f.get('date'), 20)} [{_t(f.get('type'), 30)}] {_t(f.get('title'), 200)}"
+                         + (f" — source: {_t(f.get('source_url'), 300)}" if f.get("source_url") else ""))
+    lines += ["", "## Sources", f"- Shared over Matrix by {sender} (card_id {_t(card.get('card_id'), 80)}); "
+              "not verified locally — treat as partner-provided (unconfirmed)."]
+    content = "\n".join(lines)
+    doc_id = f"shared-{_t(card.get('card_id'), 60) or _t(prov.get('event_id'), 60)}"
+    metadata = {
+        "subject": name, "shared_by": sender, "share_scope": card.get("share_scope"),
+        "card_id": card.get("card_id"), "schema": card.get("schema"),
+        "federation": {k: prov.get(k) for k in ("room_id", "event_id", "sender", "server_ts",
+                                                    "verified_device", "sender_key", "received_at")},
+        "review_status": "pending",     # review queue: pending | linked | dismissed
+        "untrusted_remote": True,
+    }
+    try:
+        embedding = await db_module.embed_text(f"{name}\n{content[:2000]}")
+    except Exception:
+        embedding = []
+    did = await db_module.index_document(
+        org_id=int(org_id), doc_id=doc_id, doc_type="shared_external", title=f"Shared: {name} (from {sender})",
+        content=content, metadata=metadata, embedding=embedding or [], source="federation")
+    logger.info("federation inbound: card for %r from %s → doc %s (org %s)", name, sender, did, org_id)
+    return {"ok": True, "document_id": did, "doc_id": doc_id, "review_status": "pending"}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/internal/system-status
 # ---------------------------------------------------------------------------
 
