@@ -122,6 +122,7 @@
     { href: '/products',  label: 'Products',  key: 'products' },
     { href: '/match',     label: 'Match',     key: 'match' },
     { href: '/opportunities', label: 'Opportunities', key: 'opportunities' },
+    { href: '/outreach',  label: 'Outreach',  key: 'outreach' },
     { href: '/news',      label: 'News',      key: 'news' },
     { href: '/research',  label: 'Research',  key: 'research', adminOnly: true },
     { href: '/agents',    label: 'Agents',    key: 'agents',   adminOnly: true },

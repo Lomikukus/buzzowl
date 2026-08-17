@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260817a">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Outreach — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260817b"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; padding: 1.2rem 1.5rem; max-width: 980px; width: 100%; margin: 0 auto; }
+.toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.75rem 1rem; background: var(--c-bg2, #1a1a1a); border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.toolbar-title { font-size: 0.78rem; font-weight: 700; color: var(--c-accent, #4ec9b0); text-transform: uppercase; letter-spacing: 0.08em; }
+.scope-tabs { display: flex; gap: 0.35rem; margin-left: 0.5rem; flex-wrap: wrap; }
+.scope-tab { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888); border-radius: 4px; padding: 0.22rem 0.7rem; font-size: 0.72rem; cursor: pointer; font-family: inherit; }
+.scope-tab:hover { color: var(--c-text, #d4d4d4); }
+.scope-tab.active { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.guard { font-size: 0.72rem; color: var(--c-muted, #888); margin-left: auto; display: flex; gap: 0.6rem; align-items: center; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.card { background: var(--c-bg2, #1a1a1a); border: 1px solid #242424; border-radius: 7px; margin-bottom: 0.7rem; overflow: hidden; border-left: 3px solid var(--c-line2, #333); }
+.card.pending_approval { border-left-color: var(--c-warn, #d7ba7d); }
+.card.approved, .card.queued { border-left-color: var(--c-accent, #4ec9b0); }
+.card.sent, .card.replied { border-left-color: #6a9955; }
+.card.bounced, .card.rejected, .card.cancelled { border-left-color: var(--c-danger, #e06c75); }
+.head { display: flex; align-items: baseline; gap: 0.55rem; padding: 0.6rem 0.9rem; background: #1d1d1d; border-bottom: 1px solid #242424; flex-wrap: wrap; }
+.subject { color: var(--c-texthi, #e6e6e6); font-weight: 700; font-size: 0.95rem; }
+.meta { font-size: 0.72rem; color: var(--c-muted, #888); }
+.state { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.1rem 0.45rem; border-radius: 3px; background: var(--c-surface, #252526); color: var(--c-muted, #888); }
+.body { padding: 0.7rem 0.9rem; font-size: 0.82rem; white-space: pre-wrap; color: var(--c-text, #d4d4d4); max-height: 220px; overflow-y: auto; }
+.body textarea, .head input { width: 100%; background: var(--c-surface, #252526); color: var(--c-text, #d4d4d4); border: 1px solid var(--c-line2, #333); border-radius: 4px; padding: 0.4rem 0.5rem; font: inherit; font-size: 0.8rem; }
+.body textarea { min-height: 160px; }
+.actions { display: flex; gap: 0.45rem; padding: 0.55rem 0.9rem; border-top: 1px solid #242424; flex-wrap: wrap; align-items: center; }
+.btn { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.28rem 0.7rem; font-size: 0.74rem; cursor: pointer; font-family: inherit; }
+.btn:hover { border-color: var(--c-accent, #4ec9b0); }
+.btn.primary { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.btn.danger { border-color: var(--c-danger, #e06c75); color: var(--c-danger, #e06c75); }
+.err { font-size: 0.72rem; color: var(--c-danger, #e06c75); }
+.hist { font-size: 0.68rem; color: var(--c-faint, #555); padding: 0 0.9rem 0.5rem; }
+.empty { color: var(--c-faint, #555); font-size: 0.8rem; padding: 1.5rem 0; }
+.new { background: var(--c-bg2, #1a1a1a); border: 1px dashed var(--c-line2, #333); border-radius: 7px; padding: 0.8rem 0.9rem; margin-bottom: 1rem; display: none; }
+.new .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+.new input, .new textarea { width: 100%; background: var(--c-surface, #252526); color: var(--c-text, #d4d4d4); border: 1px solid var(--c-line2, #333); border-radius: 4px; padding: 0.4rem 0.5rem; font: inherit; font-size: 0.8rem; }
+.new textarea { min-height: 120px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div id="main-nav"></div>
+  <div class="toolbar">
+    <span class="toolbar-title">Outreach</span>
+    <div class="scope-tabs" id="stateTabs"></div>
+    <label class="meta" style="margin-left:0.5rem"><input type="checkbox" id="mineOnly"> mine only</label>
+    <button class="btn" id="newBtn">+ New draft</button>
+    <div class="guard" id="guard">…</div>
+  </div>
+  <div class="content">
+    <div class="new" id="newForm">
+      <div class="row">
+        <input id="nClient" placeholder="Client name (must exist)">
+        <input id="nTo" placeholder="Recipient email">
+        <input id="nContact" placeholder="Contact name (optional)">
+      </div>
+      <input id="nSubject" placeholder="Subject" style="margin-bottom:0.5rem">
+      <textarea id="nBody" placeholder="Body (plain text or HTML)"></textarea>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center">
+        <button class="btn primary" id="nSave">Save draft</button>
+        <button class="btn" id="nCancel">Cancel</button>
+        <span class="err" id="nErr"></span>
+      </div>
+    </div>
+    <div id="list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<script>
+initNavbar({ active: 'outreach' });
+
+const TOKEN_KEY = 'wk_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const H = (json = false) => { const t = getToken(); const h = t ? { 'Authorization': `Bearer ${t}` } : {}; if (json) h['Content-Type'] = 'application/json'; return h; };
+if (!getToken()) { window.location.href = '/login'; }
+
+const STATES = ['pending_approval', 'draft', 'approved', 'queued', 'sent', 'replied', 'followup_due', 'bounced', 'rejected', 'cancelled'];
+const LABEL = { pending_approval: 'To approve', draft: 'Drafts', approved: 'Approved', queued: 'Sending', sent: 'Sent', replied: 'Replied', followup_due: 'Follow-up due', bounced: 'Bounced', rejected: 'Rejected', cancelled: 'Cancelled' };
+let _state = 'pending_approval';
+let _mine = false;
+let _editing = null;
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function ts(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : ''; }
+
+function renderTabs() {
+  document.getElementById('stateTabs').innerHTML = STATES.map(s =>
+    `<button class="scope-tab${s === _state ? ' active' : ''}" data-s="${s}">${LABEL[s]}</button>`).join('');
+}
+
+async function loadGuard() {
+  const el = document.getElementById('guard');
+  try {
+    const g = await (await fetch('/api/outreach/guardrails', { headers: H() })).json();
+    const color = g.ok ? 'var(--c-accent, #4ec9b0)' : 'var(--c-warn, #d7ba7d)';
+    el.innerHTML = `<span class="dot" style="background:${color}"></span>` +
+      (g.ok ? `sending on · ${g.sent_today}/${g.max_per_day} today` : `sending held: ${esc(g.reason)}`) +
+      ` <a href="/settings" style="color:var(--c-accent, #4ec9b0)">settings</a>`;
+  } catch (e) { el.textContent = ''; }
+}
+
+async function load() {
+  renderTabs();
+  const list = document.getElementById('list');
+  const r = await fetch(`/api/outreach?state=${_state}${_mine ? '&mine=1' : ''}`, { headers: H() });
+  if (r.status === 401) { window.location.href = '/login'; return; }
+  const d = await r.json();
+  const items = d.items || [];
+  if (!items.length) { list.innerHTML = `<div class="empty">Nothing in "${LABEL[_state]}".</div>`; return; }
+  list.innerHTML = items.map(card).join('');
+  loadGuard();
+}
+
+function card(it) {
+  const editing = _editing === it.id;
+  const canEdit = ['draft', 'pending_approval', 'approved'].includes(it.state);
+  const btn = (to, label, cls = '') => it.allowed.includes(to)
+    ? `<button class="btn ${cls}" data-act="${to}" data-id="${it.id}">${label}</button>` : '';
+  const hist = (it.history || []).slice(-3).map(h => `${ts(h.ts)} ${h.actor}${h.actor_id ? '#' + h.actor_id : ''}: ${esc(h.from || '·')} → ${esc(h.to)}${h.note ? ' — ' + esc(h.note) : ''}`).join(' · ');
+  return `<div class="card ${it.state}" data-card="${it.id}">
+    <div class="head">
+      ${editing ? `<input data-f="subject" value="${esc(it.subject)}" style="flex:1;min-width:200px">` : `<span class="subject">${esc(it.subject || it.title)}</span>`}
+      <span class="state">${LABEL[it.state] || it.state}</span>
+      <span class="meta">→ ${esc(it.to_contact || '')} ${editing ? `<input data-f="to_email" value="${esc(it.to_email)}" style="width:14rem;display:inline-block">` : `&lt;${esc(it.to_email || 'no email')}&gt;`} · <a href="/client/${encodeURIComponent(it.client || '')}" style="color:var(--c-accent, #4ec9b0)">${esc(it.client)}</a> · ${it.source === 'agent' ? '🤖 agent draft' : 'human'}${it.sent_at ? ' · sent ' + ts(it.sent_at) : ''}</span>
+    </div>
+    <div class="body">${editing ? `<textarea data-f="body">${esc(it.content)}</textarea>` : esc(it.content)}</div>
+    ${it.last_error ? `<div class="hist"><span class="err">held: ${esc(it.last_error)}</span></div>` : ''}
+    <div class="hist">${hist}</div>
+    <div class="actions">
+      ${editing ? `<button class="btn primary" data-save="${it.id}">Save</button><button class="btn" data-cancel-edit="1">Cancel</button>`
+                : (canEdit ? `<button class="btn" data-edit="${it.id}">Edit</button>` : '')}
+      ${btn('pending_approval', it.state === 'approved' ? 'Un-approve' : 'Submit for approval', it.state === 'approved' ? '' : 'primary')}
+      ${btn('approved', '✓ Approve & queue', 'primary')}
+      ${btn('rejected', 'Reject', 'danger')}
+      ${btn('draft', it.state === 'pending_approval' ? 'Send back to draft' : 'Reopen as draft')}
+      ${btn('replied', 'Mark replied')}
+      ${btn('cancelled', 'Cancel', 'danger')}
+      <span class="err" data-err="${it.id}"></span>
+    </div>
+  </div>`;
+}
+
+document.getElementById('stateTabs').addEventListener('click', ev => {
+  const b = ev.target.closest('[data-s]'); if (!b) return; _state = b.dataset.s; _editing = null; load();
+});
+document.getElementById('mineOnly').addEventListener('change', ev => { _mine = ev.target.checked; load(); });
+
+document.getElementById('list').addEventListener('click', async ev => {
+  const act = ev.target.closest('[data-act]');
+  if (act) {
+    const id = act.dataset.id, to = act.dataset.act;
+    let note = '';
+    if (to === 'rejected') note = prompt('Reason for rejection (optional):') || '';
+    if (to === 'approved' && !confirm('Approve this mail? The send worker will deliver it under the org guardrails.')) return;
+    const r = await fetch(`/api/outreach/${id}/transition`, { method: 'POST', headers: H(true), body: JSON.stringify({ to, note }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); document.querySelector(`[data-err="${id}"]`).textContent = d.detail || r.status; return; }
+    load(); return;
+  }
+  const edit = ev.target.closest('[data-edit]');
+  if (edit) { _editing = parseInt(edit.dataset.edit, 10); load(); return; }
+  if (ev.target.closest('[data-cancel-edit]')) { _editing = null; load(); return; }
+  const save = ev.target.closest('[data-save]');
+  if (save) {
+    const id = save.dataset.save; const c = document.querySelector(`[data-card="${id}"]`);
+    const body = { subject: c.querySelector('[data-f="subject"]').value, to_email: c.querySelector('[data-f="to_email"]').value, body: c.querySelector('[data-f="body"]').value };
+    const r = await fetch(`/api/outreach/${id}`, { method: 'PATCH', headers: H(true), body: JSON.stringify(body) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); document.querySelector(`[data-err="${id}"]`).textContent = d.detail || r.status; return; }
+    _editing = null; load();
+  }
+});
+
+document.getElementById('newBtn').addEventListener('click', () => { const f = document.getElementById('newForm'); f.style.display = f.style.display === 'none' || !f.style.display ? 'block' : 'none'; });
+document.getElementById('nCancel').addEventListener('click', () => { document.getElementById('newForm').style.display = 'none'; });
+document.getElementById('nSave').addEventListener('click', async () => {
+  const body = { client: nClient.value.trim(), to_email: nTo.value.trim(), to_contact: nContact.value.trim(), subject: nSubject.value.trim(), body: nBody.value.trim() };
+  const r = await fetch('/api/outreach', { method: 'POST', headers: H(true), body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { document.getElementById('nErr').textContent = d.detail || r.status; return; }
+  document.getElementById('newForm').style.display = 'none';
+  nSubject.value = ''; nBody.value = ''; nTo.value = ''; nContact.value = '';
+  _state = 'draft'; load();
+});
+
+load();
+</script>
+</body>
+</html>

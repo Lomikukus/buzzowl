@@ -331,6 +331,11 @@ async def opportunities_page() -> HTMLResponse:
     return _html("opportunities.html")
 
 
+@app.get("/outreach", response_class=HTMLResponse)
+async def outreach_page() -> HTMLResponse:
+    return _html("outreach.html")
+
+
 @app.get("/news", response_class=HTMLResponse)
 async def news_feed_page() -> HTMLResponse:
     return _html("news.html")
