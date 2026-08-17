@@ -1,13 +1,16 @@
 """
 routers/outreach.py — supervised outreach: approval queue API + send worker.
 
-  POST /api/outreach                       create a draft (human)
-  GET  /api/outreach?state=&mine=1         list (queue view)
-  GET  /api/outreach/{id}                  one item
-  PATCH /api/outreach/{id}                 edit subject/body/to (draft|pending|approved only)
-  POST /api/outreach/{id}/transition       {"to": "<state>", "note": ""} — human actor
-  GET  /api/outreach/guardrails            current guardrail status for the org
-  POST /api/outreach/worker/tick           run one worker pass now (admin; tests/ops)
+  POST /api/outreach/items                       create a draft (human)
+  GET  /api/outreach/items?state=&mine=1         list (queue view)
+  GET  /api/outreach/items/{id}                  one item
+  PATCH /api/outreach/items/{id}                 edit subject/body/to (draft|pending|approved only)
+  POST /api/outreach/items/{id}/transition       {"to": "<state>", "note": ""} — human actor
+  GET  /api/outreach/items/guardrails            current guardrail status for the org
+  POST /api/outreach/items/worker/tick           run one worker pass now (admin; tests/ops)
+
+  (Legacy /api/outreach/summary and /api/outreach/{doc_id}/status live in
+  routers/evaluation.py — hence the /items prefix, no route overlap.)
 
 Send worker (APScheduler job, every minute): claims ONE approved item at a
 time (row-locked), checks the guardrails, sends via mailer with the rep's
@@ -30,7 +33,7 @@ from context import DB_AVAILABLE, config, console, db_module
 from routers.auth import current_user
 
 logger = logging.getLogger("buzzowl.outreach")
-router = APIRouter(prefix="/api/outreach")
+router = APIRouter(prefix="/api/outreach/items")
 
 _EDITABLE_STATES = (o.DRAFT, o.PENDING, o.APPROVED)
 

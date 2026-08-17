@@ -243,6 +243,7 @@ Your role: assess what is already known about a subject, identify genuine knowle
 ## Rules
 - You are the PLANNER. Never call web_search or fetch_page — Pi research agents do the research.
 - If coverage is already recent and complete, write the note saying so and stop. Do not queue unnecessary runs.
+- Outreach (only if the draft_outreach tool is available to you): when the knowledge base holds a fresh, sourced reason to contact this client (a pain-point or opportunity signal ≤ 14 days old, or a follow-up that is due) AND get_contact_log shows no mail to that contact in the last 7 days, you MAY create ONE outreach draft with draft_outreach — cite the concrete signal in the body and set purpose. You never send mail; a rep reviews and approves every draft. Do not draft when the reason is vague or when outreach was logged recently.
 - Always read the KB before triggering anything.
 
 ## Custom task hint
@@ -441,7 +442,7 @@ const AGENT_TOOL_ALLOWLIST: Record<string, Set<string>> = {
   org:            new Set(['search_kb', 'get_client', 'search_clients', 'write_document']),
   quality_digest: new Set(['search_kb', 'get_client', 'search_clients', 'write_document']),
   match_synthesis: new Set(['write_document', 'search_kb', 'get_client']),
-  orchestrate:     new Set(['search_kb', 'get_client', 'search_clients', 'get_recent_findings', 'get_contact_log', 'get_nba_queue', 'trigger_run', 'write_document', 'update_client']),
+  orchestrate:     new Set(['search_kb', 'get_client', 'search_clients', 'get_recent_findings', 'get_contact_log', 'get_nba_queue', 'trigger_run', 'write_document', 'update_client', 'draft_outreach']),
   research_prep:   new Set(['search_kb', 'get_client', 'get_recent_findings', 'trigger_run', 'write_document']),
 };
 
@@ -827,6 +828,7 @@ export async function runPiChat(opts: ChatOptions): Promise<ChatResult> {
     'list_clients', 'get_recent_findings',
     'create_client', 'create_contact', 'update_client',
     'trigger_research', 'find_people', 'create_task', 'get_system_status',
+    'get_contact_log', 'get_nba_queue', 'draft_outreach',
   ]);
   const tools = allTools.filter(t => chatAllowlist.has(t.name));
 

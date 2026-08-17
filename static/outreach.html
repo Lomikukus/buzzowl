@@ -100,7 +100,7 @@ function renderTabs() {
 async function loadGuard() {
   const el = document.getElementById('guard');
   try {
-    const g = await (await fetch('/api/outreach/guardrails', { headers: H() })).json();
+    const g = await (await fetch('/api/outreach/items/guardrails', { headers: H() })).json();
     const color = g.ok ? 'var(--c-accent, #4ec9b0)' : 'var(--c-warn, #d7ba7d)';
     el.innerHTML = `<span class="dot" style="background:${color}"></span>` +
       (g.ok ? `sending on · ${g.sent_today}/${g.max_per_day} today` : `sending held: ${esc(g.reason)}`) +
@@ -111,7 +111,7 @@ async function loadGuard() {
 async function load() {
   renderTabs();
   const list = document.getElementById('list');
-  const r = await fetch(`/api/outreach?state=${_state}${_mine ? '&mine=1' : ''}`, { headers: H() });
+  const r = await fetch(`/api/outreach/items?state=${_state}${_mine ? '&mine=1' : ''}`, { headers: H() });
   if (r.status === 401) { window.location.href = '/login'; return; }
   const d = await r.json();
   const items = d.items || [];
@@ -161,7 +161,7 @@ document.getElementById('list').addEventListener('click', async ev => {
     let note = '';
     if (to === 'rejected') note = prompt('Reason for rejection (optional):') || '';
     if (to === 'approved' && !confirm('Approve this mail? The send worker will deliver it under the org guardrails.')) return;
-    const r = await fetch(`/api/outreach/${id}/transition`, { method: 'POST', headers: H(true), body: JSON.stringify({ to, note }) });
+    const r = await fetch(`/api/outreach/items/${id}/transition`, { method: 'POST', headers: H(true), body: JSON.stringify({ to, note }) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); document.querySelector(`[data-err="${id}"]`).textContent = d.detail || r.status; return; }
     load(); return;
   }
@@ -172,7 +172,7 @@ document.getElementById('list').addEventListener('click', async ev => {
   if (save) {
     const id = save.dataset.save; const c = document.querySelector(`[data-card="${id}"]`);
     const body = { subject: c.querySelector('[data-f="subject"]').value, to_email: c.querySelector('[data-f="to_email"]').value, body: c.querySelector('[data-f="body"]').value };
-    const r = await fetch(`/api/outreach/${id}`, { method: 'PATCH', headers: H(true), body: JSON.stringify(body) });
+    const r = await fetch(`/api/outreach/items/${id}`, { method: 'PATCH', headers: H(true), body: JSON.stringify(body) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); document.querySelector(`[data-err="${id}"]`).textContent = d.detail || r.status; return; }
     _editing = null; load();
   }
@@ -182,7 +182,7 @@ document.getElementById('newBtn').addEventListener('click', () => { const f = do
 document.getElementById('nCancel').addEventListener('click', () => { document.getElementById('newForm').style.display = 'none'; });
 document.getElementById('nSave').addEventListener('click', async () => {
   const body = { client: nClient.value.trim(), to_email: nTo.value.trim(), to_contact: nContact.value.trim(), subject: nSubject.value.trim(), body: nBody.value.trim() };
-  const r = await fetch('/api/outreach', { method: 'POST', headers: H(true), body: JSON.stringify(body) });
+  const r = await fetch('/api/outreach/items', { method: 'POST', headers: H(true), body: JSON.stringify(body) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) { document.getElementById('nErr').textContent = d.detail || r.status; return; }
   document.getElementById('newForm').style.display = 'none';

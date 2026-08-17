@@ -82,8 +82,13 @@ def _parse_dt(value) -> Optional[datetime]:
 
 
 def _last_status_ts(mail: dict, status: str) -> Optional[datetime]:
+    """Newest history timestamp for a legacy status. Accepts both history shapes:
+    legacy mail_template {"status","ts"} and Phase-3 outreach {"to","ts"} (state
+    'sent' ⇔ legacy 'sent'; 'replied' ⇔ 'replied')."""
     for entry in reversed(mail.get("history") or []):
-        if isinstance(entry, dict) and entry.get("status") == status:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("status") == status or entry.get("to") == status:
             return _parse_dt(entry.get("ts"))
     return None
 
@@ -481,13 +486,25 @@ async def _gather_inputs(
                  AND d.created_at >= NOW() - ($2::int * interval '1 day')""",
             org_id, signal_days,
         )
+        # Legacy mail_template notes (metadata.subject = client) + Phase-3
+        # outreach items (type='outreach', metadata.client). Both mirror the
+        # legacy 4-value outreach_status so the scoring below stays unchanged.
+        # For outreach items only pending/approved (i.e. actionable, not yet
+        # sent) count as a "draft"; sent/followup_due count as "sent".
         mail_rows = await conn.fetch(
             """SELECT id, title, metadata->>'subject' AS client,
                       COALESCE(metadata->>'outreach_status', 'generated') AS status,
                       metadata->'outreach_history' AS history, created_at
                FROM documents
                WHERE org_id = $1 AND metadata->>'brief_type' = 'mail_template'
-                 AND COALESCE(metadata->>'outreach_status', 'generated') IN ('generated', 'sent')""",
+                 AND COALESCE(metadata->>'outreach_status', 'generated') IN ('generated', 'sent')
+             UNION ALL
+             SELECT id, title, metadata->>'client' AS client,
+                    COALESCE(metadata->>'outreach_status', 'generated') AS status,
+                    metadata->'history' AS history, created_at
+               FROM documents
+               WHERE org_id = $1 AND type = 'outreach'
+                 AND metadata->>'state' IN ('draft', 'pending_approval', 'approved', 'sent', 'followup_due')""",
             org_id,
         )
     signals_by_client: dict[str, list[dict]] = defaultdict(list)

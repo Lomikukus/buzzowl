@@ -135,6 +135,24 @@ async def set_outreach_status(doc_id: int, body: dict, user: dict = Depends(curr
     if status not in _OUTREACH_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(_OUTREACH_STATUSES)}")
     doc = await db_module.get_document_by_int_id(user["org_id"], doc_id)
+    # Phase-3 outreach items have a real state machine — bridge the legacy
+    # <select> onto it: humans may mark 'replied'; 'sent' is the worker's job
+    # (point them at the queue), 'generated'/'meeting' have no equivalent.
+    if doc and doc.get("type") == "outreach":
+        import outreach as _o
+        meta = db_module._doc_meta(doc)
+        if status == "replied":
+            try:
+                new_meta = _o.transition(meta, _o.REPLIED, actor=_o.HUMAN, actor_id=user["id"],
+                                         note="marked replied (legacy status control)")
+            except _o.TransitionError as exc:
+                raise HTTPException(status_code=409, detail=str(exc))
+            await db_module.update_document_metadata(user["org_id"], doc_id, new_meta)
+            return {"ok": True, "status": status, "state": new_meta["state"]}
+        raise HTTPException(
+            status_code=409,
+            detail="This is a supervised-outreach item — approve/send it from the Outreach queue "
+                   "(/outreach); only 'replied' can be set here.")
     if not doc or (doc.get("metadata") or {}).get("brief_type") != "mail_template":
         raise HTTPException(status_code=404, detail="Mail document not found")
 

@@ -296,6 +296,55 @@ async def internal_create_task(body: dict, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# POST /api/internal/outreach/draft — agent-created outreach DRAFT
+# ---------------------------------------------------------------------------
+
+@router.post("/outreach/draft")
+async def internal_outreach_draft(body: dict, request: Request):
+    """Pi `draft_outreach` tool. Creates a DRAFT only — the state machine
+    forbids the agent every further transition; a human must submit + approve.
+
+    Gated server-side on the org's autonomy level (>= 3, 'outreach') so the
+    tool cannot be smuggled in at lower levels even if a prompt asks for it.
+    Body: {org_id, client_name, subject, body, to_email?, to_contact?,
+           purpose?, agent_run_id?, sender_user_id?}
+    """
+    _check_token(request)
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    org_id: Optional[int] = body.get("org_id")
+    if not org_id:
+        raise HTTPException(status_code=400, detail="org_id required")
+
+    import autonomy
+    lvl = await autonomy.level(org_id)
+    if lvl < autonomy.LEVEL_OUTREACH:
+        raise HTTPException(
+            status_code=403,
+            detail=f"autonomy level {lvl} does not permit agent-drafted outreach (needs level 3)")
+
+    client = (body.get("client_name") or body.get("client") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    content = (body.get("body") or "").strip()
+    if not client or not subject or not content:
+        raise HTTPException(status_code=400, detail="client_name, subject and body are required")
+
+    from routers.outreach import _create_draft
+    view = await _create_draft(
+        org_id, client=client, subject=subject, content=content,
+        to_email=(body.get("to_email") or "").strip(),
+        to_contact=(body.get("to_contact") or "").strip(),
+        sender_user_id=body.get("sender_user_id"),
+        created_by=None, source="agent",
+        purpose=(body.get("purpose") or "").strip(),
+        agent_run_id=body.get("agent_run_id"),
+    )
+    logger.info("agent outreach draft #%s for %r (org %s)", view.get("id"), client, org_id)
+    return {"ok": True, "id": view.get("id"), "state": view.get("state"),
+            "review_url": "/outreach"}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/internal/system-status
 # ---------------------------------------------------------------------------
 

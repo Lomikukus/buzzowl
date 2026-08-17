@@ -655,11 +655,62 @@ export function buildTools(
     },
   };
 
+  // -- Supervised outreach (Phase 3): agent may DRAFT only ------------------
+  const draftOutreachTool: AgentTool = {
+    name: 'draft_outreach',
+    label: 'Draft Outreach Mail',
+    description:
+      'Create a DRAFT outreach email for a client contact and put it into the rep\'s approval queue. ' +
+      'You never send mail: a human reviews, may edit, and approves before anything leaves the system. ' +
+      'Use only when a concrete, sourced reason exists (fresh signal, pain point, follow-up due) and no ' +
+      'recent outreach to the same contact is logged (check get_contact_log first). Requires the org to ' +
+      'allow agent-drafted outreach (autonomy level 3) — otherwise the call is refused.',
+    parameters: Type.Object({
+      client_name: Type.String({ description: 'Client the mail is about (must exist)' }),
+      subject:     Type.String({ description: 'Email subject line' }),
+      body:        Type.String({ description: 'Email body (plain text or simple HTML). Cite the concrete signal you are reacting to.' }),
+      to_email:    Type.Optional(Type.String({ description: 'Recipient address, if known' })),
+      to_contact:  Type.Optional(Type.String({ description: 'Recipient name, if known' })),
+      purpose:     Type.Optional(Type.String({ description: 'One line: why now (e.g. "new CFO + downtime pain signal")' })),
+    }),
+    execute: async (_id, params, _signal) => {
+      const p = params as { client_name: string; subject: string; body: string; to_email?: string; to_contact?: string; purpose?: string };
+      try {
+        const resp = await fetch(`${config.mainServerUrl}/api/internal/outreach/draft`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(config.serviceToken ? { Authorization: `Bearer ${config.serviceToken}` } : {}),
+          },
+          body: JSON.stringify({
+            org_id: orgId, agent_run_id: agentRunId > 0 ? agentRunId : undefined,
+            client_name: p.client_name, subject: p.subject, body: p.body,
+            to_email: p.to_email ?? '', to_contact: p.to_contact ?? '', purpose: p.purpose ?? '',
+          }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => '');
+          throw new Error(`HTTP ${resp.status}: ${text}`);
+        }
+        const data = await resp.json() as Record<string, unknown>;
+        const msg = `Draft #${data.id} created for ${p.client_name} ("${p.subject}") — state ${data.state}. ` +
+          `A rep must review and approve it in the Outreach queue before it is sent.`;
+        log('draft_outreach', p, msg);
+        return { content: [{ type: 'text' as const, text: msg }], details: data };
+      } catch (err) {
+        const msg = `Could not create outreach draft: ${String(err)}`;
+        log('draft_outreach', p, msg);
+        return { content: [{ type: 'text' as const, text: msg }], details: {} };
+      }
+    },
+  };
+
   return [
     searchKb, getClient, searchClients, webSearchTool, fetchPageTool, writeDocument,
     listClientsTool, getRecentFindingsTool,
     createClientTool, createContactTool, updateClientTool,
     triggerResearchTool, triggerRunTool, findPeopleTool, createTaskTool, getSystemStatusTool,
-    getContactLogTool, getNbaQueueTool,
+    getContactLogTool, getNbaQueueTool, draftOutreachTool,
   ];
 }
