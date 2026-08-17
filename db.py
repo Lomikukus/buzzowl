@@ -956,14 +956,18 @@ async def pipeline_summary(org_id: int, owner_user_id: Optional[int] = None) -> 
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT stage, COUNT(*) AS n, COALESCE(SUM(value),0) AS total,
-                      COALESCE(SUM(value * COALESCE(probability, 0) / 100.0), 0) AS weighted
+                      COALESCE(SUM(CASE WHEN probability IS NOT NULL THEN value * probability / 100.0 END), 0) AS weighted_explicit,
+                      COALESCE(SUM(CASE WHEN probability IS NULL THEN value END), 0) AS total_default_prob
                  FROM deals
                 WHERE org_id = $1 AND status = 'open'
                   AND ($2::bigint IS NULL OR owner_user_id = $2)
                 GROUP BY stage""",
             org_id, owner_user_id)
+    # Deals without an explicit probability follow their stage's default — the
+    # caller (router) knows the stage table and finishes the weighting.
     return [{"stage": r["stage"], "count": int(r["n"]), "total": float(r["total"]),
-             "weighted": float(r["weighted"])} for r in rows]
+             "weighted_explicit": float(r["weighted_explicit"]),
+             "total_default_prob": float(r["total_default_prob"])} for r in rows]
 
 
 async def clients_with_legacy_deal_fields(org_id: int) -> list[dict]:

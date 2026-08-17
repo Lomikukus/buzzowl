@@ -204,6 +204,24 @@ nba_weights:
   stale_per_two_weeks: 1
   stale_cap: 4
   focus_multiplier: 1.5
+  # Open deals (pipeline): later stage / bigger value / near-or-slipped close date → higher
+  deal_stage_bonus: { lead: 0, qualified: 2, proposal: 5, negotiation: 8 }
+  deal_value_per_10k: 1.0   # points per 10k of open deal value …
+  deal_value_cap: 8         # … capped so one whale doesn't own the queue
+  deal_close_soon_days: 14
+  deal_close_soon: 8
+  deal_close_overdue: 10
+
+# Pipeline stages (/pipeline). Ordered; each has a default win probability used
+# for weighted values until a rep overrides it per deal. Stages with status
+# won/lost close the deal. Uncomment to customise (ids must be unique).
+# deal_stages:
+#   - { id: lead,        label: Lead,        probability: 10 }
+#   - { id: qualified,   label: Qualified,   probability: 25 }
+#   - { id: proposal,    label: Proposal,    probability: 50 }
+#   - { id: negotiation, label: Negotiation, probability: 75 }
+#   - { id: won,         label: Won,         probability: 100, status: won }
+#   - { id: lost,        label: Lost,        probability: 0,   status: lost }
 
 # Web search
 # SearXNG (primary): self-hosted metasearch engine — docker compose up -d starts it at :8080

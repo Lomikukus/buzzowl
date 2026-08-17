@@ -70,8 +70,10 @@ async def deals_summary(mine: int = 0, user: dict = Depends(current_user)):
     for s in dl.stages():
         if s["status"] != dl.STATUS_OPEN:
             continue
-        r = by.get(s["id"], {"count": 0, "total": 0.0, "weighted": 0.0})
-        out.append({"stage": s["id"], "label": s["label"], **{k: r[k] for k in ("count", "total", "weighted")}})
+        r = by.get(s["id"], {"count": 0, "total": 0.0, "weighted_explicit": 0.0, "total_default_prob": 0.0})
+        weighted = r["weighted_explicit"] + r["total_default_prob"] * s["probability"] / 100.0
+        out.append({"stage": s["id"], "label": s["label"], "count": r["count"], "total": r["total"],
+                    "weighted": round(weighted, 2)})
     return {"stages": out, "total": sum(x["total"] for x in out),
             "weighted": sum(x["weighted"] for x in out), "count": sum(x["count"] for x in out)}
 

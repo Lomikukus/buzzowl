@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260817a">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260817c"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.6rem 1rem; background: var(--c-bg2, #1a1a1a); border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.toolbar-title { font-size: 0.78rem; font-weight: 700; color: var(--c-accent, #4ec9b0); text-transform: uppercase; letter-spacing: 0.08em; }
+.scope-tabs { display: flex; gap: 0.35rem; margin-left: 0.5rem; }
+.scope-tab { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888); border-radius: 4px; padding: 0.22rem 0.7rem; font-size: 0.72rem; cursor: pointer; font-family: inherit; }
+.scope-tab:hover { color: var(--c-text, #d4d4d4); }
+.scope-tab.active { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.meta { font-size: 0.72rem; color: var(--c-muted, #888); }
+.totals { margin-left: auto; display: flex; gap: 1.1rem; font-size: 0.72rem; color: var(--c-muted, #888); }
+.totals b { color: var(--c-texthi, #e6e6e6); font-variant-numeric: tabular-nums; }
+.btn { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.28rem 0.7rem; font-size: 0.74rem; cursor: pointer; font-family: inherit; }
+.btn:hover { border-color: var(--c-accent, #4ec9b0); }
+.btn.primary { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.btn.danger { border-color: var(--c-danger, #e06c75); color: var(--c-danger, #e06c75); }
+.btn.sm { padding: 0.12rem 0.45rem; font-size: 0.68rem; }
+.err { font-size: 0.72rem; color: var(--c-danger, #e06c75); }
+
+.main { flex: 1; display: flex; min-height: 0; }
+.content { flex: 1; overflow: auto; padding: 1rem 1.2rem; }
+.new { background: var(--c-bg2, #1a1a1a); border: 1px dashed var(--c-line2, #333); border-radius: 7px; padding: 0.8rem 0.9rem; margin-bottom: 1rem; display: none; }
+.new .row { display: grid; grid-template-columns: 2fr 2fr 1fr 1fr 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+.new input, .new select, .drawer input, .drawer select, .drawer textarea { width: 100%; background: var(--c-surface, #252526); color: var(--c-text, #d4d4d4); border: 1px solid var(--c-line2, #333); border-radius: 4px; padding: 0.38rem 0.5rem; font: inherit; font-size: 0.8rem; }
+
+.board { display: flex; gap: 0.7rem; align-items: flex-start; min-height: 60vh; }
+.col { flex: 1 1 0; min-width: 190px; background: var(--c-bg2, #1a1a1a); border: 1px solid #242424; border-radius: 7px; display: flex; flex-direction: column; max-height: calc(100vh - 150px); }
+.col.over { border-color: var(--c-accent, #4ec9b0); background: var(--c-accenttint, #1a3a2e); }
+.col-head { padding: 0.55rem 0.7rem; border-bottom: 1px solid #242424; }
+.col-title { font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--c-text2, #ccc); display: flex; justify-content: space-between; }
+.col-title .n { color: var(--c-muted, #888); font-weight: 400; }
+.col-sum { font-size: 0.68rem; color: var(--c-muted, #888); font-variant-numeric: tabular-nums; }
+.col-sum b { color: var(--c-accent, #4ec9b0); font-weight: 600; }
+.col-body { padding: 0.5rem; overflow-y: auto; flex: 1; min-height: 4rem; }
+.deal { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); border-left: 3px solid var(--c-line2, #333); border-radius: 5px; padding: 0.45rem 0.6rem; margin-bottom: 0.45rem; cursor: grab; }
+.deal:hover { border-color: var(--c-accent, #4ec9b0); }
+.deal.dragging { opacity: 0.4; }
+.deal.sel { border-left-color: var(--c-accent, #4ec9b0); }
+.deal.slipped { border-left-color: var(--c-danger, #e06c75); }
+.deal.soon { border-left-color: var(--c-warn, #d7ba7d); }
+.deal-name { font-size: 0.82rem; color: var(--c-texthi, #e6e6e6); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deal-client { font-size: 0.72rem; color: var(--c-blue, #569cd6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.deal-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 0.25rem; font-size: 0.7rem; color: var(--c-muted, #888); font-variant-numeric: tabular-nums; }
+.deal-val { color: var(--c-text, #d4d4d4); font-weight: 600; }
+.deal-close { }
+.deal.slipped .deal-close { color: var(--c-danger, #e06c75); }
+.deal.soon .deal-close { color: var(--c-warn, #d7ba7d); }
+.avatar { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border-radius: 50%; background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); font-size: 0.6rem; font-weight: 700; margin-left: 0.3rem; }
+.empty { color: var(--c-faint, #555); font-size: 0.78rem; padding: 0.6rem 0.2rem; text-align: center; }
+.closed-list .deal { cursor: pointer; }
+
+/* Drawer */
+.drawer { width: 380px; flex-shrink: 0; background: var(--c-bg2, #1a1a1a); border-left: 1px solid var(--c-linefaint, #222); overflow-y: auto; display: none; }
+.drawer.open { display: block; }
+.dr-head { padding: 0.8rem 1rem; border-bottom: 1px solid #242424; display: flex; align-items: flex-start; gap: 0.5rem; }
+.dr-head h2 { font-size: 1rem; color: var(--c-texthi, #e6e6e6); flex: 1; line-height: 1.3; }
+.dr-close { background: none; border: none; color: var(--c-muted, #888); cursor: pointer; font-size: 1rem; }
+.dr-sec { padding: 0.7rem 1rem; border-bottom: 1px solid #242424; }
+.dr-sec h3 { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-muted, #888); margin-bottom: 0.45rem; }
+.stages { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.stage-btn { flex: 1 1 auto; text-align: center; background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888); border-radius: 4px; padding: 0.22rem 0.3rem; font-size: 0.66rem; cursor: pointer; font-family: inherit; }
+.stage-btn.cur { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.stage-btn.won.cur { background: #1a3a2a; border-color: #6a9955; color: #6a9955; }
+.stage-btn.lost.cur { background: #3a1a1a; border-color: var(--c-danger, #e06c75); color: var(--c-danger, #e06c75); }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem; }
+.fields label { font-size: 0.66rem; color: var(--c-muted, #888); display: block; }
+.fields .full { grid-column: 1 / -1; }
+.ev { font-size: 0.72rem; color: var(--c-text2, #ccc); padding: 0.25rem 0; border-bottom: 1px solid var(--c-linefaint, #222); }
+.ev .t { color: var(--c-faint, #555); margin-right: 0.4rem; font-variant-numeric: tabular-nums; }
+.ev .who { color: var(--c-muted, #888); }
+.ev .who.agent { color: var(--c-purple, #c586c0); }
+.task { display: flex; gap: 0.45rem; align-items: center; font-size: 0.76rem; padding: 0.22rem 0; }
+.task.done { color: var(--c-faint, #555); text-decoration: line-through; }
+.task .due { margin-left: auto; font-size: 0.66rem; color: var(--c-muted, #888); }
+.chk { background: none; border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-muted, #888); border-radius: 50%; width: 1.05rem; height: 1.05rem; line-height: 1; font-size: 0.65rem; cursor: pointer; flex-shrink: 0; }
+.chk:hover { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.addtask { display: flex; gap: 0.35rem; margin-top: 0.4rem; }
+.addtask input[type=text] { flex: 1; }
+.addtask input[type=date] { width: 8.5rem; }
+.dr-links { font-size: 0.72rem; }
+.dr-links a { color: var(--c-blue, #569cd6); margin-right: 0.8rem; }
+#toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4); padding: 0.4rem 0.9rem; border-radius: 5px; font-size: 0.76rem; display: none; z-index: 50; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div id="main-nav"></div>
+  <div class="toolbar">
+    <span class="toolbar-title">Pipeline</span>
+    <div class="scope-tabs" id="viewTabs">
+      <button class="scope-tab active" data-v="open">Board</button>
+      <button class="scope-tab" data-v="won">Won</button>
+      <button class="scope-tab" data-v="lost">Lost</button>
+    </div>
+    <label class="meta"><input type="checkbox" id="mineOnly"> mine only</label>
+    <button class="btn" id="newBtn">+ New deal</button>
+    <button class="btn" id="exportBtn" title="Download all deals as CSV">↓ CSV</button>
+    <button class="btn" id="importBtn" title="Import deals from CSV (client, name, stage, value, currency, probability, expected_close, owner_email, status)">↑ CSV</button>
+    <input type="file" id="importFile" accept=".csv" style="display:none">
+    <div class="totals" id="totals"></div>
+  </div>
+  <div class="main">
+    <div class="content">
+      <div class="new" id="newForm">
+        <div class="row">
+          <input id="nClient" list="clientList" placeholder="Client (must exist)">
+          <datalist id="clientList"></datalist>
+          <input id="nName" placeholder="Deal name">
+          <select id="nStage"></select>
+          <input id="nValue" placeholder="Value (e.g. 45k, 120.000)">
+          <input id="nCurrency" value="EUR" maxlength="3" placeholder="EUR">
+          <input id="nClose" type="date" title="Expected close">
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          <button class="btn primary" id="nSave">Create deal</button>
+          <button class="btn" id="nCancel">Cancel</button>
+          <span class="err" id="nErr"></span>
+        </div>
+      </div>
+      <div id="board" class="board"><div class="empty">Loading…</div></div>
+    </div>
+    <aside class="drawer" id="drawer"></aside>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+initNavbar({ active: 'pipeline' });
+
+const TOKEN_KEY = 'wk_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const H = (json = false) => { const t = getToken(); const h = t ? { 'Authorization': `Bearer ${t}` } : {}; if (json) h['Content-Type'] = 'application/json'; return h; };
+if (!getToken()) { window.location.href = '/login'; }
+
+let _stages = [];            // [{id,label,probability,status}]
+let _deals = [];             // current view's deals
+let _view = 'open';
+let _mine = false;
+let _sel = null;             // selected deal id
+let _me = null;
+let _users = null;           // admin only
+let _clients = [];
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function money(v, cur) { if (v === null || v === undefined || v === '') return '—'; const n = Number(v); return n.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' ' + (cur || 'EUR'); }
+function ts(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : ''; }
+function initials(name) { return (name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase(); }
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2600); }
+function daysUntil(d) { if (!d) return null; const a = new Date(d + 'T00:00:00'); const b = new Date(); b.setHours(0,0,0,0); return Math.round((a - b) / 86400000); }
+function closeClass(d) { const n = daysUntil(d.expected_close); if (n === null || d.status !== 'open') return ''; return n < 0 ? 'slipped' : (n <= 14 ? 'soon' : ''); }
+function closeText(d) { const n = daysUntil(d.expected_close); if (n === null) return ''; if (n < 0) return `slipped ${-n}d`; if (n === 0) return 'closes today'; return `closes in ${n}d`; }
+const openStages = () => _stages.filter(s => s.status === 'open');
+const stageOf = id => _stages.find(s => s.id === id) || { id, label: id, probability: 0, status: 'open' };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { ...H(!!opts.body), ...(opts.headers || {}) }, cache: 'no-store' });
+  if (r.status === 401) { window.location.href = '/login'; throw new Error('unauthorized'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+  return d;
+}
+
+// ── Load ────────────────────────────────────────────────────────────────
+async function boot() {
+  try { _me = (await api('/api/auth/me')).user; } catch (_) {}
+  _stages = (await api('/api/deals/stages')).stages;
+  document.getElementById('nStage').innerHTML = openStages().map(s => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
+  try { _clients = (await api('/api/clients')).clients || []; } catch (_) {}
+  document.getElementById('clientList').innerHTML = _clients.map(c => `<option value="${esc(c.name)}">`).join('');
+  if (_me && _me.role === 'admin') { try { _users = (await api('/api/auth/users')).users; } catch (_) {} }
+  await load();
+  const want = new URLSearchParams(location.search).get('deal');
+  if (want) openDrawer(Number(want));
+}
+
+async function load() {
+  const qs = new URLSearchParams({ status: _view, ...(_mine ? { mine: 1 } : {}) });
+  const [list, sum] = await Promise.all([api(`/api/deals?${qs}`), api(`/api/deals/summary${_mine ? '?mine=1' : ''}`)]);
+  _deals = list.deals || [];
+  renderTotals(sum);
+  render();
+}
+
+function renderTotals(sum) {
+  const el = document.getElementById('totals');
+  el.innerHTML = `<span>open <b>${sum.count}</b></span><span>total <b>${money(sum.total)}</b></span><span>weighted <b>${money(sum.weighted)}</b></span>`;
+  el.dataset.total = sum.total; el.dataset.weighted = sum.weighted; el.dataset.count = sum.count;
+}
+
+// ── Board ────────────────────────────────────────────────────────────────
+function card(d) {
+  const cc = closeClass(d);
+  return `<div class="deal ${cc} ${_sel === d.id ? 'sel' : ''}" draggable="${d.status === 'open'}" data-id="${d.id}" data-stage="${esc(d.stage)}">
+    <div class="deal-name" title="${esc(d.name)}">${esc(d.name)}</div>
+    <div class="deal-client">${esc(d.client_name || '')}</div>
+    <div class="deal-foot">
+      <span class="deal-val">${money(d.value, d.currency)}</span>
+      <span class="deal-close">${esc(closeText(d))}${d.status !== 'open' && d.closed_at ? esc(d.status + ' ' + ts(d.closed_at).slice(0, 10)) : ''}</span>
+      ${d.owner_name ? `<span class="avatar" title="${esc(d.owner_name)}">${esc(initials(d.owner_name))}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function render() {
+  const board = document.getElementById('board');
+  if (_view !== 'open') {
+    board.className = 'closed-list';
+    board.innerHTML = _deals.length
+      ? `<div style="max-width:560px">${_deals.map(card).join('')}</div>`
+      : `<div class="empty">No ${_view} deals yet.</div>`;
+    return;
+  }
+  board.className = 'board';
+  const cols = openStages();
+  const byStage = {};
+  cols.forEach(s => byStage[s.id] = []);
+  _deals.forEach(d => (byStage[d.stage] = byStage[d.stage] || []).push(d));
+  board.innerHTML = cols.map(s => {
+    const ds = byStage[s.id] || [];
+    const total = ds.reduce((a, d) => a + (Number(d.value) || 0), 0);
+    const weighted = ds.reduce((a, d) => a + (Number(d.weighted_value) || 0), 0);
+    return `<div class="col" data-stage="${s.id}">
+      <div class="col-head">
+        <div class="col-title"><span>${esc(s.label)}</span><span class="n">${ds.length}</span></div>
+        <div class="col-sum" data-total="${total}" data-weighted="${weighted}">${money(total)} · <b>${money(weighted)}</b> weighted · ${s.probability}%</div>
+      </div>
+      <div class="col-body">${ds.length ? ds.map(card).join('') : '<div class="empty">drop deals here</div>'}</div>
+    </div>`;
+  }).join('');
+  wireDnD();
+}
+
+function wireDnD() {
+  document.querySelectorAll('.deal[draggable="true"]').forEach(el => {
+    el.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', el.dataset.id); el.classList.add('dragging'); });
+    el.addEventListener('dragend', () => el.classList.remove('dragging'));
+  });
+  document.querySelectorAll('.col').forEach(col => {
+    col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
+    col.addEventListener('dragleave', () => col.classList.remove('over'));
+    col.addEventListener('drop', async e => {
+      e.preventDefault(); col.classList.remove('over');
+      const id = Number(e.dataTransfer.getData('text/plain'));
+      const d = _deals.find(x => x.id === id);
+      if (!d || d.stage === col.dataset.stage) return;
+      await moveStage(id, col.dataset.stage);
+    });
+  });
+}
+
+async function moveStage(id, stage, note = '') {
+  try {
+    await api(`/api/deals/${id}/stage`, { method: 'POST', body: JSON.stringify({ stage, note }) });
+    toast(`Moved to ${stageOf(stage).label}`);
+    await load();
+    if (_sel === id) openDrawer(id, true);
+  } catch (e) { toast('Could not move: ' + e.message); }
+}
+
+// ── Drawer ───────────────────────────────────────────────────────────────
+async function openDrawer(id, keep = false) {
+  _sel = id;
+  const dr = document.getElementById('drawer');
+  dr.classList.add('open');
+  if (!keep) dr.innerHTML = '<div class="dr-sec meta">Loading…</div>';
+  let d;
+  try { d = await api(`/api/deals/${id}`); } catch (e) { dr.innerHTML = `<div class="dr-sec err">${esc(e.message)}</div>`; return; }
+  let tasks = [];
+  try { tasks = (await api(`/api/tasks?mine=0&deal_id=${id}&include_done=1&include_snoozed=1`)).tasks || []; } catch (_) {}
+  const clientUrl = `/client/${encodeURIComponent(d.client_name || '')}`;
+  const ownerSel = _users
+    ? `<label>Owner<select id="fOwner">${_users.map(u => `<option value="${u.id}" ${u.id === d.owner_user_id ? 'selected' : ''}>${esc(u.display_name || u.username)}</option>`).join('')}</select></label>`
+    : `<label>Owner<input value="${esc(d.owner_name || '—')}" disabled></label>`;
+  dr.innerHTML = `
+    <div class="dr-head">
+      <h2 id="fName" contenteditable="true" spellcheck="false" title="Click to rename">${esc(d.name)}</h2>
+      <button class="dr-close" id="drClose" title="Close">✕</button>
+    </div>
+    <div class="dr-sec dr-links">
+      <a href="${clientUrl}">${esc(d.client_name || 'client')} →</a>
+      <a href="${clientUrl}#timeline">timeline</a>
+      <span class="meta">created ${ts(d.created_at)}${d.closed_at ? ' · closed ' + ts(d.closed_at) : ''}</span>
+    </div>
+    <div class="dr-sec">
+      <h3>Stage · ${d.probability ?? stageOf(d.stage).probability}% → ${money(d.weighted_value, d.currency)} weighted</h3>
+      <div class="stages">${_stages.map(s => `<button class="stage-btn ${s.status !== 'open' ? s.status : ''} ${s.id === d.stage ? 'cur' : ''}" data-stage="${s.id}">${esc(s.label)}</button>`).join('')}</div>
+    </div>
+    <div class="dr-sec">
+      <h3>Details</h3>
+      <div class="fields">
+        <label>Value<input id="fValue" value="${d.value ?? ''}" placeholder="45k / 120.000"></label>
+        <label>Currency<input id="fCurrency" value="${esc(d.currency || 'EUR')}" maxlength="3"></label>
+        <label>Probability %<input id="fProb" type="number" min="0" max="100" value="${d.probability ?? ''}" placeholder="stage default"></label>
+        <label>Expected close<input id="fClose" type="date" value="${d.expected_close || ''}"></label>
+        ${ownerSel}
+        <label>Status<input value="${esc(d.status)}" disabled></label>
+      </div>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center">
+        <button class="btn primary sm" id="fSave">Save</button>
+        ${_me && _me.role === 'admin' ? '<button class="btn danger sm" id="fDelete">Delete</button>' : ''}
+        <span class="err" id="fErr"></span>
+      </div>
+    </div>
+    <div class="dr-sec">
+      <h3>Tasks</h3>
+      <div id="taskList">${tasks.length ? tasks.map(t => `<div class="task ${t.status}"><button class="chk" data-task="${t.id}" data-status="${t.status}" title="${t.status === 'done' ? 'Reopen' : 'Mark done'}">${t.status === 'done' ? '✓' : '○'}</button><span>${esc(t.title)}${t.recurrence ? ' ↻' : ''}</span><span class="due">${t.due_date ? esc(t.due_date) : ''}</span></div>`).join('') : '<div class="meta">No tasks linked.</div>'}</div>
+      <div class="addtask"><input type="text" id="tTitle" placeholder="Add a task for this deal…"><input type="date" id="tDue"><button class="btn sm" id="tAdd">Add</button></div>
+    </div>
+    <div class="dr-sec">
+      <h3>History</h3>
+      ${(d.events || []).map(e => `<div class="ev"><span class="t">${ts(e.created_at)}</span><span class="who ${e.actor_name === 'agent' ? 'agent' : ''}">${esc(e.actor_name || '')}</span> ${esc(e.kind)}${e.from_value || e.to_value ? `: ${esc(e.from_value ?? '·')} → ${esc(e.to_value ?? '·')}` : ''}${e.note ? ` — ${esc(e.note)}` : ''}</div>`).join('') || '<div class="meta">—</div>'}
+    </div>`;
+
+  document.getElementById('drClose').onclick = closeDrawer;
+  dr.querySelectorAll('.stage-btn').forEach(b => b.onclick = async () => {
+    if (b.dataset.stage === d.stage) return;
+    const s = stageOf(b.dataset.stage);
+    let note = '';
+    if (s.status !== 'open') { note = prompt(`Mark "${d.name}" as ${s.label}? Optional note:`, ''); if (note === null) return; }
+    await moveStage(d.id, s.id, note || '');
+  });
+  document.getElementById('fSave').onclick = async () => {
+    const err = document.getElementById('fErr'); err.textContent = '';
+    const body = {
+      name: document.getElementById('fName').textContent.trim(),
+      value: document.getElementById('fValue').value.trim(),
+      currency: document.getElementById('fCurrency').value.trim() || 'EUR',
+      probability: document.getElementById('fProb').value === '' ? null : Number(document.getElementById('fProb').value),
+      expected_close: document.getElementById('fClose').value || null,
+    };
+    if (_users) body.owner_user_id = Number(document.getElementById('fOwner').value) || null;
+    try { await api(`/api/deals/${d.id}`, { method: 'PATCH', body: JSON.stringify(body) }); toast('Saved'); await load(); openDrawer(d.id, true); }
+    catch (e) { err.textContent = e.message; }
+  };
+  const del = document.getElementById('fDelete');
+  if (del) del.onclick = async () => {
+    if (!confirm(`Delete deal "${d.name}"? This cannot be undone.`)) return;
+    try { await api(`/api/deals/${d.id}`, { method: 'DELETE' }); closeDrawer(); await load(); toast('Deleted'); } catch (e) { toast(e.message); }
+  };
+  document.getElementById('tAdd').onclick = async () => {
+    const title = document.getElementById('tTitle').value.trim(); if (!title) return;
+    try {
+      await api('/api/tasks', { method: 'POST', body: JSON.stringify({ title, deal_id: d.id, due_date: document.getElementById('tDue').value || null }) });
+      openDrawer(d.id, true);
+    } catch (e) { toast(e.message); }
+  };
+  dr.querySelectorAll('.chk').forEach(b => b.onclick = async () => {
+    const status = b.dataset.status === 'done' ? 'open' : 'done';
+    try { await api(`/api/tasks/${b.dataset.task}`, { method: 'PATCH', body: JSON.stringify({ status }) }); openDrawer(d.id, true); } catch (e) { toast(e.message); }
+  });
+  render();
+  history.replaceState(null, '', `/pipeline?deal=${id}`);
+}
+
+function closeDrawer() {
+  _sel = null;
+  document.getElementById('drawer').classList.remove('open');
+  history.replaceState(null, '', '/pipeline');
+  render();
+}
+
+// ── Toolbar ──────────────────────────────────────────────────────────────
+document.getElementById('viewTabs').addEventListener('click', e => {
+  const b = e.target.closest('.scope-tab'); if (!b) return;
+  _view = b.dataset.v;
+  document.querySelectorAll('#viewTabs .scope-tab').forEach(x => x.classList.toggle('active', x === b));
+  load();
+});
+document.getElementById('mineOnly').addEventListener('change', e => { _mine = e.target.checked; load(); });
+document.getElementById('board').addEventListener('click', e => {
+  const c = e.target.closest('.deal'); if (c) openDrawer(Number(c.dataset.id));
+});
+document.getElementById('newBtn').onclick = () => { const f = document.getElementById('newForm'); f.style.display = f.style.display === 'block' ? 'none' : 'block'; document.getElementById('nClient').focus(); };
+document.getElementById('nCancel').onclick = () => { document.getElementById('newForm').style.display = 'none'; };
+document.getElementById('nSave').onclick = async () => {
+  const err = document.getElementById('nErr'); err.textContent = '';
+  const body = {
+    client_name: document.getElementById('nClient').value.trim(),
+    name: document.getElementById('nName').value.trim(),
+    stage: document.getElementById('nStage').value,
+    value: document.getElementById('nValue').value.trim(),
+    currency: document.getElementById('nCurrency').value.trim() || 'EUR',
+    expected_close: document.getElementById('nClose').value || null,
+  };
+  if (!body.client_name) { err.textContent = 'Client is required'; return; }
+  try {
+    const d = await api('/api/deals', { method: 'POST', body: JSON.stringify(body) });
+    ['nName', 'nValue', 'nClose'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('newForm').style.display = 'none';
+    await load(); openDrawer(d.id); toast('Deal created');
+  } catch (e) { err.textContent = e.message; }
+};
+document.getElementById('exportBtn').onclick = async () => {
+  const r = await fetch('/api/export/deals.csv', { headers: H() });
+  if (!r.ok) { toast('Export failed'); return; }
+  const blob = await r.blob(); const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'deals.csv'; a.click(); URL.revokeObjectURL(a.href);
+};
+document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
+document.getElementById('importFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  try {
+    const r = await fetch('/api/deals/import-csv', { method: 'POST', headers: H(), body: fd });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'import failed');
+    toast(`Imported: ${d.created.length} new, ${d.updated.length} updated, ${d.unchanged} unchanged${d.errors.length ? `, ${d.errors.length} errors` : ''}`);
+    if (d.errors.length) console.warn('CSV import errors', d.errors);
+    await load();
+  } catch (err) { toast(err.message); }
+  e.target.value = '';
+};
+
+boot();
+</script>
+</body>
+</html>
