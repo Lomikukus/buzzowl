@@ -148,6 +148,23 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 .doc-body p { margin-bottom: 0.45rem; }
 .doc-body ul, .doc-body ol { padding-left: 1.2rem; margin-bottom: 0.45rem; }
 .doc-body a { color: var(--c-blue, #569cd6); }
+/* Timeline */
+.tl-day { font-size: 0.66rem; color: var(--c-muted2, #666); text-transform: uppercase; letter-spacing: 0.04em; margin: 0.9rem 0 0.25rem 0.65rem; }
+.tl-day:first-child { margin-top: 0.3rem; }
+.tl-row { display: flex; align-items: flex-start; gap: 0.55rem; padding: 0.42rem 0.65rem; border-left: 2px solid var(--c-line, #2a2a2a); margin-left: 0.9rem; border-radius: 0 4px 4px 0; }
+.tl-row.clickable { cursor: pointer; }
+.tl-row.clickable:hover { background: var(--c-linefaint, #222); }
+.tl-time { font-size: 0.68rem; color: var(--c-muted2, #666); width: 2.6rem; flex-shrink: 0; margin-top: 0.15rem; font-variant-numeric: tabular-nums; }
+.tl-kind { font-size: 0.6rem; padding: 0.08rem 0.28rem; border-radius: 3px; font-weight: 600; flex-shrink: 0; margin-top: 0.18rem; white-space: nowrap; }
+.tk-document  { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.tk-outreach  { background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); }
+.tk-contact   { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+.tk-deal      { background: #2e1a3a; color: var(--c-purple, #c586c0); }
+.tk-task      { background: var(--c-line, #2a2a2a); color: var(--c-text3, #bbb); }
+.tk-agent_run { background: var(--c-line, #2a2a2a); color: var(--c-muted, #888); }
+.tl-title { flex: 1; min-width: 0; font-size: 0.8rem; color: var(--c-text2, #ccc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-actor { font-size: 0.66rem; color: var(--c-muted2, #666); flex-shrink: 0; margin-top: 0.15rem; }
+.tl-actor.agent { color: var(--c-purple, #c586c0); }
 .doc-body code { background: var(--c-surface2, #2d2d2d); padding: 0.05rem 0.25rem; border-radius: 3px; font-size: 0.83em; }
 .doc-loading { color: var(--c-faint, #555); font-size: 0.78rem; font-style: italic; }
 
@@ -284,6 +301,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
         <button class="tab-btn active" data-tab="overview"   onclick="switchTab('overview')">Overview</button>
         <button class="tab-btn"        data-tab="findings"   onclick="switchTab('findings')">Findings</button>
         <button class="tab-btn"        data-tab="documents"  onclick="switchTab('documents')">Documents</button>
+        <button class="tab-btn"        data-tab="timeline"   onclick="switchTab('timeline')">Timeline</button>
       </div>
 
       <!-- Overview -->
@@ -335,6 +353,19 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
         <div id="findingsContent"><div class="empty-state">Loading…</div></div>
       </div>
 
+      <!-- Timeline: everything that happened for this account, all sources, newest first -->
+      <div class="tab-panel" id="tab-timeline">
+        <div class="filter-chips" id="tlChips">
+          <span class="filter-chip active" data-kind="all"       onclick="setTlFilter('all',this)">All</span>
+          <span class="filter-chip"        data-kind="document"  onclick="setTlFilter('document',this)">Documents</span>
+          <span class="filter-chip"        data-kind="contact"   onclick="setTlFilter('contact',this)">Contact</span>
+          <span class="filter-chip"        data-kind="deal"      onclick="setTlFilter('deal',this)">Deals</span>
+          <span class="filter-chip"        data-kind="task"      onclick="setTlFilter('task',this)">Tasks</span>
+          <span class="filter-chip"        data-kind="agent_run" onclick="setTlFilter('agent_run',this)">Agent runs</span>
+        </div>
+        <div id="timelineContent"><div class="empty-state">Loading…</div></div>
+      </div>
+
       <!-- Documents -->
       <div class="tab-panel" id="tab-documents">
         <div class="filter-chips">
@@ -379,6 +410,10 @@ let _allDocs    = [];
 let _docFilter  = 'all';
 let _findingsLoaded = false;
 let _docsLoaded     = false;
+let _tlLoaded       = false;
+let _tlItems        = [];
+let _tlFilter       = 'all';
+let _clientId       = null;
 let _meetingsCount  = 0;
 let _findingsCount  = 0;
 let _signalsCount   = 0;
@@ -466,6 +501,7 @@ function switchTab(tab) {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-'+tab));
     if (tab === 'findings' && !_findingsLoaded)  loadFindings();
     if (tab === 'documents' && !_docsLoaded)     loadDocumentsTab();
+    if (tab === 'timeline'  && !_tlLoaded)       loadTimeline();
     // Remember the tab per client so returning to this client lands here again.
     try { localStorage.setItem('wk_last_tab_' + clientName, tab); } catch (_) {}
 }
@@ -476,6 +512,7 @@ async function loadClient() {
     if (!r.ok) { document.getElementById('profileName').textContent = clientName; return; }
     const client = await r.json();
     const meta = safeMeta(client.metadata);
+    _clientId = client.id;
 
     document.title = `${client.name} — Buzzowl`;
     const subtitleEl = document.getElementById('navSubtitle');
@@ -1128,7 +1165,7 @@ async function loadDocumentsTab() {
 
 function setDocFilter(type, el) {
     _docFilter = type;
-    document.querySelectorAll('.filter-chip').forEach(c => c.classList.toggle('active', c.dataset.type===type));
+    document.querySelectorAll('#tab-documents .filter-chip').forEach(c => c.classList.toggle('active', c.dataset.type===type));
     renderDocuments();
 }
 
@@ -1168,6 +1205,89 @@ async function saveNewDoc() {
     toggleAddDoc();
     await loadClient();
     switchTab('documents');
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────────
+async function loadTimeline() {
+    _tlLoaded = true;
+    const el = document.getElementById('timelineContent');
+    if (!_clientId) { el.innerHTML = '<div class="empty-state">Loading…</div>'; await loadClient(); }
+    const r = await fetch(`/api/clients/${_clientId}/timeline?limit=300`, { headers: authHeaders(), cache: 'no-store' });
+    if (!r.ok) { el.innerHTML = '<div class="empty-state">Could not load timeline.</div>'; return; }
+    _tlItems = (await r.json()).items || [];
+    renderTimeline();
+}
+
+function setTlFilter(kind, chip) {
+    _tlFilter = kind;
+    document.querySelectorAll('#tlChips .filter-chip').forEach(c => c.classList.toggle('active', c === chip));
+    renderTimeline();
+}
+
+function tlKindClass(kind) {
+    const base = kind.split(':')[0];
+    if (kind === 'document:outreach') return 'tk-outreach';
+    if (base === 'task_done') return 'tk-task';
+    return 'tk-' + base;
+}
+function tlKindLabel(kind) {
+    const [base, sub] = kind.split(':');
+    if (base === 'document')  return sub || 'doc';
+    if (base === 'agent_run') return 'run · ' + (sub || '').replace(/_/g, ' ');
+    if (base === 'deal')      return 'deal · ' + (sub || '');
+    if (base === 'task_done') return 'task ✓';
+    return base;
+}
+
+function renderTimeline() {
+    const el = document.getElementById('timelineContent');
+    const items = _tlFilter === 'all' ? _tlItems
+        : _tlItems.filter(it => it.kind.split(':')[0].replace('task_done', 'task') === _tlFilter);
+    if (!items.length) {
+        el.innerHTML = `<div class="empty-state">${_tlItems.length ? 'Nothing of this kind yet.' : 'No activity yet for this account.'}</div>`;
+        return;
+    }
+    let html = '', lastDay = '';
+    for (const it of items) {
+        const ts  = it.ts ? new Date(it.ts) : null;
+        const day = ts ? ts.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+        if (day !== lastDay) { html += `<div class="tl-day">${esc(day)}</div>`; lastDay = day; }
+        const time = ts ? ts.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+        const ref  = it.ref || {};
+        const isAgent = /^(agent|auto|autonomous|external_service)$/.test(String(it.actor || ''));
+        const actor = it.actor ? esc(String(it.actor)) : '';
+        let onclick = '', cls = 'tl-row';
+        if (it.kind.startsWith('document:') && ref.doc_id) {
+            cls += ' clickable';
+            onclick = `onclick="openTimelineDoc(${Number(ref.doc_id)})"`;
+        } else if (it.kind.startsWith('deal:') && ref.deal_id) {
+            cls += ' clickable';
+            onclick = `onclick="location.href='/pipeline?deal=${Number(ref.deal_id)}'"`;
+        }
+        html += `<div class="${cls}" ${onclick}>
+            <span class="tl-time">${esc(time)}</span>
+            <span class="tl-kind ${tlKindClass(it.kind)}">${esc(tlKindLabel(it.kind))}</span>
+            <span class="tl-title" title="${esc(it.title || '')}">${esc(it.title || '')}</span>
+            ${actor ? `<span class="tl-actor ${isAgent ? 'agent' : ''}">${actor}</span>` : ''}
+        </div>`;
+    }
+    el.innerHTML = html;
+}
+
+// Jump from a timeline entry to the document itself (Documents tab, expanded).
+async function openTimelineDoc(docId) {
+    switchTab('documents');
+    if (!_docsLoaded) await loadDocumentsTab();
+    if (_docFilter !== 'all') setDocFilter('all', null);   // target doc may be hidden by the type filter
+    // wait for renderDocuments to paint, then expand + scroll
+    const tryOpen = (n) => {
+        const row = document.getElementById('drow-' + docId);
+        if (row) {
+            if (!document.getElementById('dpanel-' + docId)?.classList.contains('open')) row.click();
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (n > 0) setTimeout(() => tryOpen(n - 1), 120);
+    };
+    tryOpen(15);
 }
 
 function renderDocuments() {
@@ -1538,6 +1658,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try { localStorage.setItem('wk_last_client', clientName); } catch (_) {}
     if (location.hash === '#findings') switchTab('findings');
     else if (location.hash === '#documents') switchTab('documents');
+    else if (location.hash === '#timeline')  switchTab('timeline');
     else {
         // Restore the tab we were last on for this client (nav-state persistence).
         try {
