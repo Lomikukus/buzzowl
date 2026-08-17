@@ -1,13 +1,17 @@
 """
 llm.py — unified LLM provider layer.
 
-Every chat/completion call in the server goes through this module. Exactly two
+Every chat/completion call in the server goes through this module. Three
 wire adapters cover all providers:
 
   kind: openai-compat   OpenAI, OpenRouter, Ollama (/v1), LM Studio, vLLM,
                         LiteLLM — any endpoint speaking the OpenAI chat API.
   kind: anthropic       Anthropic Messages API via the official SDK
                         (optional dependency — guarded import).
+  kind: pi              text-only bridge through the Pi agent service
+                        (/complete) — for providers only Pi can auth, i.e. the
+                        subscription-OAuth ones (ChatGPT-Codex, Copilot).
+                        Config: {kind: pi, headers: {pi_provider: openai-codex}}
 
 Configuration (config.yaml):
 
@@ -70,7 +74,7 @@ _KNOWN_ROLES = ("default", "chat", "research", "pipeline", "match", "summary", "
 @dataclass
 class ProviderConfig:
     name: str
-    kind: str                      # "openai-compat" | "anthropic"
+    kind: str                      # "openai-compat" | "anthropic" | "pi"
     base_url: str = ""
     api_key: str = ""
     api_key_env: str = ""
@@ -407,6 +411,41 @@ def _anthropic_chat(provider: ProviderConfig, model: str, messages: list[dict],
 
 
 # ---------------------------------------------------------------------------
+# pi adapter — text-only bridge through the Pi agent service's /complete.
+# Lets Python-side roles (triage, summary, NBA reasons) use providers that
+# only Pi can authenticate: the subscription-OAuth ones (ChatGPT-Codex,
+# Copilot). Provider config: {kind: pi, pi_provider: openai-codex}. The Pi
+# URL/token come from agent_service_url_pi / agent_service_token.
+# ---------------------------------------------------------------------------
+
+def _pi_complete(provider: ProviderConfig, model: str, messages: list[dict],
+                 max_tokens: int, timeout: int) -> dict:
+    cfg = context.config
+    base = (provider.base_url or cfg.get("agent_service_url_pi")
+            or cfg.get("agent_service_url") or "http://localhost:8001").rstrip("/")
+    token = cfg.get("agent_service_token", "") or os.environ.get("AGENT_SERVICE_TOKEN", "")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    pi_provider = provider.headers.get("pi_provider") if provider.headers else None
+    payload = {
+        "provider": pi_provider or provider.name,
+        "model": model,
+        "messages": [{"role": m["role"], "content": m.get("content") or ""} for m in messages
+                     if m.get("role") in ("system", "user", "assistant")],
+        "max_tokens": max_tokens,
+    }
+    resp = requests.post(f"{base}/complete", headers=headers, json=payload, timeout=timeout)
+    if resp.status_code == 429 or resp.status_code >= 500:
+        raise requests.HTTPError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+    resp.raise_for_status()
+    text = (resp.json() or {}).get("text") or ""
+    if not text:
+        raise ValueError("null content from Pi /complete")
+    return {"content": text, "tool_calls": []}
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -427,6 +466,15 @@ def chat(messages: Optional[list] = None, tools: Optional[list] = None, *,
             partial(_anthropic_chat, provider, resolved_model, msgs, tool_defs,
                     max_tokens, timeout),
             what=f"LLM chat ({provider.name}/{resolved_model})",
+        )
+
+    if provider.kind == "pi":
+        if tool_defs:
+            raise LLMError("provider kind 'pi' is text-only (no tool calling) — "
+                           "use it for triage/summary/reason roles, not chat tool loops")
+        return _with_retry(
+            partial(_pi_complete, provider, resolved_model, msgs, max_tokens, timeout),
+            what=f"LLM complete via Pi ({provider.name}/{resolved_model})",
         )
 
     def _call() -> dict:
@@ -472,6 +520,11 @@ def stream(prompt: Optional[str] = None, *, messages: Optional[list] = None,
     fast so the caller can degrade gracefully (e.g. skip the live summary)."""
     provider, resolved_model = resolve(role, model)
     msgs = _ensure_messages(prompt, messages)
+
+    if provider.kind == "pi":
+        # No streaming over the Pi bridge — return the whole text as one chunk.
+        yield _pi_complete(provider, resolved_model, msgs, max_tokens, timeout)["content"]
+        return
 
     if provider.kind == "anthropic":
         client = _anthropic_client(provider)

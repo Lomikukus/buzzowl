@@ -73,20 +73,25 @@ llm:
     #   kind: openai-compat
     #   base_url: http://localhost:1234/v1
     #   api_key: local
+    # Subscription login bridged through the Pi service (text-only — fine for
+    # triage/summary/reason roles; the `chat` tool loop needs openai-compat).
+    chatgpt:
+      kind: pi
+      headers: {pi_provider: openai-codex}
   roles:
-    default:  {provider: openrouter, model: deepseek/deepseek-v4-flash}
-    research: {provider: openrouter, model: deepseek/deepseek-v4-flash}
-    pipeline: {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    default:  {provider: chatgpt,    model: gpt-5.4-mini}
+    research: {provider: chatgpt,    model: gpt-5.4-mini}
+    pipeline: {provider: chatgpt,    model: gpt-5.4-mini}
     chat:     {provider: openrouter, model: deepseek/deepseek-v4-pro}
-    match:    {provider: openrouter, model: deepseek/deepseek-v4-pro}
+    match:    {provider: chatgpt,    model: gpt-5.4}
     summary:  {provider: ollama,     model: qwen3.5}
-    triage:   {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    triage:   {provider: chatgpt,    model: gpt-5.4-mini}
 
 # Subscription logins (ChatGPT-Codex / GitHub Copilot flows in the Pi service).
 # GRAY ZONE: neither vendor officially sanctions these for third-party apps
 # without a whitelist; Anthropic's flow is banned outright and never offered.
 # Enable only after reviewing the providers' terms of service.
-llm_oauth_gray_flows: false
+llm_oauth_gray_flows: true
 
 # Agent runtime (legacy keys — still honored as fallback when llm: is absent)
 agent_brain: openrouter  # ollama | claude | openrouter — used for enrichment/org agents
@@ -101,9 +106,9 @@ anthropic_api_key: ""    # required only if agent_brain or research_brain: claud
 openrouter_api_key: ""   # required only if agent_brain or research_brain: openrouter (get key at openrouter.ai)
 
 # Match page — proactive product-client matching
-match_brain: openrouter
-match_research_model: deepseek/deepseek-v4-flash  # Stage 1: pain-point web research (Pi)
-match_model: deepseek/deepseek-v4-pro             # Stage 2: Pi match synthesis (reasoning)
+match_brain: openai-codex
+match_research_model: gpt-5.4-mini  # Stage 1: pain-point web research (Pi)
+match_model: gpt-5.4             # Stage 2: Pi match synthesis (reasoning)
 match_watchdog_timeout_secs: 1800  # 30 min absolute cap for match runs
 
 # Cloud model options (used by match page and other UI model selectors)
@@ -124,13 +129,13 @@ cloud_models:
 agent_service_url_pi:     "http://localhost:8001"   # Pi: all agent types
 agent_service_url:        "http://localhost:8001"   # legacy fallback (single-backend mode)
 agent_service_token: ""             # shared secret for internal auth (set same value in Docker env)
-agent_service_brain: openrouter          # default brain
-agent_service_model: "deepseek/deepseek-v4-flash"
+agent_service_brain: openai-codex          # default brain
+agent_service_model: "gpt-5.4-mini"
 # Pi chat backend — used by the knowledge page chat interface (Pi agent Q&A over the KB)
 # v4-pro: v4-flash proved weak at multi-step tool calling (Session 80); chat
 # quality drives evaluation UX and chat volume is low, so the cost delta is cents.
-pi_chat_brain: openrouter
-pi_chat_model: deepseek/deepseek-v4-pro
+pi_chat_brain: openai-codex
+pi_chat_model: gpt-5.4
 # Backend routing: "pi" | "python" (Hermes retired in Phase 29)
 agent_service_backend: "pi"
 # URL the main server is reachable at from inside Docker containers (for callbacks)

@@ -780,6 +780,43 @@ export interface ChatResult {
   toolCallsMade: number;
 }
 
+/**
+ * Plain completion through a Pi-resolved model — no tools, no agent loop.
+ * Lets the Python server's llm.py (kind 'pi') route small calls (triage,
+ * summaries, NBA reasons) through providers only Pi can auth, e.g. the
+ * subscription-OAuth ones. Returns the assistant text.
+ */
+export async function runPiComplete(opts: {
+  provider: string;
+  model: string;
+  messages: Array<{ role: string; content: string }>;
+  maxTokens?: number;
+}): Promise<string> {
+  const { completeSimple } = await import('@earendil-works/pi-ai');
+  const { model, apiKey } = await buildModel(opts.provider, opts.model);
+  const systemPrompt = opts.messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+  const turns = opts.messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
+      content: [{ type: 'text' as const, text: m.content }],
+    }));
+  const context: { systemPrompt?: string; messages: typeof turns } = { messages: turns };
+  if (systemPrompt) context.systemPrompt = systemPrompt;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result: any = await completeSimple(model, context as any, {
+    apiKey: apiKey || undefined,
+    maxTokens: opts.maxTokens ?? 1024,
+  } as any);
+  const text = (result?.content ?? [])
+    .filter((c: { type?: string }) => c.type === 'text')
+    .map((c: { text?: string }) => c.text ?? '')
+    .join('')
+    .trim();
+  return text;
+}
+
+
 export async function runPiChat(opts: ChatOptions): Promise<ChatResult> {
   const sources: Array<{ title: string; url: string; type: string; snippet: string }> = [];
   const toolCallLog: Array<{ tool: string; args: unknown; result: string; ts: string }> = [];

@@ -467,7 +467,7 @@ async def llm_provider_status(user: dict = Depends(current_user)):
 
 _CONFIG_YAML_PATH = BASE_DIR / "config.yaml"
 _KEY_MASK = "•••"
-_LLM_KINDS = ("openai-compat", "anthropic")
+_LLM_KINDS = ("openai-compat", "anthropic", "pi")
 
 
 def _masked_llm_block() -> dict:

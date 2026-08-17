@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { config, brainToProvider } from './config.js';
 import { pool } from './db.js';
 import { createRun, startRun, getRun, cancelRun, listRuns, queueStats } from './runner.js';
-import { runPiChat } from './agent.js';
+import { runPiChat, runPiComplete } from './agent.js';
 import {
   OAuthHttpError, completeOAuthLogin, disconnectOAuth, isSubscriptionProvider,
   oauthStatus, startOAuthLogin,
@@ -100,6 +100,33 @@ app.post('/runs/:id/cancel', async (req, reply) => {
   const ok = cancelRun(parseInt(id, 10));
   if (!ok) return reply.code(404).send({ error: 'run not found or already finished' });
   return { cancelled: true };
+});
+
+// POST /complete — plain, tool-less completion through a Pi-resolved model.
+// Bridge for the Python server's llm.py (kind 'pi'): lets triage/summary/NBA
+// calls use providers only Pi can auth (subscription OAuth). Body:
+// {provider, model, messages:[{role,content}], max_tokens?} → {text}
+app.post('/complete', async (req, reply) => {
+  const body = req.body as {
+    provider?: string; brain?: string; model?: string;
+    messages?: Array<{ role: string; content: string }>;
+    max_tokens?: number;
+  };
+  if (!Array.isArray(body.messages) || !body.messages.length) {
+    return reply.code(400).send({ error: 'messages[] required' });
+  }
+  const provider = body.provider
+    ?? (body.brain ? brainToProvider(body.brain) : config.defaultProvider);
+  const model = body.model ?? config.defaultModel;
+  try {
+    const text = await runPiComplete({
+      provider, model, messages: body.messages, maxTokens: body.max_tokens,
+    });
+    return { text, provider, model };
+  } catch (err) {
+    req.log.error({ err }, 'complete failed');
+    return reply.code(502).send({ error: String((err as Error)?.message ?? err) });
+  }
 });
 
 // POST /chat — Q&A over the knowledge base (no agent run created).
