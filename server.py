@@ -26,7 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import context
 from context import BASE_DIR, DB_AVAILABLE, RATE_LIMIT_AVAILABLE, config, console, db_module, executor, limiter, pwd_context
-from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks
+from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings
 from routers.pipeline import (
     ensure_dirs,
     _migrate_legacy_dirs,
@@ -411,6 +411,7 @@ async def health_check():
 # ---------------------------------------------------------------------------
 
 app.include_router(auth.router)
+app.include_router(org_settings.router)
 app.include_router(pipeline.router)
 app.include_router(knowledge.router)
 app.include_router(agents.router)

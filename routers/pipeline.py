@@ -25,6 +25,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import autonomy
 import context
 import llm
 from context import (
@@ -1149,12 +1150,14 @@ _NEWS_SIGNAL_SCORING_HINT = (
 )
 
 
-async def _fire_news_research(org_id: int, client_name: str) -> Optional[int]:
-    """Fire the news-OSINT Pi run for one client, awaited. Returns the agent_run id."""
+async def _fire_news_research(org_id: int, client_name: str, *, autonomous: bool = False) -> Optional[int]:
+    """Fire the news-OSINT Pi run for one client, awaited. Returns the agent_run id.
+    autonomous=True stamps trigger_type='autonomous' (agent-decided provenance)."""
     from routers.agents import _fire_agent_service, _watch_agent_service_run
     client_task = _NEWS_OSINT_TASK.format(subject=client_name) + _NEWS_SIGNAL_SCORING_HINT
     child_run_id = await db_module.create_agent_run(
-        org_id=org_id, agent_type="osint", task=client_task, trigger_type="heartbeat",
+        org_id=org_id, agent_type="osint", task=client_task,
+        trigger_type=autonomy.TRIGGER if autonomous else "heartbeat",
     )
     try:
         svc_url, svc_run_id = await _fire_agent_service(
@@ -1252,9 +1255,33 @@ async def _monitor_client(org_id: int, client: dict, fire_research: bool = True)
 
     patch: dict = {"monitored_sources": sources}
     if summary["changed"]:
-        if meta.get("is_focus") and fire_research:
-            run_id = await _fire_news_research(org_id, client["name"])
+        # Autonomy seam (Phase 2): "is this change worth acting on?" — legacy
+        # answers with the focus star; at level >= 2 the agent decides (non-focus
+        # clients included), budgeted + logged. Level 1 logs the decision and
+        # keeps legacy behaviour. Fallback on LLM failure = legacy (focus star).
+        act_now = bool(meta.get("is_focus")) and fire_research
+        auto_level = await autonomy.level(org_id)
+        if fire_research and auto_level >= autonomy.LEVEL_OBSERVE:
+            decision = await autonomy.decide(org_id, autonomy.DecisionContext(
+                seam="monitor", client_name=client["name"],
+                signals=[f"source changed: {c}" for c in summary["changed"]],
+                facts={"is_focus": bool(meta.get("is_focus")),
+                       "last_autonomous_run_at": meta.get("last_autonomous_run_at") or "never",
+                       "already_news_pending": bool(meta.get("news_pending")),
+                       "_client": client},
+                allowed_actions=("skip", "research"),
+                fallback_action="research" if meta.get("is_focus") else "skip",
+            ))
+            summary["decision"] = {"action": decision.action, "reason": decision.reason,
+                                   "review_run_id": decision.review_run_id}
+            if auto_level >= autonomy.LEVEL_ACT:
+                act_now = decision.acts
+        if act_now:
+            autonomous = auto_level >= autonomy.LEVEL_ACT
+            run_id = await _fire_news_research(org_id, client["name"], autonomous=autonomous)
             summary["researched"] = run_id is not None
+            if autonomous and run_id is not None:
+                await autonomy.mark_client_acted(org_id, client["name"])
             summary["escalated"] = await _maybe_escalate_match(org_id, client["name"], run_id)
             patch["news_pending"] = False
         else:
@@ -2204,6 +2231,32 @@ async def _select_heartbeat_clients(org_id: int, agent_type: str) -> tuple[list[
     return selected, summary
 
 
+def _heartbeat_decision_ctx(client: dict, agent_type: str, task: str) -> "autonomy.DecisionContext":
+    """Fact bundle the triage brain sees for one heartbeat candidate."""
+    meta = client.get("metadata") or {}
+    signals: list[str] = []
+    if meta.get("news_pending"):
+        signals.append(f"news pending since {meta.get('news_pending_at', '?')}: "
+                       f"{', '.join(map(str, meta.get('news_pending_reason') or []))[:200]}")
+    if meta.get("news_fp") is None:
+        signals.append("no news baseline yet")
+    facts = {
+        "is_focus": bool(meta.get("is_focus")),
+        "last_activity": str(client.get("last_activity") or "unknown"),
+        "last_autonomous_run_at": meta.get("last_autonomous_run_at") or "never",
+        "industry": meta.get("industry") or "unknown",
+        "heartbeat": agent_type,
+        "task_hint": (task or "")[:120],
+        "_client": client,
+    }
+    return autonomy.DecisionContext(
+        seam="heartbeat", client_name=client["name"], signals=signals, facts=facts,
+        allowed_actions=("skip", "research") if agent_type == "research" else ("skip", "osint"),
+        # deterministic fallback = legacy behaviour (the heartbeat used to always run)
+        fallback_action="research" if agent_type == "research" else "osint",
+    )
+
+
 async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str) -> None:
     """Execute one heartbeat job — called by APScheduler for each cron entry."""
     if not DB_AVAILABLE:
@@ -2273,33 +2326,56 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             # running every client burned the token budget at scale.
             from routers.agents import _fire_agent_service, _watch_agent_service_run
             clients, selection = await _select_heartbeat_clients(org_id, agent_type)
+            # Autonomy seam (Phase 2): at level >= 2 the agent DECIDES per client
+            # whether to act (triage on change deltas + KB facts, budgeted,
+            # logged); when it acts it runs the gap-reasoning `orchestrate`
+            # agent (which itself only calls trigger_run when needed) with
+            # trigger_type='autonomous'. Level 0 = legacy research_prep path,
+            # byte-for-byte. Level 1 = decisions logged, legacy path executes.
+            auto_level = await autonomy.level(org_id)
             triggered = []
+            skipped_by_agent = []
             for c in clients:
+                child_type = "research_prep"
+                child_trigger = "heartbeat"
+                if auto_level >= autonomy.LEVEL_OBSERVE:
+                    decision = await autonomy.decide(org_id, _heartbeat_decision_ctx(c, agent_type, task))
+                    if auto_level >= autonomy.LEVEL_ACT:
+                        if not decision.acts:
+                            skipped_by_agent.append({"name": c["name"], "reason": decision.reason,
+                                                     "review_run_id": decision.review_run_id})
+                            continue
+                        child_type = "orchestrate"
+                        child_trigger = autonomy.TRIGGER
                 orch_task = f"Subject: {c['name']}\n\nCustom task hint: {task}"
                 child_run_id = await db_module.create_agent_run(
-                    org_id=org_id, agent_type="research_prep",
-                    task=orch_task, trigger_type="heartbeat",
+                    org_id=org_id, agent_type=child_type,
+                    task=orch_task, trigger_type=child_trigger,
                 )
                 try:
                     svc_url, svc_run_id = await _fire_agent_service(
                         c["name"], org_id,
                         brain=context.config.get("agent_service_brain", "openrouter"),
                         model=context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
-                        task=orch_task, agent_type="research_prep",
+                        task=orch_task, agent_type=child_type,
                     )
                     await db_module.update_agent_run(
                         child_run_id, "running",
                         output={"service_run_id": svc_run_id},
                     )
+                    if child_trigger == autonomy.TRIGGER:
+                        await autonomy.mark_client_acted(org_id, c["name"])
                     await _watch_agent_service_run(child_run_id, svc_url, svc_run_id, subject=c["name"])
-                    triggered.append({"name": c["name"], "run_id": child_run_id})
+                    triggered.append({"name": c["name"], "run_id": child_run_id,
+                                      "autonomous": child_trigger == autonomy.TRIGGER})
                 except Exception as fire_exc:
                     await db_module.update_agent_run(child_run_id, "failed", error=str(fire_exc))
                     triggered.append({"name": c["name"], "run_id": child_run_id, "error": str(fire_exc)})
             await db_module.update_agent_run(
                 run_id, "done",
                 output={"clients_triggered": len(triggered), "triggered": triggered,
-                        "selection": selection},
+                        "selection": selection, "autonomy_level": auto_level,
+                        "skipped_by_agent": skipped_by_agent},
             )
 
         elif agent_type == "match_monitor":

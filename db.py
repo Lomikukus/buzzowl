@@ -595,6 +595,73 @@ async def create_org(name: str, slug: str) -> dict:
         return dict(row)
 
 
+async def get_org_settings(org_id: int) -> dict:
+    """Per-org settings JSONB (autonomy level, budgets, ...). {} when unset/DB down."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        raw = await conn.fetchval("SELECT settings FROM orgs WHERE id = $1", org_id)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    return dict(raw or {})
+
+
+async def update_org_settings(org_id: int, patch: dict) -> dict:
+    """Shallow-merge patch into orgs.settings and return the merged settings."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "UPDATE orgs SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb "
+            "WHERE id = $1 RETURNING settings",
+            org_id, json.dumps(patch),
+        )
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return dict(raw or {})
+
+
+async def count_autonomous_runs_today(org_id: int) -> int:
+    """Autonomous actions started today (UTC) — the daily budget counter.
+    Skip/observe decisions (agent_type autonomy_review) are not counted."""
+    if not _pool:
+        return 0
+    async with _pool.acquire() as conn:
+        n = await conn.fetchval(
+            "SELECT COUNT(*) FROM agent_runs WHERE org_id = $1 "
+            "AND trigger_type = 'autonomous' AND agent_type <> 'autonomy_review' "
+            "AND created_at >= date_trunc('day', now() AT TIME ZONE 'utc')",
+            org_id,
+        )
+    return int(n or 0)
+
+
+async def list_autonomy_decisions(org_id: int, limit: int = 50) -> list[dict]:
+    """Recent autonomy decisions (skips + actions) for the audit surface."""
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, agent_type, status, task, output, created_at, completed_at "
+            "FROM agent_runs WHERE org_id = $1 AND trigger_type = 'autonomous' "
+            "ORDER BY created_at DESC LIMIT $2",
+            org_id, limit,
+        )
+    out = []
+    for r in rows:
+        d = dict(r)
+        if isinstance(d.get("output"), str):
+            try:
+                d["output"] = json.loads(d["output"])
+            except json.JSONDecodeError:
+                pass
+        out.append(d)
+    return out
+
+
 async def create_user(
     org_id: int,
     username: str,
