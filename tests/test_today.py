@@ -472,3 +472,40 @@ class TestHeartbeatDispatch:
         assert call.args[1] == "done"
         assert call.kwargs["output"] == {"reps_pre_warmed": 3, "clients_ranked": 3}
         db.update_heartbeat_last_run.assert_awaited_once_with(1)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — open deals feed the queue (stage, value, close date)
+# ---------------------------------------------------------------------------
+
+def test_deal_stage_value_and_close_date_raise_score():
+    fresh = NOW.date().isoformat()
+    clients = [{"name": "A", "metadata": {}, "last_activity": fresh},
+               {"name": "B", "metadata": {}, "last_activity": fresh}]
+    deals = {"A": [{"id": 1, "name": "Pilot", "stage": "negotiation", "value": 50000,
+                    "currency": "EUR", "status": "open",
+                    "expected_close": (NOW.date() + timedelta(days=5)).isoformat()}]}
+    out = today.compute_scores(clients, {}, {}, now=NOW, deals_by_client=deals)
+    assert [e["client"] for e in out] == ["A"]              # B has nothing → no entry
+    a = out[0]
+    # negotiation 8 + 5 (50k) + close-soon 8 = 21
+    assert a["score"] == 21.0
+    f = next(x for x in a["facts"] if x["type"] == "deal")
+    assert f["deal_id"] == 1 and f["stage"] == "negotiation" and f["link"] == "/pipeline?deal=1"
+    assert "closes in 5d" in f["headline"]
+
+
+def test_deal_value_cap_and_slipped_close():
+    clients = [{"name": "A", "metadata": {}, "last_activity": NOW.date().isoformat()}]
+    deals = {"A": [{"id": 2, "name": "Whale", "stage": "lead", "value": 5_000_000, "status": "open",
+                    "expected_close": (NOW.date() - timedelta(days=3)).isoformat()}]}
+    out = today.compute_scores(clients, {}, {}, now=NOW, deals_by_client=deals)
+    # lead 0 + value capped at 8 + slipped 10 = 18
+    assert out[0]["score"] == 18.0
+    assert "slipped 3d" in out[0]["facts"][0]["headline"]
+
+
+def test_closed_deals_are_ignored():
+    clients = [{"name": "A", "metadata": {}, "last_activity": NOW.date().isoformat()}]
+    deals = {"A": [{"id": 3, "name": "Old", "stage": "won", "value": 90000, "status": "won"}]}
+    assert today.compute_scores(clients, {}, {}, now=NOW, deals_by_client=deals) == []

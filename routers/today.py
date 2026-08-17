@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
@@ -41,6 +41,15 @@ _DEFAULT_WEIGHTS = {
     "task_due_overdue": 14,
     "task_due_today": 10,
     "task_due_soon": 6,
+    # Phase 4 — open deals: later stage = closer to money = more attention; bigger value
+    # = more attention (capped so one whale doesn't own the queue); a close date that is
+    # near or has slipped is the strongest nudge of all.
+    "deal_stage_bonus": {"lead": 0, "qualified": 2, "proposal": 5, "negotiation": 8},
+    "deal_value_per_10k": 1.0,
+    "deal_value_cap": 8,
+    "deal_close_soon_days": 14,
+    "deal_close_soon": 8,
+    "deal_close_overdue": 10,
 }
 
 # A generated draft older than this is treated as abandoned — no "send it" nudge.
@@ -132,6 +141,7 @@ def compute_scores(
     weights: Optional[dict] = None,
     followup_days: int = 5,
     queue_size: int = 10,
+    deals_by_client: Optional[dict[str, list[dict]]] = None,
 ) -> list[dict]:
     """Rank clients by contact priority. Deterministic; all links come from data."""
     now = now or datetime.now(timezone.utc)
@@ -139,8 +149,10 @@ def compute_scores(
     if weights:
         w.update(weights)
     type_bonus = w.get("signal_type_bonus") or {}
+    stage_bonus = w.get("deal_stage_bonus") or {}
     tasks_by_client = tasks_by_client or {}
     contacts_log_by_client = contacts_log_by_client or {}
+    deals_by_client = deals_by_client or {}
     today_date = now.date()
 
     entries = []
@@ -282,6 +294,46 @@ def compute_scores(
                 "when": when,
                 "task_id": t.get("id"),
                 "link": f"/client/{client_url}",
+            })
+
+        # Open deals (Phase 4): stage, value, close date
+        for d in deals_by_client.get(name, []):
+            if (d.get("status") or "open") != "open":
+                continue
+            stage = d.get("stage") or "lead"
+            pts = float(stage_bonus.get(stage) or 0)
+            value = d.get("value")
+            try:
+                value = float(value) if value is not None else 0.0
+            except (TypeError, ValueError):
+                value = 0.0
+            pts += min(value / 10_000.0 * w["deal_value_per_10k"], w["deal_value_cap"])
+            close = d.get("expected_close")
+            if isinstance(close, str):
+                try:
+                    close = date.fromisoformat(close[:10])
+                except ValueError:
+                    close = None
+            when = ""
+            if close:
+                days_left = (close - today_date).days
+                if days_left < 0:
+                    pts += w["deal_close_overdue"]
+                    when = f"close date slipped {-days_left}d"
+                elif days_left <= w["deal_close_soon_days"]:
+                    pts += w["deal_close_soon"]
+                    when = f"closes in {days_left}d"
+            score += pts
+            facts.append({
+                "type": "deal",
+                "headline": f"{d.get('name') or 'Deal'} — {stage}"
+                            + (f" · {value:,.0f} {d.get('currency') or 'EUR'}" if value else "")
+                            + (f" · {when}" if when else ""),
+                "deal_id": d.get("id"),
+                "stage": stage,
+                "value": value or None,
+                "expected_close": close.isoformat() if close else None,
+                "link": f"/pipeline?deal={d.get('id')}",
             })
 
         is_focus = bool(meta.get("is_focus"))
@@ -550,6 +602,13 @@ async def compute_nba_queue(
     (clients, signals_by_client, outreach_by_client,
      tasks_by_client, contacts_log_by_client) = await _gather_inputs(org_id, owner_id)
     cfg = context.config or {}
+    deals_by_client: dict[str, list[dict]] = defaultdict(list)
+    try:
+        for d in await db_module.list_deals(org_id, status="open", owner_user_id=owner_id, limit=2000):
+            if d.get("client_name"):
+                deals_by_client[d["client_name"]].append(d)
+    except Exception as exc:  # deals table missing / DB hiccup → queue still works
+        logger.debug("nba: deals unavailable: %s", exc)
     entries = compute_scores(
         clients, signals_by_client, outreach_by_client,
         tasks_by_client=tasks_by_client,
@@ -558,6 +617,7 @@ async def compute_nba_queue(
         weights=cfg.get("nba_weights"),
         followup_days=_safe_int(cfg.get("nba_followup_days"), 5),
         queue_size=_safe_int(cfg.get("nba_queue_size"), 10),
+        deals_by_client=dict(deals_by_client),
     )
 
     # Autonomy seam (Phase 2): at level >= 1 the LLM chooses the action together

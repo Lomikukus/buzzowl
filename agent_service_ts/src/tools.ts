@@ -706,11 +706,126 @@ export function buildTools(
     },
   };
 
+  // -- CRM pipeline + timeline (Phase 4) ------------------------------------
+  const internalHeaders = () => ({
+    'Content-Type': 'application/json',
+    ...(config.serviceToken ? { Authorization: `Bearer ${config.serviceToken}` } : {}),
+  });
+
+  const getDealsTool: AgentTool = {
+    name: 'get_deals',
+    label: 'Get Deals (pipeline)',
+    description: 'Read the sales pipeline: open deals with stage, value, probability, expected close date and owner — for one client or the whole org. Check this before proposing outreach or research so you know where the account stands commercially (a deal in negotiation needs different attention than a cold lead).',
+    parameters: Type.Object({
+      client_name: Type.Optional(Type.String({ description: 'Client name (fuzzy match). Omit for all clients.' })),
+      status: Type.Optional(Type.String({ description: 'open (default) | won | lost | all' })),
+    }),
+    execute: async (_id, params, _signal) => {
+      const p = params as { client_name?: string; status?: string };
+      try {
+        const qs = new URLSearchParams({ org_id: String(orgId), client_name: p.client_name ?? '', status: p.status ?? 'open' });
+        const resp = await fetch(`${config.mainServerUrl}/api/internal/deals?${qs}`, {
+          headers: internalHeaders(), signal: AbortSignal.timeout(15_000),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => '')}`);
+        const data = await resp.json() as { deals: Array<Record<string, unknown>>; note?: string; stages?: string[] };
+        const text = data.deals.length
+          ? data.deals.map(d => `#${d.id} ${d.client} — "${d.name}": ${d.stage_label} (${d.probability}%)` +
+              (d.value ? `, ${Number(d.value).toLocaleString('en-US')} ${d.currency}` : '') +
+              (d.expected_close ? `, close ${d.expected_close}` : '') +
+              (d.owner ? `, owner ${d.owner}` : '') + ` [${d.status}]`).join('\n') +
+            (data.stages ? `\nStages in order: ${data.stages.join(' → ')}` : '')
+          : (data.note ?? 'No deals' + (p.client_name ? ` for ${p.client_name}` : '') + '.');
+        log('get_deals', p, text);
+        return { content: [{ type: 'text', text }], details: data };
+      } catch (err) {
+        const msg = `Error reading deals: ${String(err)}`;
+        log('get_deals', p, msg);
+        return { content: [{ type: 'text', text: msg }], details: {} };
+      }
+    },
+  };
+
+  const updateDealStageTool: AgentTool = {
+    name: 'update_deal_stage',
+    label: 'Update Deal Stage',
+    description:
+      'Move an OPEN deal to another open pipeline stage (lead, qualified, proposal, negotiation …) when a sourced fact ' +
+      'justifies it — e.g. a meeting document records that a proposal was sent, or a reply confirms budget approval. ' +
+      'You can never mark a deal won or lost and never reopen a closed deal: those are human decisions. Requires the org ' +
+      'to allow agent actions (autonomy level 2) — otherwise the call is refused. Every move is logged with your run id.',
+    parameters: Type.Object({
+      deal_id:     Type.Optional(Type.Number({ description: 'Deal id from get_deals (preferred)' })),
+      client_name: Type.Optional(Type.String({ description: 'Alternatively: the client whose single open deal to move' })),
+      deal_name:   Type.Optional(Type.String({ description: 'Disambiguate when the client has several open deals' })),
+      stage:       Type.String({ description: 'Target stage id (see get_deals "Stages in order")' }),
+      note:        Type.String({ description: 'Why — cite the document / signal that justifies the move' }),
+    }),
+    execute: async (_id, params, _signal) => {
+      const p = params as { deal_id?: number; client_name?: string; deal_name?: string; stage: string; note: string };
+      try {
+        const resp = await fetch(`${config.mainServerUrl}/api/internal/deals/stage`, {
+          method: 'POST', headers: internalHeaders(),
+          body: JSON.stringify({
+            org_id: orgId, agent_run_id: agentRunId > 0 ? agentRunId : undefined,
+            deal_id: p.deal_id, client_name: p.client_name, deal_name: p.deal_name,
+            stage: p.stage, note: p.note,
+          }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => '')}`);
+        const data = await resp.json() as Record<string, unknown>;
+        const msg = data.unchanged
+          ? `Deal #${data.id} is already in ${data.stage}.`
+          : `Deal #${data.id} "${data.name}" moved ${data.from} → ${data.stage} (probability now ${data.probability}%). Logged for the rep.`;
+        log('update_deal_stage', p, msg);
+        return { content: [{ type: 'text' as const, text: msg }], details: data };
+      } catch (err) {
+        const msg = `Could not move deal: ${String(err)}`;
+        log('update_deal_stage', p, msg);
+        return { content: [{ type: 'text' as const, text: msg }], details: {} };
+      }
+    },
+  };
+
+  const getClientTimelineTool: AgentTool = {
+    name: 'get_client_timeline',
+    label: 'Get Client Timeline',
+    description: 'Read the unified activity timeline of one client, newest first: documents written (research, meetings, outreach drafts), mails logged, tasks, deal stage moves and agent runs — one interleaved feed. The fastest way to learn what happened with an account recently before deciding anything.',
+    parameters: Type.Object({
+      client_name: Type.String({ description: 'Client name (fuzzy match)' }),
+      limit: Type.Optional(Type.Number({ description: 'Max entries (default 30)' })),
+    }),
+    execute: async (_id, params, _signal) => {
+      const p = params as { client_name: string; limit?: number };
+      try {
+        const qs = new URLSearchParams({ org_id: String(orgId), client_name: p.client_name, limit: String(Math.min(p.limit ?? 30, 100)) });
+        const resp = await fetch(`${config.mainServerUrl}/api/internal/timeline?${qs}`, {
+          headers: internalHeaders(), signal: AbortSignal.timeout(15_000),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => '')}`);
+        const data = await resp.json() as { client?: string; items: Array<Record<string, unknown>>; note?: string };
+        const text = data.items.length
+          ? `Timeline for ${data.client} (newest first):\n` +
+            data.items.map(it => `${String(it.ts).slice(0, 16).replace('T', ' ')}  [${it.kind}]  ${it.title}` +
+              (it.actor ? `  — ${it.actor}` : '')).join('\n')
+          : (data.note ?? `No activity recorded for ${p.client_name}.`);
+        log('get_client_timeline', p, text);
+        return { content: [{ type: 'text', text }], details: data };
+      } catch (err) {
+        const msg = `Error reading timeline: ${String(err)}`;
+        log('get_client_timeline', p, msg);
+        return { content: [{ type: 'text', text: msg }], details: {} };
+      }
+    },
+  };
+
   return [
     searchKb, getClient, searchClients, webSearchTool, fetchPageTool, writeDocument,
     listClientsTool, getRecentFindingsTool,
     createClientTool, createContactTool, updateClientTool,
     triggerResearchTool, triggerRunTool, findPeopleTool, createTaskTool, getSystemStatusTool,
     getContactLogTool, getNbaQueueTool, draftOutreachTool,
+    getDealsTool, updateDealStageTool, getClientTimelineTool,
   ];
 }

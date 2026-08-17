@@ -939,7 +939,9 @@ async def list_deal_events(org_id: int, deal_id: int, limit: int = 100) -> list[
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT e.id, e.kind, e.from_value, e.to_value, e.note, e.actor_user_id,
-                      e.actor_agent_run_id, e.created_at, u.display_name AS actor_name
+                      e.actor_agent_run_id, e.created_at,
+                      COALESCE(u.display_name,
+                               CASE WHEN e.actor_user_id IS NULL THEN 'agent' END) AS actor_name
                  FROM deal_events e LEFT JOIN users u ON u.id = e.actor_user_id
                 WHERE e.org_id = $1 AND e.deal_id = $2
                 ORDER BY e.created_at DESC LIMIT $3""",

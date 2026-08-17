@@ -345,6 +345,137 @@ async def internal_outreach_draft(body: dict, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Deals + timeline for the agent (Phase 4)
+# ---------------------------------------------------------------------------
+
+async def _resolve_client_id(org_id: int, client_name: str) -> Optional[dict]:
+    """exact → trigram-similar → unique substring match ("acme" → "Acme Corp")."""
+    c = await db_module.get_client(org_id, client_name)
+    if not c:
+        canon = await db_module.find_similar_client(org_id, client_name)
+        c = await db_module.get_client(org_id, canon) if canon else None
+    if not c:
+        hits = await db_module.search_clients(org_id, client_name, limit=2)
+        if len(hits) == 1:
+            c = await db_module.get_client(org_id, hits[0]["name"])
+    return c
+
+
+@router.get("/deals")
+async def internal_get_deals(org_id: int, request: Request, client_name: str = "",
+                             status: str = "open", limit: int = 50):
+    """Pi `get_deals` tool: pipeline read. Query: ?org_id=&client_name=&status=open|won|lost|all"""
+    _check_token(request)
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    import deals as dl
+    client_id = None
+    if client_name.strip():
+        c = await _resolve_client_id(org_id, client_name.strip())
+        if not c:
+            return {"deals": [], "note": f"no client matching {client_name!r}"}
+        client_id = c["id"]
+    st = None if status in ("", "all") else status
+    rows = await db_module.list_deals(org_id, status=st, client_id=client_id, limit=min(max(limit, 1), 200))
+    out = []
+    for d in rows:
+        out.append({
+            "id": d["id"], "client": d.get("client_name"), "name": d["name"], "stage": d["stage"],
+            "stage_label": (dl.stage_info(d["stage"]) or {}).get("label", d["stage"]),
+            "status": d["status"], "value": d.get("value"), "currency": d.get("currency"),
+            "probability": d.get("probability") if d.get("probability") is not None else dl.default_probability(d["stage"]),
+            "weighted_value": round(dl.weighted_value(d.get("value"), d.get("probability"), d["stage"]), 2),
+            "expected_close": d["expected_close"].isoformat() if d.get("expected_close") else None,
+            "owner": d.get("owner_name"),
+            "updated_at": d["updated_at"].isoformat() if d.get("updated_at") else None,
+        })
+    return {"deals": out, "stages": dl.stage_ids()}
+
+
+@router.post("/deals/stage")
+async def internal_update_deal_stage(body: dict, request: Request):
+    """Pi `update_deal_stage` tool. Body: {org_id, deal_id | (client_name [+ deal_name]),
+    stage, note?, agent_run_id?}.
+
+    Gated server-side on autonomy level >= 2 ('act'). Agents may only move a deal
+    between OPEN stages — closing (won/lost) and reopening stay human decisions.
+    Every move is written to deal_events with actor_agent_run_id for the audit trail."""
+    _check_token(request)
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    org_id: Optional[int] = body.get("org_id")
+    if not org_id:
+        raise HTTPException(status_code=400, detail="org_id required")
+
+    import autonomy
+    import deals as dl
+    lvl = await autonomy.level(org_id)
+    if lvl < autonomy.LEVEL_ACT:
+        raise HTTPException(
+            status_code=403,
+            detail=f"autonomy level {lvl} does not permit agents to change deal stages (needs level 2)")
+
+    try:
+        stage = dl.validate_stage(body.get("stage") or "")
+    except dl.DealError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if dl.status_for_stage(stage) != dl.STATUS_OPEN:
+        raise HTTPException(status_code=403,
+                            detail=f"agents may not close deals — moving to {stage!r} is a human decision")
+
+    deal = None
+    if body.get("deal_id"):
+        deal = await db_module.get_deal(org_id, int(body["deal_id"]))
+    elif (body.get("client_name") or "").strip():
+        c = await _resolve_client_id(org_id, body["client_name"].strip())
+        if not c:
+            raise HTTPException(status_code=404, detail=f"no client matching {body['client_name']!r}")
+        open_deals = await db_module.list_deals(org_id, status=dl.STATUS_OPEN, client_id=c["id"], limit=50)
+        want = (body.get("deal_name") or "").strip().lower()
+        if want:
+            open_deals = [d for d in open_deals if want in d["name"].lower()]
+        if len(open_deals) == 1:
+            deal = open_deals[0]
+        elif len(open_deals) > 1:
+            raise HTTPException(status_code=409, detail="several open deals for this client — pass deal_id or deal_name: "
+                                + ", ".join(f"#{d['id']} {d['name']}" for d in open_deals))
+    if not deal:
+        raise HTTPException(status_code=404, detail="deal not found")
+    if deal["status"] != dl.STATUS_OPEN:
+        raise HTTPException(status_code=403, detail=f"deal #{deal['id']} is {deal['status']} — reopening is a human decision")
+    if deal["stage"] == stage:
+        return {"ok": True, "id": deal["id"], "stage": stage, "unchanged": True}
+
+    patch = {"stage": stage, "status": dl.STATUS_OPEN}
+    if deal.get("probability") is None or deal.get("probability") == dl.default_probability(deal["stage"]):
+        patch["probability"] = dl.default_probability(stage)
+    run_id = body.get("agent_run_id")
+    row = await db_module.update_deal(org_id, deal["id"], patch, actor_agent_run_id=int(run_id) if run_id else None,
+                                      note=(body.get("note") or "").strip() or "moved by agent")
+    logger.info("agent moved deal #%s %s → %s (org %s, run %s)", deal["id"], deal["stage"], stage, org_id, run_id)
+    return {"ok": True, "id": row["id"], "name": row["name"], "from": deal["stage"], "stage": row["stage"],
+            "probability": row.get("probability")}
+
+
+@router.get("/timeline")
+async def internal_client_timeline(org_id: int, client_name: str, request: Request, limit: int = 30):
+    """Pi `get_client_timeline` tool: unified activity feed for one client."""
+    _check_token(request)
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    c = await _resolve_client_id(org_id, client_name.strip())
+    if not c:
+        return {"items": [], "note": f"no client matching {client_name!r}"}
+    rows = await db_module.client_timeline(org_id, c["id"], limit=min(max(limit, 1), 200))
+    items = []
+    for r in rows:
+        ts = r.get("ts")
+        items.append({"ts": ts.isoformat() if hasattr(ts, "isoformat") else ts, "kind": r.get("kind"),
+                      "actor": r.get("actor"), "title": r.get("title"), "ref": r.get("ref")})
+    return {"client": c["name"], "items": items}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/internal/system-status
 # ---------------------------------------------------------------------------
 
