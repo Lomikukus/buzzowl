@@ -203,9 +203,11 @@ class TestNotifications:
         assert resp.status_code == 401
 
     def test_notifications_test_send_ok(self, app_client):
-        """POST /api/notifications/test returns ok without sending a real Telegram message."""
+        """POST /api/notifications/test sends to the CURRENT USER's linked chat (per-user
+        routing, Phase 6b) — never to an org-wide list."""
+        from unittest.mock import AsyncMock
         with (
-            patch("notifications.notify", return_value=True) as mock_notify,
+            patch("notifications.notify_user", new=AsyncMock(return_value=True)) as mock_user,
             patch("notifications._configured", return_value=True),
         ):
             resp = app_client.post("/api/notifications/test", headers=AUTH)
@@ -213,10 +215,10 @@ class TestNotifications:
         data = resp.json()
         assert data["ok"] is True
         assert data["configured"] is True
-        mock_notify.assert_called_once()
-        # Verify the message mentions the user's display name
-        call_text = mock_notify.call_args[0][0]
-        assert "Konrad" in call_text
+        mock_user.assert_awaited_once()
+        args = mock_user.await_args.args
+        assert args[0] == 1                      # the caller's user id (fixture user)
+        assert "Konrad" in args[1]               # message mentions the display name
 
     def test_notifications_test_send_not_configured(self, app_client):
         """POST /api/notifications/test reflects Telegram not configured in response."""
