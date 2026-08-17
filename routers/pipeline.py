@@ -2317,8 +2317,10 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
         )
         backend = context.config.get("agent_service_backend", "python")
 
-        if agent_type == "monitor" and backend in ("hermes", "split"):
-            # Hermes monitor: survey all clients, return stale list → callback fires research
+        if agent_type == "monitor" and backend in ("pi", "hermes", "split"):
+            # Monitor agent: survey all clients, return stale list → callback fires
+            # research (budgeted + autonomous-stamped at autonomy level >= 2).
+            # Revived for the Pi backend in Phase 2 — was dead under backend "pi".
             from routers.agents import _fire_agent_service, _watch_agent_service_run
             svc_url, svc_run_id = await _fire_agent_service(
                 "org", org_id,

@@ -600,10 +600,66 @@ export function buildTools(
     },
   };
 
+  // -- Decision-context reads (Phase 2 autonomy) ---------------------------
+  const getContactLogTool: AgentTool = {
+    name: 'get_contact_log',
+    label: 'Get Contact Log',
+    description: 'Read the outreach history (mails logged as sent, replies, follow-ups) for a client or the whole org. Call this before deciding whether new research or outreach is worthwhile — a client contacted last week without reply is not a candidate for more outreach yet.',
+    parameters: Type.Object({
+      client_name: Type.Optional(Type.String({ description: 'Client name (substring match). Omit for org-wide.' })),
+      limit: Type.Optional(Type.Number({ description: 'Max rows (default 10)' })),
+    }),
+    execute: async (_id, params, _signal) => {
+      const p = params as { client_name?: string; limit?: number };
+      try {
+        const rows = await db.getContactLog(orgId, p.client_name, Math.min(p.limit ?? 10, 50));
+        const text = rows.length
+          ? rows.map(r => `${String(r.sent_at).slice(0, 10)} → ${r.client_name}` +
+              (r.contact_name ? ` / ${r.contact_name}` : '') +
+              (r.subject ? `: "${r.subject}"` : '') +
+              (r.replied ? ' [replied]' : '') + (r.follow_up ? ' [follow-up]' : '')).join('\n')
+          : 'No outreach logged.';
+        log('get_contact_log', p, text);
+        return { content: [{ type: 'text', text }], details: { rows } };
+      } catch (err) {
+        const msg = `Error reading contact log: ${String(err)}`;
+        log('get_contact_log', p, msg);
+        return { content: [{ type: 'text', text: msg }], details: {} };
+      }
+    },
+  };
+
+  const getNbaQueueTool: AgentTool = {
+    name: 'get_nba_queue',
+    label: 'Get Next-Best-Action Queue',
+    description: 'Read the current next-best-action queue (who the reps should contact today and why, with the suggested action). Use it to see whether a client is already flagged for action before triggering more research.',
+    parameters: Type.Object({
+      client_name: Type.Optional(Type.String({ description: 'Filter to one client (substring match)' })),
+    }),
+    execute: async (_id, params, _signal) => {
+      const p = params as { client_name?: string };
+      try {
+        const q = await db.getNbaQueue(orgId, p.client_name);
+        const text = q.entries.length
+          ? `Queue computed ${q.computed_at ?? '?'}\n` +
+            q.entries.map(e => `${e.rank}. ${e.client} — ${e.suggested_action} (score ${e.score})` +
+              (e.is_focus ? ' ★' : '') + `: ${e.reason}`).join('\n')
+          : 'No next-best-action queue available' + (p.client_name ? ` for ${p.client_name}` : '') + '.';
+        log('get_nba_queue', p, text);
+        return { content: [{ type: 'text', text }], details: q };
+      } catch (err) {
+        const msg = `Error reading NBA queue: ${String(err)}`;
+        log('get_nba_queue', p, msg);
+        return { content: [{ type: 'text', text: msg }], details: {} };
+      }
+    },
+  };
+
   return [
     searchKb, getClient, searchClients, webSearchTool, fetchPageTool, writeDocument,
     listClientsTool, getRecentFindingsTool,
     createClientTool, createContactTool, updateClientTool,
     triggerResearchTool, triggerRunTool, findPeopleTool, createTaskTool, getSystemStatusTool,
+    getContactLogTool, getNbaQueueTool,
   ];
 }

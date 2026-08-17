@@ -614,10 +614,12 @@ async def update_org_settings(org_id: int, patch: dict) -> dict:
     if not _pool:
         return {}
     async with _pool.acquire() as conn:
+        # The pool's jsonb codec encodes dicts itself — pass the dict, not a
+        # pre-dumped string (that would store a JSON string literal).
         raw = await conn.fetchval(
             "UPDATE orgs SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb "
             "WHERE id = $1 RETURNING settings",
-            org_id, json.dumps(patch),
+            org_id, patch,
         )
     if isinstance(raw, str):
         raw = json.loads(raw)

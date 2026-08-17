@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<link rel="stylesheet" href="/static/theme.css?v=20260817a">
 <script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — Buzzowl</title>
-<script src="/static/components/navbar.js?v=20260714d"></script>
+<script src="/static/components/navbar.js?v=20260817a"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
@@ -311,6 +311,36 @@ tr:hover td { background: var(--c-linefaint, #222); }
       </div>
     </div>
 
+    <!-- Agent Autonomy (admin) -->
+    <div class="section">
+      <h2>Agent Autonomy</h2>
+      <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
+        How much the research agent may decide on its own. Every decision is logged
+        (Agents → Autonomy tab), including what it chose <em>not</em> to do.
+      </p>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:0.55rem 1rem;max-width:640px;align-items:center;font-size:0.8rem">
+        <label for="autoLevel">Autonomy level</label>
+        <select class="form-select" id="autoLevel" style="width:auto">
+          <option value="0">0 — Off (legacy behaviour, no autonomous decisions)</option>
+          <option value="1">1 — Observe (decide + log, never act)</option>
+          <option value="2">2 — Act (autonomous research / OSINT / match)</option>
+          <option value="3">3 — Act + draft outreach (sending stays human-approved)</option>
+        </select>
+        <label for="autoCap">Max autonomous runs / day</label>
+        <input class="form-input" id="autoCap" type="number" min="0" style="width:7rem">
+        <label for="autoCooldown">Per-client cooldown (hours)</label>
+        <input class="form-input" id="autoCooldown" type="number" min="0" step="0.5" style="width:7rem">
+        <label for="autoKill">Kill switch</label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:var(--c-muted, #888)">
+          <input type="checkbox" id="autoKill"> stop all autonomous actions immediately (level is kept)
+        </label>
+      </div>
+      <div style="margin-top:0.7rem;display:flex;gap:0.6rem;align-items:center">
+        <button class="btn primary" id="autoSaveBtn">Save autonomy settings</button>
+        <span id="autoMsg" style="font-size:0.76rem;color:var(--c-muted, #888)"></span>
+      </div>
+    </div>
+
     </div><!-- /adminSections -->
 
     <!-- Scheduled Jobs (all users) -->
@@ -434,6 +464,7 @@ async function init() {
     loadInvites();
     loadPrompts();
     loadLlmConfig();
+    loadAutonomySettings();
   }
 }
 
@@ -650,6 +681,39 @@ async function _finishOpenRouterConnect(code) {
   // strip ?code= from the URL so a reload doesn't retry a used code
   history.replaceState(null, '', location.pathname);
 }
+
+
+// ── Agent Autonomy (admin) ────────────────────────────────────────────────
+async function loadAutonomySettings() {
+  try {
+    const r = await fetch('/api/org/settings', { headers: H() });
+    if (!r.ok) return;
+    const s = await r.json();
+    document.getElementById('autoLevel').value = String(s.autonomy_level ?? 0);
+    document.getElementById('autoCap').value = s.max_autonomous_runs_per_day ?? 20;
+    document.getElementById('autoCooldown').value = s.cooldown_hours ?? 24;
+    document.getElementById('autoKill').checked = !!s.kill_switch;
+  } catch (e) { /* section stays default */ }
+}
+async function saveAutonomySettings() {
+  const msg = document.getElementById('autoMsg');
+  msg.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/org/settings', {
+      method: 'POST', headers: H(),
+      body: JSON.stringify({
+        autonomy_level: parseInt(document.getElementById('autoLevel').value, 10),
+        max_autonomous_runs_per_day: parseInt(document.getElementById('autoCap').value, 10),
+        cooldown_hours: parseFloat(document.getElementById('autoCooldown').value),
+        kill_switch: document.getElementById('autoKill').checked,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.detail || r.status); return; }
+    msg.textContent = 'Saved — level ' + d.autonomy_level + (d.kill_switch ? ' (kill switch ON)' : '') + '. Takes effect on the next heartbeat.';
+  } catch (e) { msg.textContent = 'Save failed: ' + e.message; }
+}
+document.getElementById('autoSaveBtn').addEventListener('click', saveAutonomySettings);
 
 document.getElementById('llmConnectOrBtn').addEventListener('click', connectOpenRouter);
 // OpenRouter redirects back to /settings?code=… — finish the handshake

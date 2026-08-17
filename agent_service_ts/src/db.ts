@@ -280,6 +280,71 @@ export async function getSystemStatus(orgId: number): Promise<Record<string, unk
   return callInternalApi('GET', `/api/internal/system-status?org_id=${orgId}`) as Promise<Record<string, unknown>>;
 }
 
+// ---------------------------------------------------------------------------
+// Decision-context reads (Phase 2 autonomy): what the orchestrate agent needs
+// to judge whether acting on a client is worthwhile — outreach history and the
+// rep-facing next-best-action queue. Read-only.
+// ---------------------------------------------------------------------------
+
+export interface ContactLogRow {
+  client_name: string;
+  contact_name: string | null;
+  contact_email: string | null;
+  subject: string | null;
+  sent_at: string;
+  replied: boolean;
+  follow_up: boolean;
+}
+
+export async function getContactLog(
+  orgId: number,
+  clientName?: string,
+  n = 10,
+): Promise<ContactLogRow[]> {
+  const params: unknown[] = [orgId, n];
+  let where = 'org_id = $1';
+  if (clientName) {
+    params.push(`%${clientName}%`);
+    where += ` AND client_name ILIKE $${params.length}`;
+  }
+  const { rows } = await pool.query<ContactLogRow>(
+    `SELECT client_name, contact_name, contact_email, subject, sent_at, replied, follow_up
+       FROM contact_log WHERE ${where}
+      ORDER BY sent_at DESC LIMIT $2`,
+    params,
+  );
+  return rows;
+}
+
+export interface NbaEntry {
+  rank: number;
+  client: string;
+  score: number;
+  suggested_action: string;
+  reason: string;
+  is_focus?: boolean;
+}
+
+export async function getNbaQueue(orgId: number, clientName?: string): Promise<{
+  computed_at: string | null;
+  entries: NbaEntry[];
+}> {
+  // Newest org-wide snapshot (per-rep snapshots are owner-scoped views of the same facts)
+  const { rows } = await pool.query<{ metadata: Record<string, unknown> }>(
+    `SELECT metadata FROM documents
+      WHERE org_id = $1 AND type = 'nba_queue' AND doc_id LIKE 'nba-queue-org-%'
+      ORDER BY created_at DESC LIMIT 1`,
+    [orgId],
+  );
+  const meta = rows[0]?.metadata ?? {};
+  let entries = (Array.isArray(meta.queue) ? (meta.queue as NbaEntry[]) : []);
+  if (clientName) {
+    const needle = clientName.toLowerCase();
+    entries = entries.filter(e => String(e.client).toLowerCase().includes(needle));
+  }
+  return { computed_at: (meta.computed_at as string) ?? null, entries };
+}
+
 export interface FindingRow {
   id: number;
   doc_id: string;

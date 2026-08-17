@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<link rel="stylesheet" href="/static/theme.css?v=20260817a">
 <script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Buzzowl — Agent Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-    <script src="/static/components/navbar.js?v=20260714d"></script>
+    <script src="/static/components/navbar.js?v=20260817a"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -501,6 +501,7 @@
             <span class="s-label" id="feedTabLog" onclick="switchFeedTab('log')" style="cursor:pointer;color:var(--c-faint, #555);margin-left:0.5rem">Pipeline Log</span>
             <span class="s-label" id="feedTabRuns" onclick="switchFeedTab('runs')" style="cursor:pointer;color:var(--c-faint, #555);margin-left:0.5rem">Runs</span>
             <span class="s-label" id="feedTabCron" onclick="switchFeedTab('cron')" style="cursor:pointer;color:var(--c-faint, #555);margin-left:0.5rem">Cron</span>
+            <span class="s-label" id="feedTabAuto" onclick="switchFeedTab('auto')" style="cursor:pointer;color:var(--c-faint, #555);margin-left:0.5rem">Autonomy</span>
             <span id="feed-count" style="margin-left:auto;font-size:0.65rem;color:var(--c-faint2, #444)">0 events</span>
             <button class="btn btn-xs" onclick="clearFeed()">clr</button>
             <button class="btn btn-xs" onclick="refreshLog()" id="logRefreshBtn" style="display:none">↻</button>
@@ -515,6 +516,10 @@
         </div>
         <div id="cron-panel" style="display:none;flex:1;overflow-y:auto;padding:0.4rem 0.5rem">
             <div id="cron-table" style="font-size:0.68rem;color:var(--c-muted, #888);padding:0.5rem">Loading…</div>
+        </div>
+        <div id="auto-panel" style="display:none;flex:1;overflow-y:auto;padding:0.4rem 0.5rem;flex-direction:column">
+            <div id="auto-status" style="font-size:0.7rem;color:var(--c-muted, #888);padding:0.4rem 0.5rem;border-bottom:1px solid var(--c-line, #2a2a2a)">Loading…</div>
+            <div id="auto-decisions" style="font-size:0.68rem;color:var(--c-muted, #888);padding:0.5rem">Loading…</div>
         </div>
     </div>
 </div>
@@ -1488,15 +1493,66 @@ function switchFeedTab(tab) {
     document.getElementById('feedTabLog').style.color  = tab === 'log'  ? '#d4d4d4' : '#555';
     document.getElementById('feedTabRuns').style.color = tab === 'runs' ? '#d4d4d4' : '#555';
     document.getElementById('feedTabCron').style.color = tab === 'cron' ? '#d4d4d4' : '#555';
+    document.getElementById('feedTabAuto').style.color = tab === 'auto' ? '#d4d4d4' : '#555';
     document.getElementById('feed-log').style.display        = tab === 'ws'   ? 'block' : 'none';
     document.getElementById('pipeline-log').style.display    = tab === 'log'  ? 'flex'  : 'none';
     document.getElementById('runs-panel').style.display      = tab === 'runs' ? 'flex'  : 'none';
     document.getElementById('cron-panel').style.display      = tab === 'cron' ? 'flex'  : 'none';
+    document.getElementById('auto-panel').style.display      = tab === 'auto' ? 'flex'  : 'none';
     document.getElementById('logRefreshBtn').style.display   = tab === 'log'  ? 'inline-block' : 'none';
     document.getElementById('feed-count').style.display      = tab === 'ws'   ? 'inline' : 'none';
     if (tab === 'log')  refreshLog();
     if (tab === 'runs') { renderRunsList(serviceRuns); const run = serviceRuns.find(r => r.id === selectedRunId); renderTcStream(run || null); }
     if (tab === 'cron') loadCronJobs();
+    if (tab === 'auto') loadAutonomy();
+}
+
+// ── Autonomy audit tab (Phase 2) ─────────────────────────────────────────
+function _autoEsc(x) { return String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function loadAutonomy() {
+    const st = document.getElementById('auto-status');
+    const el = document.getElementById('auto-decisions');
+    try {
+        const [rs, rd] = await Promise.all([
+            fetch('/api/org/autonomy/status', { headers: authHeaders() }),
+            fetch('/api/org/autonomy/decisions?limit=100', { headers: authHeaders() }),
+        ]);
+        if (!rs.ok || !rd.ok) { st.textContent = 'Failed to load autonomy status'; return; }
+        const s = await rs.json();
+        const d = await rd.json();
+        const pct = s.max_per_day ? Math.min(100, Math.round(100 * s.used_today / s.max_per_day)) : 0;
+        const barColor = s.kill_switch ? 'var(--c-danger, #e06c75)' : (pct >= 90 ? 'var(--c-warn, #d7ba7d)' : 'var(--c-accent, #4ec9b0)');
+        st.innerHTML =
+            `<div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+               <span><strong style="color:var(--c-text, #d4d4d4)">Level ${s.level}</strong> (${_autoEsc(s.level_name)})${s.kill_switch ? ' <span style="color:var(--c-danger, #e06c75)">KILL SWITCH ON</span>' : ''}</span>
+               <span>Budget today: <strong style="color:var(--c-text, #d4d4d4)">${s.used_today}/${s.max_per_day}</strong></span>
+               <span style="flex:1;min-width:120px;height:6px;background:var(--c-bg2, #1a1a1a);border-radius:3px;overflow:hidden"><span style="display:block;width:${pct}%;height:100%;background:${barColor}"></span></span>
+               <span>cooldown ${_autoEsc(s.cooldown_hours)}h</span>
+               <a href="/settings" style="color:var(--c-accent, #4ec9b0)">change →</a>
+             </div>
+             <div style="margin-top:0.3rem;color:var(--c-faint, #555)">Level 0 = off (legacy) · 1 = observe (decide + log, never act) · 2 = act (research/OSINT/match) · 3 = + draft outreach. Every decision below is logged — including skips.</div>`;
+        const rows = d.decisions || [];
+        if (!rows.length) { el.innerHTML = '<div style="color:var(--c-faint2, #444);padding:0.5rem 0">No autonomous decisions yet' + (s.level === 0 ? ' — autonomy is off.' : '.') + '</div>'; return; }
+        el.innerHTML = `<table style="width:100%;border-collapse:collapse">
+          <thead><tr style="color:var(--c-faint, #555);text-align:left">
+            <th style="padding:0.3rem 0.4rem">When</th><th style="padding:0.3rem 0.4rem">Seam</th><th style="padding:0.3rem 0.4rem">Client</th>
+            <th style="padding:0.3rem 0.4rem">Decision</th><th style="padding:0.3rem 0.4rem">Reason</th><th style="padding:0.3rem 0.4rem">Src</th></tr></thead>
+          <tbody>` + rows.map(r => {
+            const o = r.output || {};
+            const isReview = r.agent_type === 'autonomy_review';
+            const action = isReview ? (o.action || '?') : `▶ ${r.agent_type}`;
+            const acted = isReview ? !!o.acted : true;
+            const color = acted ? 'var(--c-accent, #4ec9b0)' : 'var(--c-muted, #888)';
+            const ev = Array.isArray(o.evidence) && o.evidence.length ? ` <span title="${_autoEsc(o.evidence.join(' | '))}" style="color:var(--c-faint, #555)">[${o.evidence.length} ev]</span>` : '';
+            return `<tr style="border-bottom:1px solid var(--c-bg2, #1a1a1a)">
+              <td style="padding:0.3rem 0.4rem;white-space:nowrap;color:var(--c-faint, #555)">${_autoEsc(String(r.created_at || '').replace('T',' ').slice(0,16))}</td>
+              <td style="padding:0.3rem 0.4rem">${_autoEsc(o.seam || (isReview ? '' : r.agent_type))}</td>
+              <td style="padding:0.3rem 0.4rem">${_autoEsc(o.client || ((r.task || '').match(/^Subject:\s*([^\n]+)/) || [])[1] || (r.task || '').split(':')[0])}</td>
+              <td style="padding:0.3rem 0.4rem;color:${color};font-weight:600">${_autoEsc(action)}</td>
+              <td style="padding:0.3rem 0.4rem;color:var(--c-text, #d4d4d4)">${_autoEsc(o.reason || (r.task || '').slice(0, 120))}${ev}</td>
+              <td style="padding:0.3rem 0.4rem;color:var(--c-faint, #555)">${_autoEsc(o.source || r.status || '')}</td>
+            </tr>`; }).join('') + `</tbody></table>`;
+    } catch (e) { st.textContent = 'Autonomy load failed: ' + e.message; }
 }
 
 async function loadCronJobs() {

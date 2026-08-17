@@ -679,7 +679,29 @@ async def agent_service_callback(body: dict, request: Request):
     # Monitor callback: fire research for each stale client
     if final_status == "done" and agent_type == "monitor" and stale_clients and org_id:
         logger.info("Monitor callback: firing research for %d stale clients", len(stale_clients))
+        # Autonomy (Phase 2): the monitor's stale list IS an agent judgement. At
+        # level >= 2 each auto-fire is budgeted (daily cap + cooldown) and stamped
+        # trigger_type='autonomous'; below that it keeps the legacy heartbeat
+        # provenance so manual monitor runs behave as before.
+        import autonomy
+        auto_level = await autonomy.level(org_id)
         for client_name in stale_clients:
+            child_trigger = "heartbeat"
+            if auto_level >= autonomy.LEVEL_ACT:
+                client_row = None
+                try:
+                    client_row = await db_module.get_client(org_id, client_name)
+                except Exception:
+                    pass
+                budget = await autonomy.check_budget(org_id, client_row)
+                if not budget.ok:
+                    logger.info("Monitor: skipping '%s' — %s", client_name, budget.reason)
+                    await autonomy.record_decision(org_id, autonomy.DecisionContext(
+                        seam="monitor_stale", client_name=client_name,
+                        signals=["monitor agent flagged as stale"], allowed_actions=("skip", "research")),
+                        autonomy.Decision(action="skip", reason=budget.reason, source="budget"))
+                    continue
+                child_trigger = autonomy.TRIGGER
             try:
                 svc_url, child_svc_run_id = await _fire_agent_service(
                     client_name, org_id,
@@ -689,8 +711,10 @@ async def agent_service_callback(body: dict, request: Request):
                 )
                 child_run_id = await db_module.create_agent_run(
                     org_id=org_id, agent_type="research",
-                    task=f"Research: {client_name}", trigger_type="heartbeat",
+                    task=f"Research: {client_name}", trigger_type=child_trigger,
                 )
+                if child_trigger == autonomy.TRIGGER:
+                    await autonomy.mark_client_acted(org_id, client_name)
                 await db_module.update_agent_run(
                     child_run_id, "running",
                     output={"service_run_id": child_svc_run_id, "service_url": svc_url},

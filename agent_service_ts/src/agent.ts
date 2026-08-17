@@ -441,7 +441,7 @@ const AGENT_TOOL_ALLOWLIST: Record<string, Set<string>> = {
   org:            new Set(['search_kb', 'get_client', 'search_clients', 'write_document']),
   quality_digest: new Set(['search_kb', 'get_client', 'search_clients', 'write_document']),
   match_synthesis: new Set(['write_document', 'search_kb', 'get_client']),
-  orchestrate:     new Set(['search_kb', 'get_client', 'search_clients', 'get_recent_findings', 'trigger_run', 'write_document', 'update_client']),
+  orchestrate:     new Set(['search_kb', 'get_client', 'search_clients', 'get_recent_findings', 'get_contact_log', 'get_nba_queue', 'trigger_run', 'write_document', 'update_client']),
   research_prep:   new Set(['search_kb', 'get_client', 'get_recent_findings', 'trigger_run', 'write_document']),
 };
 
