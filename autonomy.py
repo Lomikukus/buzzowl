@@ -45,6 +45,12 @@ DEFAULT_SETTINGS = {
     "max_autonomous_runs_per_day": 20,
     "cooldown_hours": 24,
     "kill_switch": False,
+    # Supervised-outreach guardrails (Phase 3) — enforced by the send worker
+    "outreach_enabled": False,           # master switch: worker sends only when True
+    "outreach_max_per_day": 25,          # org-wide sends per UTC day
+    "outreach_contact_floor_days": 7,    # min days between mails to the same address
+    "outreach_quiet_hours": [20, 7],     # [start_hour, end_hour) UTC — no sends inside
+    "outreach_kill_switch": False,       # stop sending immediately (queue keeps state)
 }
 
 TRIGGER = "autonomous"          # agent_runs.trigger_type for everything here

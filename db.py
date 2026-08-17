@@ -664,6 +664,136 @@ async def list_autonomy_decisions(org_id: int, limit: int = 50) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Outreach (Phase 3) — documents.type='outreach', state machine in metadata
+# ---------------------------------------------------------------------------
+
+def _doc_meta(d: dict) -> dict:
+    m = d.get("metadata")
+    if isinstance(m, str):
+        try:
+            m = json.loads(m)
+        except json.JSONDecodeError:
+            m = {}
+    return dict(m or {})
+
+
+async def list_outreach(org_id: int, state: Optional[str] = None,
+                        sender_user_id: Optional[int] = None,
+                        client_name: Optional[str] = None,
+                        limit: int = 100) -> list[dict]:
+    """Outreach documents newest first, optionally filtered by state / sender / client."""
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, doc_id, title, content, metadata, source, agent_run_id,
+                      created_by, created_at, updated_at
+               FROM documents
+               WHERE org_id = $1 AND type = 'outreach'
+                 AND ($2::text IS NULL OR metadata->>'state' = $2)
+                 AND ($3::bigint IS NULL OR (metadata->>'sender_user_id')::bigint = $3)
+                 AND ($4::text IS NULL OR metadata->>'client' = $4)
+               ORDER BY created_at DESC LIMIT $5""",
+            org_id, state, sender_user_id, client_name, limit,
+        )
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["metadata"] = _doc_meta(d)
+        out.append(d)
+    return out
+
+
+async def update_document_metadata(org_id: int, int_id: int, metadata: dict,
+                                   content: Optional[str] = None,
+                                   title: Optional[str] = None) -> bool:
+    """Replace metadata (and optionally content/title) of one document by int id."""
+    if not _pool:
+        return False
+    async with _pool.acquire() as conn:
+        res = await conn.execute(
+            """UPDATE documents
+                  SET metadata = $3,
+                      content  = COALESCE($4, content),
+                      title    = COALESCE($5, title),
+                      updated_at = NOW()
+                WHERE org_id = $1 AND id = $2""",
+            org_id, int_id, _sanitize_for_pg(metadata), content, title,
+        )
+    return res.endswith("1")
+
+
+async def claim_next_approved_outreach(org_id: Optional[int] = None) -> Optional[dict]:
+    """Send-worker pickup: atomically move ONE approved outreach doc to 'queued'
+    (worker actor) and return it. Row-locked so two worker ticks never send the
+    same mail. Returns None when nothing is approved."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """SELECT id, org_id, doc_id, title, content, metadata, created_by
+                     FROM documents
+                    WHERE type = 'outreach' AND metadata->>'state' = 'approved'
+                      AND ($1::bigint IS NULL OR org_id = $1)
+                    ORDER BY (metadata->>'approved_at') NULLS FIRST, id
+                    LIMIT 1 FOR UPDATE SKIP LOCKED""",
+                org_id,
+            )
+            if not row:
+                return None
+            d = dict(row)
+            d["metadata"] = _doc_meta(d)
+            import outreach as _o
+            meta = _o.transition(d["metadata"], _o.QUEUED, actor=_o.WORKER, note="worker pickup")
+            await conn.execute("UPDATE documents SET metadata = $2, updated_at = NOW() WHERE id = $1",
+                               d["id"], _sanitize_for_pg(meta))
+            d["metadata"] = meta
+            return d
+
+
+async def count_outreach_sent_today(org_id: int) -> int:
+    if not _pool:
+        return 0
+    async with _pool.acquire() as conn:
+        n = await conn.fetchval(
+            """SELECT COUNT(*) FROM documents
+                WHERE org_id = $1 AND type = 'outreach'
+                  AND (metadata->>'sent_at')::timestamptz >= date_trunc('day', now() AT TIME ZONE 'utc')""",
+            org_id)
+    return int(n or 0)
+
+
+async def last_outreach_sent_to(org_id: int, to_email: str):
+    """Newest sent_at for this recipient (per-contact frequency floor)."""
+    if not _pool or not to_email:
+        return None
+    async with _pool.acquire() as conn:
+        return await conn.fetchval(
+            """SELECT MAX((metadata->>'sent_at')::timestamptz) FROM documents
+                WHERE org_id = $1 AND type = 'outreach'
+                  AND lower(metadata->>'to_email') = lower($2)
+                  AND metadata ? 'sent_at'""",
+            org_id, to_email)
+
+
+async def find_outreach_by_message_id(message_id: str) -> Optional[dict]:
+    """IMAP poller: locate the outreach doc a reply/bounce refers to."""
+    if not _pool or not message_id:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, org_id, doc_id, title, metadata FROM documents
+                WHERE type = 'outreach' AND metadata->>'message_id' = $1 LIMIT 1""",
+            message_id)
+    if not row:
+        return None
+    d = dict(row)
+    d["metadata"] = _doc_meta(d)
+    return d
+
+
 async def create_user(
     org_id: int,
     username: str,
@@ -703,6 +833,61 @@ async def list_users(org_id: int) -> list[dict]:
             org_id,
         )
         return [dict(r) for r in rows]
+
+
+async def get_user_settings(org_id: int, user_id: int) -> dict:
+    """Per-user settings JSONB (outreach identity: display_name/reply_to/signature)."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "SELECT settings FROM users WHERE id = $1 AND org_id = $2", user_id, org_id)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    return dict(raw or {})
+
+
+async def update_user_settings(org_id: int, user_id: int, patch: dict) -> dict:
+    """Shallow-merge patch into users.settings; returns merged settings."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "UPDATE users SET settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb "
+            "WHERE id = $1 AND org_id = $2 RETURNING settings",
+            user_id, org_id, patch,   # jsonb codec encodes the dict
+        )
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return dict(raw or {})
+
+
+async def get_user_identity(org_id: int, user_id: int) -> dict:
+    """What outreach sends as: {display_name, reply_to, signature, email}."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT display_name, email, settings FROM users WHERE id = $1 AND org_id = $2",
+            user_id, org_id)
+    if not row:
+        return {}
+    s = row["settings"]
+    if isinstance(s, str):
+        try:
+            s = json.loads(s)
+        except json.JSONDecodeError:
+            s = {}
+    s = s or {}
+    return {
+        "display_name": s.get("outreach_display_name") or row["display_name"],
+        "reply_to": s.get("outreach_reply_to") or row["email"] or "",
+        "signature": s.get("outreach_signature") or "",
+        "email": row["email"] or "",
+    }
 
 
 async def create_session_token(user_id: int, token: str, expires_at) -> None:

@@ -2669,6 +2669,16 @@ async def _start_heartbeat_scheduler() -> None:
         except Exception as exc:
             console.print(f"  [yellow]Could not load heartbeats: {exc}[/yellow]")
 
+    # Supervised-outreach send worker (Phase 3): claims approved mails one at
+    # a time under the org guardrails. Cheap when nothing is approved.
+    try:
+        from routers.outreach import worker_tick as _outreach_tick
+        context._scheduler.add_job(_outreach_tick, "interval", id="outreach_worker",
+                                   minutes=1, misfire_grace_time=30, coalesce=True)
+        job_count += 1
+    except Exception as exc:
+        console.print(f"  [yellow]Outreach worker not scheduled: {exc}[/yellow]")
+
     context._scheduler.start()
     console.print(f"  Heartbeat scheduler: [green]{job_count} job(s) loaded[/green]")
 

@@ -41,15 +41,23 @@ async def save_settings(body: dict, user: dict = Depends(current_user)):
                 raise HTTPException(status_code=400, detail="autonomy_level must be 0-3")
             if not 0 <= v <= 3:
                 raise HTTPException(status_code=400, detail="autonomy_level must be 0-3")
-        elif k in ("max_autonomous_runs_per_day", "cooldown_hours"):
+        elif k in ("max_autonomous_runs_per_day", "cooldown_hours",
+                   "outreach_max_per_day", "outreach_contact_floor_days"):
             try:
                 v = float(v) if k == "cooldown_hours" else int(v)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail=f"{k} must be a number")
             if v < 0:
                 raise HTTPException(status_code=400, detail=f"{k} must be >= 0")
-        elif k == "kill_switch":
+        elif k in ("kill_switch", "outreach_enabled", "outreach_kill_switch"):
             v = bool(v)
+        elif k == "outreach_quiet_hours":
+            try:
+                v = [int(v[0]), int(v[1])]
+            except (TypeError, ValueError, IndexError):
+                raise HTTPException(status_code=400, detail="outreach_quiet_hours must be [start_hour, end_hour]")
+            if not (0 <= v[0] <= 24 and 0 <= v[1] <= 24):
+                raise HTTPException(status_code=400, detail="quiet hours must be 0-24")
         patch[k] = v
     if not patch:
         raise HTTPException(status_code=400, detail="empty patch")

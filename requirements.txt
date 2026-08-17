@@ -8,6 +8,7 @@ asyncpg>=0.31.0
 pgvector>=0.3.0
 pytest>=8.0
 pytest-asyncio>=0.24
+aiosmtpd>=1.4         # test SMTP server for the outreach send-worker e2e test
 passlib[bcrypt]>=1.7.4
 bcrypt==4.0.1
 mcp>=1.0.0
