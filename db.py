@@ -794,6 +794,271 @@ async def find_outreach_by_message_id(message_id: str) -> Optional[dict]:
     return d
 
 
+# ---------------------------------------------------------------------------
+# Deals (Phase 4 CRM) — real table, stage history in deal_events
+# ---------------------------------------------------------------------------
+
+_DEAL_COLS = ("id, org_id, client_id, name, stage, value, currency, probability, expected_close, "
+              "owner_user_id, status, closed_at, metadata, created_by, created_at, updated_at")
+
+
+def _deal_row(r) -> dict:
+    d = dict(r)
+    if d.get("value") is not None:
+        d["value"] = float(d["value"])
+    m = d.get("metadata")
+    if isinstance(m, str):
+        try:
+            m = json.loads(m)
+        except json.JSONDecodeError:
+            m = {}
+    d["metadata"] = m or {}
+    return d
+
+
+async def create_deal(org_id: int, client_id: int, name: str, *, stage: str = "lead",
+                      value: Optional[float] = None, currency: str = "EUR",
+                      probability: Optional[int] = None, expected_close=None,
+                      owner_user_id: Optional[int] = None, status: str = "open",
+                      metadata: Optional[dict] = None, created_by: Optional[int] = None,
+                      actor_agent_run_id: Optional[int] = None) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                f"""INSERT INTO deals (org_id, client_id, name, stage, value, currency, probability,
+                                       expected_close, owner_user_id, status, closed_at, metadata, created_by)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                            CASE WHEN $10 <> 'open' THEN NOW() ELSE NULL END, $11, $12)
+                    RETURNING {_DEAL_COLS}""",
+                org_id, client_id, name, stage, value, currency, probability, expected_close,
+                owner_user_id, status, metadata or {}, created_by,
+            )
+            await conn.execute(
+                """INSERT INTO deal_events (org_id, deal_id, kind, from_value, to_value, note,
+                                            actor_user_id, actor_agent_run_id)
+                   VALUES ($1,$2,'created',NULL,$3,$4,$5,$6)""",
+                org_id, row["id"], stage, f"created in {stage}", created_by, actor_agent_run_id,
+            )
+    return _deal_row(row)
+
+
+async def get_deal(org_id: int, deal_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(f"SELECT {_DEAL_COLS} FROM deals WHERE org_id = $1 AND id = $2",
+                                  org_id, deal_id)
+    return _deal_row(row) if row else None
+
+
+async def list_deals(org_id: int, *, status: Optional[str] = None, stage: Optional[str] = None,
+                     client_id: Optional[int] = None, owner_user_id: Optional[int] = None,
+                     limit: int = 500) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT d.{_DEAL_COLS.replace(', ', ', d.')}, c.name AS client_name,
+                       u.display_name AS owner_name
+                  FROM deals d
+                  JOIN clients c ON c.id = d.client_id
+             LEFT JOIN users u ON u.id = d.owner_user_id
+                 WHERE d.org_id = $1
+                   AND ($2::text IS NULL OR d.status = $2)
+                   AND ($3::text IS NULL OR d.stage = $3)
+                   AND ($4::bigint IS NULL OR d.client_id = $4)
+                   AND ($5::bigint IS NULL OR d.owner_user_id = $5)
+                 ORDER BY d.updated_at DESC LIMIT $6""",
+            org_id, status, stage, client_id, owner_user_id, limit,
+        )
+    return [_deal_row(r) for r in rows]
+
+
+async def update_deal(org_id: int, deal_id: int, patch: dict, *, actor_user_id: Optional[int] = None,
+                      actor_agent_run_id: Optional[int] = None, note: str = "") -> Optional[dict]:
+    """Patch scalar fields; stage/status/value changes write deal_events rows."""
+    if not _pool:
+        return None
+    allowed = {"name", "stage", "value", "currency", "probability", "expected_close",
+               "owner_user_id", "status", "metadata"}
+    fields = {k: v for k, v in patch.items() if k in allowed}
+    if not fields:
+        return await get_deal(org_id, deal_id)
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            before = await conn.fetchrow(
+                f"SELECT {_DEAL_COLS} FROM deals WHERE org_id = $1 AND id = $2 FOR UPDATE",
+                org_id, deal_id)
+            if not before:
+                return None
+            sets, args = [], [org_id, deal_id]
+            for k, v in fields.items():
+                args.append(v)
+                sets.append(f"{k} = ${len(args)}")
+            if "status" in fields:
+                sets.append("closed_at = CASE WHEN $" + str(args.index(fields["status"]) + 1) +
+                            " <> 'open' THEN COALESCE(closed_at, NOW()) ELSE NULL END")
+            sets.append("updated_at = NOW()")
+            row = await conn.fetchrow(
+                f"UPDATE deals SET {', '.join(sets)} WHERE org_id = $1 AND id = $2 RETURNING {_DEAL_COLS}",
+                *args)
+            events = []
+            for k, kind in (("stage", "stage"), ("status", "status"), ("value", "value")):
+                if k in fields and str(before[k]) != str(fields[k]):
+                    events.append((kind, str(before[k]) if before[k] is not None else None,
+                                   str(fields[k]) if fields[k] is not None else None))
+            if note and not events:
+                events.append(("note", None, None))
+            for kind, frm, to in events:
+                await conn.execute(
+                    """INSERT INTO deal_events (org_id, deal_id, kind, from_value, to_value, note,
+                                                actor_user_id, actor_agent_run_id)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                    org_id, deal_id, kind, frm, to, note or None, actor_user_id, actor_agent_run_id)
+    return _deal_row(row)
+
+
+async def delete_deal(org_id: int, deal_id: int) -> bool:
+    if not _pool:
+        return False
+    async with _pool.acquire() as conn:
+        res = await conn.execute("DELETE FROM deals WHERE org_id = $1 AND id = $2", org_id, deal_id)
+    return res.endswith("1")
+
+
+async def list_deal_events(org_id: int, deal_id: int, limit: int = 100) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT e.id, e.kind, e.from_value, e.to_value, e.note, e.actor_user_id,
+                      e.actor_agent_run_id, e.created_at, u.display_name AS actor_name
+                 FROM deal_events e LEFT JOIN users u ON u.id = e.actor_user_id
+                WHERE e.org_id = $1 AND e.deal_id = $2
+                ORDER BY e.created_at DESC LIMIT $3""",
+            org_id, deal_id, limit)
+    return [dict(r) for r in rows]
+
+
+async def pipeline_summary(org_id: int, owner_user_id: Optional[int] = None) -> list[dict]:
+    """Per-stage counts + value totals for open deals (board header)."""
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT stage, COUNT(*) AS n, COALESCE(SUM(value),0) AS total,
+                      COALESCE(SUM(value * COALESCE(probability, 0) / 100.0), 0) AS weighted
+                 FROM deals
+                WHERE org_id = $1 AND status = 'open'
+                  AND ($2::bigint IS NULL OR owner_user_id = $2)
+                GROUP BY stage""",
+            org_id, owner_user_id)
+    return [{"stage": r["stage"], "count": int(r["n"]), "total": float(r["total"]),
+             "weighted": float(r["weighted"])} for r in rows]
+
+
+async def clients_with_legacy_deal_fields(org_id: int) -> list[dict]:
+    """Clients whose metadata still carries free-text deal_stage / deal_value
+    and that have no deals row yet — input for the one-time importer."""
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT c.id, c.name, c.created_by, c.metadata->>'deal_stage' AS deal_stage,
+                      c.metadata->>'deal_value' AS deal_value
+                 FROM clients c
+                WHERE c.org_id = $1
+                  AND (COALESCE(c.metadata->>'deal_stage','') <> '' OR COALESCE(c.metadata->>'deal_value','') <> '')
+                  AND NOT EXISTS (SELECT 1 FROM deals d WHERE d.client_id = c.id)""",
+            org_id)
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Client activity timeline (Phase 4) — read model, no table
+# ---------------------------------------------------------------------------
+
+async def client_timeline(org_id: int, client_id: int, limit: int = 100) -> list[dict]:
+    """Chronological union of everything that happened around one client:
+    documents (meetings, findings, signals, outreach…), contact_log,
+    user_tasks, agent_runs (via documents.agent_run_id / task subject) and
+    deal_events. Normalized to (ts, kind, actor, title, ref)."""
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        name = await conn.fetchval("SELECT name FROM clients WHERE org_id = $1 AND id = $2", org_id, client_id)
+        if not name:
+            return []
+        rows = await conn.fetch(
+            r"""
+            (SELECT d.created_at AS ts, 'document:' || d.type AS kind,
+                    COALESCE(d.source, 'human') AS actor, d.title AS title,
+                    jsonb_build_object('doc_id', d.id, 'doc_type', d.type,
+                                       'state', d.metadata->>'state',
+                                       'signal_type', d.metadata->>'signal_type') AS ref
+               FROM documents d
+               JOIN document_links dl ON dl.document_id = d.id AND dl.entity_type = 'client'
+              WHERE d.org_id = $1 AND dl.entity_id = $2)
+            UNION ALL
+            (SELECT cl.sent_at AS ts, 'contact' AS kind,
+                    COALESCE(u.display_name, 'rep') AS actor,
+                    'Mail to ' || COALESCE(NULLIF(cl.contact_name,''), cl.contact_email) ||
+                       CASE WHEN cl.subject <> '' THEN ': ' || cl.subject ELSE '' END AS title,
+                    jsonb_build_object('contact_log_id', cl.id, 'replied', cl.replied,
+                                       'follow_up', cl.follow_up, 'doc_id', cl.source_doc_id) AS ref
+               FROM contact_log cl LEFT JOIN users u ON u.id = cl.user_id
+              WHERE cl.org_id = $1 AND cl.client_name = $3)
+            UNION ALL
+            (SELECT COALESCE(t.completed_at, t.created_at) AS ts,
+                    CASE WHEN t.status = 'done' THEN 'task_done' ELSE 'task' END AS kind,
+                    COALESCE(u.display_name, 'rep') AS actor, t.title AS title,
+                    jsonb_build_object('task_id', t.id, 'due_date', t.due_date, 'status', t.status,
+                                       'deal_id', t.deal_id) AS ref
+               FROM user_tasks t LEFT JOIN users u ON u.id = t.user_id
+              WHERE t.org_id = $1 AND t.client_name = $3)
+            UNION ALL
+            (SELECT e.created_at AS ts, 'deal:' || e.kind AS kind,
+                    COALESCE(u.display_name, CASE WHEN e.actor_agent_run_id IS NOT NULL THEN 'agent' ELSE 'system' END) AS actor,
+                    d.name || CASE WHEN e.kind IN ('stage','status')
+                                   THEN ': ' || COALESCE(e.from_value,'·') || ' → ' || COALESCE(e.to_value,'·')
+                                   WHEN e.kind = 'value' THEN ': value ' || COALESCE(e.from_value,'·') || ' → ' || COALESCE(e.to_value,'·')
+                                   ELSE COALESCE(': ' || e.note, '') END AS title,
+                    jsonb_build_object('deal_id', d.id, 'event_id', e.id,
+                                       'agent_run_id', e.actor_agent_run_id) AS ref
+               FROM deal_events e JOIN deals d ON d.id = e.deal_id
+               LEFT JOIN users u ON u.id = e.actor_user_id
+              WHERE e.org_id = $1 AND d.client_id = $2)
+            UNION ALL
+            (SELECT r.created_at AS ts, 'agent_run:' || r.agent_type AS kind,
+                    r.trigger_type AS actor,
+                    left(regexp_replace(r.task, '\s+', ' ', 'g'), 120) AS title,
+                    jsonb_build_object('run_id', r.id, 'status', r.status) AS ref
+               FROM agent_runs r
+              WHERE r.org_id = $1
+                AND (r.task ILIKE 'Subject: ' || $3 || '%' OR r.task ILIKE 'Research: ' || $3 || '%'
+                     OR r.task ILIKE '%' || $3 || '%' AND r.agent_type IN ('research','osint','orchestrate','pain_point_research','match_synthesis'))
+                AND r.agent_type <> 'autonomy_review'
+                AND r.trigger_type <> 'external_service')   -- Pi-side mirror rows of the same runs
+            ORDER BY ts DESC NULLS LAST
+            LIMIT $4
+            """,
+            org_id, client_id, name, limit)
+    out = []
+    for r in rows:
+        d = dict(r)
+        ref = d.get("ref")
+        if isinstance(ref, str):
+            try:
+                ref = json.loads(ref)
+            except json.JSONDecodeError:
+                ref = {}
+        d["ref"] = ref or {}
+        out.append(d)
+    return out
+
+
 async def create_user(
     org_id: int,
     username: str,
