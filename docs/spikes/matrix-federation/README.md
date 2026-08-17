@@ -204,3 +204,33 @@ external security review of tickets 1–2 (device trust) and a DPO sign-off on t
    most self-hosters won't operate Synapse by hand.)
 3. Is human-in-the-loop (partner reps in the room / Element clients) a real goal? If
    clearly not, the HTTPS transport should be reconsidered before 5b starts.
+
+## 10. Addendum — vision clarified by the product owner (2026-08-17, after the spike)
+
+The sharing model is **collaboration between individual reps**, not read-only cards
+between partner firms: two users (each on their own instance, or hosted tenants)
+share a *client* and from then on **both research and monitor it**, so the same
+research is not repeated. Consequences for this report:
+
+- The shared object becomes the client's **company knowledge** (profile,
+  research/osint/finding documents, signals, monitored sources), synced both ways
+  with provenance; **contacts, notes, meetings, outreach, deals, tasks stay private
+  by default**. That keeps most shared data non-personal (GDPR simplifies; §5
+  contact rules apply only when a user opts contacts in). The review queue shrinks
+  to a conflict/dispute view; "never auto-merge" narrows to *personal* fields.
+- Schema: `client_card` stays as the bootstrap, plus a `de.buzzowl.document`
+  stream per finding/research doc (already sketched) and a light coordination event
+  (`de.buzzowl.monitor` — who runs monitoring for the shared client, so heartbeats
+  are not duplicated). Everything else in EVENT_SCHEMA.md holds.
+- Transport: the reps' instances are typically **behind NAT** (laptop/home server) —
+  direct HTTPS push cannot reach them; a relay is required, and a Matrix homeserver
+  *is* a relay with E2EE built in. The hosted Buzzowl platform can run that
+  homeserver as the rendezvous point (operator sees metadata, never content — state
+  this in the terms). Hosted↔hosted sharing needs no protocol (same DB, org-to-org
+  share). ⇒ **Matrix confirmed as transport**; the `Transport` seam stays for
+  hygiene, the HTTPS fallback is no longer the likely path.
+- Decisions: ship the `federation` compose profile (Synapse) **and** document
+  bring-your-own homeserver. Order: 6a shared-client model + multi-tenant hosted +
+  billing tiers → 5b Matrix transport.
+- All 12 must-have controls remain (device pinning, agent-context exclusion for
+  remote content, doc-id namespacing, size/rate caps, honest retract copy …).
