@@ -298,13 +298,7 @@ def compute_scores(
             action = "mail"
         else:
             action = "research"
-        action_link = {
-            "send_draft": f"/client/{client_url}#documents",
-            "follow_up": f"/client/{client_url}#documents",
-            "task": f"/client/{client_url}",
-            "mail": f"/match?client={client_url}",
-            "research": f"/client/{client_url}",
-        }[action]
+        action_link = _action_link(action, name)
 
         entries.append({
             "client": name,
@@ -329,7 +323,42 @@ def compute_scores(
 # LLM reasons (one batched call) + template fallback
 # ---------------------------------------------------------------------------
 
-def _build_reason_prompt(entries: list[dict]) -> str:
+NBA_ACTIONS = ("send_draft", "follow_up", "task", "mail", "research")
+
+
+def _action_link(action: str, client_name: str) -> str:
+    client_url = quote(client_name, safe="")
+    return {
+        "send_draft": f"/client/{client_url}#documents",
+        "follow_up": f"/client/{client_url}#documents",
+        "task": f"/client/{client_url}",
+        "mail": f"/match?client={client_url}",
+        "research": f"/client/{client_url}",
+    }.get(action, f"/client/{client_url}")
+
+
+def _allowed_nba_actions(entry: dict) -> list[str]:
+    """Actions the LLM may choose for an entry — bounded by the facts, so it can
+    never pick something the deterministic chain considers impossible (no draft
+    ⇒ no send_draft, no unanswered mail ⇒ no follow_up, no due task ⇒ no task)."""
+    types = {f["type"] for f in entry["facts"]}
+    allowed = ["research"]
+    if "outreach_draft" in types:
+        allowed.append("send_draft")
+    if "outreach_followup" in types:
+        allowed.append("follow_up")
+    if "task_due" in types:
+        allowed.append("task")
+    if "signal" in types:
+        allowed.append("mail")
+    return allowed
+
+
+def _build_reason_prompt(entries: list[dict], choose_action: bool = False) -> str:
+    """Autonomy seam (Phase 2): with choose_action=True the LLM sees the fact
+    bundle BEFORE the action is fixed and picks the action + reason together
+    (bounded by _allowed_nba_actions); otherwise it only writes the reason for
+    the deterministically chosen action (legacy, level 0)."""
     items = []
     for e in entries:
         facts = []
@@ -339,7 +368,28 @@ def _build_reason_prompt(entries: list[dict]) -> str:
                 if f.get(k) not in (None, [], ""):
                     fc[k] = f[k]
             facts.append(fc)
-        items.append({"client": e["client"], "suggested_action": e["suggested_action"], "facts": facts})
+        item = {"client": e["client"], "facts": facts}
+        if choose_action:
+            item["allowed_actions"] = _allowed_nba_actions(e)
+            item["default_action"] = e["suggested_action"]
+        else:
+            item["suggested_action"] = e["suggested_action"]
+        items.append(item)
+    if choose_action:
+        return (
+            "You are the triage brain of a sales rep's daily queue. For each client in "
+            "the JSON below, choose the single best next action from that client's "
+            "allowed_actions and write 1-2 sentences explaining why today is a good day.\n"
+            "Rules:\n"
+            "- Use ONLY the facts provided. Never invent events, names, dates, or numbers.\n"
+            "- Choose ONLY from allowed_actions; default_action is the rule-based choice — "
+            "override it only when the facts clearly favour another allowed action.\n"
+            "- Reference the most important fact explicitly.\n"
+            "- Write in the same language as the fact headlines.\n"
+            '- Return ONLY a JSON array: [{"client": "<name>", "action": "<allowed action>", '
+            '"reason": "<text>"}] - no markdown fences, no other text.\n\n'
+            "CLIENTS:\n" + json.dumps(items, ensure_ascii=False)
+        )
     return (
         'You write short "why contact them today" notes for a sales rep\'s daily queue.\n'
         "For each client in the JSON below, write 1-2 sentences explaining why today is "
@@ -356,15 +406,23 @@ def _build_reason_prompt(entries: list[dict]) -> str:
 
 def _parse_reason_json(text: str) -> dict[str, str]:
     """Map of lowercased client name → reason. Raises on unparseable output."""
+    return {k: v["reason"] for k, v in _parse_reason_action_json(text).items()}
+
+
+def _parse_reason_action_json(text: str) -> dict[str, dict]:
+    """Map of lowercased client name → {"reason", "action"|None}. Raises on
+    unparseable output. Action is optional (legacy reason-only replies)."""
     t = (text or "").strip()
     if t.startswith("```"):
         t = t.split("\n", 1)[1] if "\n" in t else ""
         t = t.rsplit("```", 1)[0]
     arr = json.loads(t)
-    out = {}
+    out: dict[str, dict] = {}
     for item in arr:
         if isinstance(item, dict) and item.get("client") and item.get("reason"):
-            out[str(item["client"]).strip().lower()] = str(item["reason"]).strip()
+            action = str(item.get("action") or "").strip().lower() or None
+            out[str(item["client"]).strip().lower()] = {
+                "reason": str(item["reason"]).strip(), "action": action}
     return out
 
 
@@ -485,26 +543,44 @@ async def compute_nba_queue(
         queue_size=_safe_int(cfg.get("nba_queue_size"), 10),
     )
 
+    # Autonomy seam (Phase 2): at level >= 1 the LLM chooses the action together
+    # with the reason (fact bundle before the precedence chain); level 0 keeps
+    # the legacy reason-only call. Same single batched call either way.
+    import autonomy
+    auto_level = await autonomy.level(org_id) if entries else 0
+    choose_action = auto_level >= autonomy.LEVEL_OBSERVE
+
     llm_used = False
-    reasons: dict[str, str] = {}
+    picks: dict[str, dict] = {}
     if use_llm and entries:
         try:
             from routers.knowledge import _call_brain_sync
-            prompt = _build_reason_prompt(entries)
+            prompt = _build_reason_prompt(entries, choose_action=choose_action)
             loop = asyncio.get_running_loop()
             text = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
-            reasons = _parse_reason_json(text)
-            llm_used = bool(reasons)
+            picks = _parse_reason_action_json(text)
+            llm_used = bool(picks)
         except Exception as exc:
             logger.warning("NBA reason LLM failed — using template reasons: %s", exc)
+    actions_changed = 0
     for e in entries:
-        llm_reason = reasons.get(e["client"].strip().lower())
-        if llm_reason:
-            e["reason"] = llm_reason
+        pick = picks.get(e["client"].strip().lower()) or {}
+        if pick.get("reason"):
+            e["reason"] = pick["reason"]
             e["reason_source"] = "llm"
         else:
             e["reason"] = _template_reason(e)
             e["reason_source"] = "template"
+        if choose_action:
+            chosen = pick.get("action")
+            e["rule_action"] = e["suggested_action"]
+            if chosen and chosen in _allowed_nba_actions(e) and chosen != e["suggested_action"]:
+                e["suggested_action"] = chosen
+                e["action_link"] = _action_link(chosen, e["client"])
+                e["action_source"] = "llm"
+                actions_changed += 1
+            else:
+                e["action_source"] = "rule"
 
     snapshot = {
         "queue": entries,
@@ -512,6 +588,8 @@ async def compute_nba_queue(
         "llm_used": llm_used,
         "clients_considered": len(clients),
         "owner_id": owner_id,
+        "autonomy_level": auto_level,
+        "actions_changed_by_agent": actions_changed,
     }
     try:
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")

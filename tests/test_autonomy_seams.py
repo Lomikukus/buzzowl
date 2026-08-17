@@ -197,3 +197,140 @@ async def test_monitor_level1_logs_keeps_legacy(monkeypatch):
     fired.assert_not_awaited()                   # non-focus → legacy = flag only
     assert summary["flagged"] is True
     assert "would research" in summary["decision"]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# NBA action choice (today.py)
+# ---------------------------------------------------------------------------
+
+from routers import today as _today
+
+
+def _entry(client, action, facts):
+    return {"client": client, "suggested_action": action, "facts": facts,
+            "action_link": _today._action_link(action, client), "score": 10, "rank": 1,
+            "is_focus": False}
+
+
+def test_nba_allowed_actions_bounded_by_facts():
+    e = _entry("A", "research", [{"type": "signal", "relevance": 4}])
+    assert set(_today._allowed_nba_actions(e)) == {"research", "mail"}
+    e2 = _entry("B", "send_draft", [{"type": "outreach_draft"}, {"type": "task_due"}])
+    assert set(_today._allowed_nba_actions(e2)) == {"research", "send_draft", "task"}
+
+
+def test_nba_prompt_level0_reason_only_unchanged():
+    e = _entry("A", "research", [{"type": "signal", "headline": "h", "relevance": 4}])
+    p = _today._build_reason_prompt([e])
+    assert "allowed_actions" not in p and '"suggested_action": "research"' in p
+
+
+def test_nba_prompt_choose_action_bounds():
+    e = _entry("A", "research", [{"type": "signal", "headline": "h", "relevance": 4}])
+    p = _today._build_reason_prompt([e], choose_action=True)
+    assert '"allowed_actions": ["research", "mail"]' in p and '"default_action": "research"' in p
+
+
+def test_nba_parse_reason_action_backcompat():
+    legacy = _today._parse_reason_action_json('[{"client":"A","reason":"r"}]')
+    assert legacy["a"] == {"reason": "r", "action": None}
+    new = _today._parse_reason_action_json('[{"client":"A","reason":"r","action":"MAIL"}]')
+    assert new["a"]["action"] == "mail"
+
+
+async def test_nba_level2_llm_can_override_within_bounds(monkeypatch):
+    """With a draft present the LLM cannot pick 'research' away from a rule that
+    says send_draft... unless research is allowed — it always is; but it can NEVER
+    pick send_draft where no draft exists."""
+    entries = [
+        _entry("HasDraft", "send_draft", [{"type": "outreach_draft", "headline": "d"},
+                                          {"type": "signal", "headline": "s", "relevance": 5}]),
+        _entry("NoDraft", "research", [{"type": "signal", "headline": "s2", "relevance": 4}]),
+    ]
+    monkeypatch.setattr(_today, "compute_scores", lambda *a, **k: entries)
+    monkeypatch.setattr(_today, "_gather_inputs", AsyncMock(return_value=([{}], {}, {}, {}, {})))
+    monkeypatch.setattr(_today.context, "config", {})
+    db = _DB([], {"autonomy_level": 2})
+    monkeypatch.setattr(context, "DB_AVAILABLE", True)
+    monkeypatch.setattr(context, "db_module", db)
+    idx = AsyncMock()
+    monkeypatch.setattr(_today, "db_module", MagicMock(index_document=idx))
+    reply = ('[{"client":"HasDraft","action":"mail","reason":"hot signal, mail first"},'
+             ' {"client":"NoDraft","action":"send_draft","reason":"send it"}]')
+    monkeypatch.setattr("routers.knowledge._call_brain_sync", lambda p: reply)
+
+    snap = await _today.compute_nba_queue(1)
+    q = {e["client"]: e for e in snap["queue"]}
+    # allowed override: HasDraft has a signal ⇒ mail is allowed
+    assert q["HasDraft"]["suggested_action"] == "mail" and q["HasDraft"]["action_source"] == "llm"
+    assert q["HasDraft"]["rule_action"] == "send_draft"
+    assert q["HasDraft"]["action_link"].startswith("/match?client=")
+    # illegal override: NoDraft has no draft ⇒ send_draft rejected, rule kept
+    assert q["NoDraft"]["suggested_action"] == "research" and q["NoDraft"]["action_source"] == "rule"
+    assert snap["autonomy_level"] == 2 and snap["actions_changed_by_agent"] == 1
+
+
+async def test_nba_level0_never_changes_action(monkeypatch):
+    entries = [_entry("A", "research", [{"type": "signal", "headline": "s", "relevance": 4}])]
+    monkeypatch.setattr(_today, "compute_scores", lambda *a, **k: entries)
+    monkeypatch.setattr(_today, "_gather_inputs", AsyncMock(return_value=([{}], {}, {}, {}, {})))
+    monkeypatch.setattr(_today.context, "config", {})
+    db = _DB([], {"autonomy_level": 0})
+    monkeypatch.setattr(context, "DB_AVAILABLE", True)
+    monkeypatch.setattr(context, "db_module", db)
+    monkeypatch.setattr(_today, "db_module", MagicMock(index_document=AsyncMock()))
+    captured = {}
+    def brain(p):
+        captured["prompt"] = p
+        return '[{"client":"A","action":"mail","reason":"r"}]'
+    monkeypatch.setattr("routers.knowledge._call_brain_sync", brain)
+    snap = await _today.compute_nba_queue(1)
+    assert "allowed_actions" not in captured["prompt"]           # legacy prompt
+    assert snap["queue"][0]["suggested_action"] == "research"     # action untouched
+    assert "action_source" not in snap["queue"][0]
+
+
+# ---------------------------------------------------------------------------
+# Selection triage (heartbeat candidate pre-filter)
+# ---------------------------------------------------------------------------
+
+async def test_selection_triage_level0_untouched(monkeypatch):
+    clients = [_client(i, f"C{i}", True) for i in range(8)]
+    db = _DB(clients, {"autonomy_level": 0})
+    _wire(monkeypatch, db)
+    triage = AsyncMock()
+    monkeypatch.setattr(pipeline.llm, "acomplete", triage)
+    selected, summary = await pipeline._select_heartbeat_clients(1, "research")
+    triage.assert_not_awaited()
+    assert len(selected) == 8 and "triage" not in summary
+
+
+async def test_selection_triage_level2_filters_and_orders(monkeypatch):
+    clients = [_client(i, f"C{i}", True) for i in range(8)]
+    db = _DB(clients, {"autonomy_level": 2})
+    _wire(monkeypatch, db)
+    monkeypatch.setattr(pipeline.llm, "acomplete",
+                        AsyncMock(return_value='["C5", "C2", "Unknown Corp"]'))
+    selected, summary = await pipeline._select_heartbeat_clients(1, "research")
+    assert [c["name"] for c in selected] == ["C5", "C2"]
+    assert summary["triage"]["applied"] and summary["triage"]["before"] == 8
+
+
+async def test_selection_triage_llm_failure_keeps_deterministic(monkeypatch):
+    clients = [_client(i, f"C{i}", True) for i in range(8)]
+    db = _DB(clients, {"autonomy_level": 2})
+    _wire(monkeypatch, db)
+    monkeypatch.setattr(pipeline.llm, "acomplete", AsyncMock(side_effect=RuntimeError("down")))
+    selected, summary = await pipeline._select_heartbeat_clients(1, "research")
+    assert len(selected) == 8 and "triage" not in summary       # exact legacy selection
+
+
+async def test_selection_triage_small_list_skips_llm(monkeypatch):
+    clients = [_client(i, f"C{i}", True) for i in range(3)]
+    db = _DB(clients, {"autonomy_level": 2})
+    _wire(monkeypatch, db)
+    triage = AsyncMock()
+    monkeypatch.setattr(pipeline.llm, "acomplete", triage)
+    selected, _ = await pipeline._select_heartbeat_clients(1, "research")
+    triage.assert_not_awaited()
+    assert len(selected) == 3

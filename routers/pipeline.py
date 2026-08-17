@@ -2222,6 +2222,19 @@ async def _select_heartbeat_clients(org_id: int, agent_type: str) -> tuple[list[
         "stale_nonfocus_selected": len(stale_nonfocus[:max_nonfocus]),
         "skipped_total": len(all_clients) - len(selected),
     }
+
+    # Autonomy seam (Phase 2, selection triage): at level >= 2 with a large
+    # candidate list, one batched LLM pass re-ranks/filters by change deltas
+    # so the per-client decisions downstream spend budget where it matters.
+    # Deterministic tiering above is the result when the LLM is unavailable
+    # or the list is small. Level 0/1 = untouched.
+    try:
+        if selected and len(selected) > int(context.config.get("autonomy_triage_min_candidates", 5)) \
+                and await autonomy.level(org_id) >= autonomy.LEVEL_ACT:
+            selected, triage_info = await _triage_selection(org_id, selected, agent_type)
+            summary["triage"] = triage_info
+    except Exception as exc:
+        console.print(f"[yellow]selection triage skipped: {exc}[/yellow]")
     console.print(
         f"[dim]Heartbeat {agent_type}: {summary['focus_selected']} focus "
         f"({skipped_unchanged} skipped unchanged), "
@@ -2229,6 +2242,42 @@ async def _select_heartbeat_clients(org_id: int, agent_type: str) -> tuple[list[
         f"{summary['skipped_total']} skipped of {len(all_clients)} total[/dim]"
     )
     return selected, summary
+
+
+async def _triage_selection(org_id: int, candidates: list[dict], agent_type: str) -> tuple[list[dict], dict]:
+    """One batched LLM pass over change deltas → ordered subset of candidates.
+    Returns (clients, info). On any parse problem returns the input unchanged."""
+    max_keep = int(context.config.get("autonomy_triage_max_keep", 8))
+    items = []
+    for c in candidates:
+        meta = c.get("metadata") or {}
+        items.append({
+            "client": c["name"],
+            "is_focus": bool(meta.get("is_focus")),
+            "news_pending": bool(meta.get("news_pending")),
+            "news_pending_reason": (meta.get("news_pending_reason") or [])[:3],
+            "last_autonomous_run_at": meta.get("last_autonomous_run_at") or "never",
+            "last_activity": str(c.get("last_activity") or "unknown"),
+        })
+    prompt = (
+        f"You triage which clients a sales-research agent should {agent_type} today. "
+        f"Given the candidates below, return the ones most worth acting on now, most "
+        f"urgent first, at most {max_keep}. Prefer clients with pending news changes, "
+        f"focus clients, and the longest gaps since the last autonomous run. Reply with "
+        f'ONLY a JSON array of client names: ["<name>", ...]\n\nCANDIDATES:\n'
+        + json.dumps(items, ensure_ascii=False)
+    )
+    text = await llm.acomplete(prompt, role="triage", max_tokens=400, timeout=60)
+    m = re.search(r"\[.*\]", text or "", re.S)
+    if not m:
+        return candidates, {"applied": False, "reason": "unparseable"}
+    names = [str(n).strip().lower() for n in json.loads(m.group(0)) if isinstance(n, str)]
+    by_name = {c["name"].strip().lower(): c for c in candidates}
+    kept = [by_name[n] for n in names if n in by_name][:max_keep]
+    if not kept:
+        return candidates, {"applied": False, "reason": "no known names"}
+    return kept, {"applied": True, "before": len(candidates), "after": len(kept),
+                  "dropped": [c["name"] for c in candidates if c not in kept]}
 
 
 def _heartbeat_decision_ctx(client: dict, agent_type: str, task: str) -> "autonomy.DecisionContext":
