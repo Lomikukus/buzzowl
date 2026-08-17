@@ -128,6 +128,14 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 .task-title { color:var(--c-text, #d4d4d4); font-size:0.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .task-meta { color:var(--c-muted2, #777); font-size:0.7rem; }
 .task-overdue .task-meta { color:#f0a0a0; }
+.task-recur { font-size:0.62rem; color:var(--c-blue, #569cd6); border:1px solid var(--c-bluetint, #1a2e4a); border-radius:3px; padding:0 0.25rem; margin-left:0.3rem; }
+.task-snz { position:relative; flex-shrink:0; }
+.task-snz > button { background:none; border:none; color:var(--c-faint, #555); cursor:pointer; font-size:0.8rem; }
+.task-snz > button:hover { color:var(--c-orange, #ce9178); }
+.task-snz-menu { display:none; position:absolute; right:0; top:1.3rem; z-index:20; background:var(--c-bg2, #1a1a1a); border:1px solid var(--c-line2, #333); border-radius:5px; padding:0.2rem; min-width:7.5rem; box-shadow:0 4px 14px rgba(0,0,0,0.5); }
+.task-snz.open .task-snz-menu { display:block; }
+.task-snz-menu button { display:block; width:100%; text-align:left; background:none; border:none; color:var(--c-text2, #ccc); font-size:0.74rem; padding:0.28rem 0.5rem; border-radius:3px; cursor:pointer; font-family:inherit; }
+.task-snz-menu button:hover { background:var(--c-linefaint, #222); color:var(--c-accent, #4ec9b0); }
 .task-del { background:none; border:none; color:var(--c-faint, #555); cursor:pointer; font-size:0.8rem; flex-shrink:0; }
 .task-del:hover { color:var(--c-red, #f14c4c); }
 
@@ -173,6 +181,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
               <input id="taskTitle" type="text" placeholder="Add a task or follow-up…" />
               <select id="taskClient"><option value="">— client (optional) —</option></select>
               <input id="taskDue" type="date" title="Due date" />
+              <select id="taskRecur" title="Repeat"><option value="">once</option><option value="daily">daily</option><option value="weekly">weekly</option><option value="monthly">monthly</option></select>
               <button id="taskAddBtn">Add</button>
             </div>
             <div id="homeTasks"><div class="empty">Loading…</div></div>
@@ -443,11 +452,21 @@ async function loadTasks(){
   el.innerHTML=_tasks.map(t=>{
     const overdue=t.due_date&&t.due_date<today;
     const dueTxt=t.due_date?('due '+t.due_date):'no date';
+    const recur=t.recurrence?`<span class="task-recur" title="Repeats ${esc(t.recurrence)} — completing creates the next one">↻ ${esc(t.recurrence)}</span>`:'';
     return `<div class="task-row${overdue?' task-overdue':''}">
-      <button class="task-check" title="Mark done" onclick="completeTask(${t.id})">○</button>
+      <button class="task-check" title="${t.recurrence?'Mark done (next occurrence is created)':'Mark done'}" onclick="completeTask(${t.id})">○</button>
       <div class="task-main">
-        <span class="task-title">${esc(t.title)}</span>
+        <span class="task-title">${esc(t.title)}${recur}</span>
         <span class="task-meta">${t.client_name?esc(t.client_name)+' · ':''}${esc(dueTxt)}${overdue?' · overdue':''}</span>
+      </div>
+      <div class="task-snz" id="snz-${t.id}">
+        <button title="Snooze" onclick="toggleSnooze(${t.id})">⏰</button>
+        <div class="task-snz-menu">
+          <button onclick="snoozeTask(${t.id},'tomorrow')">Tomorrow</button>
+          <button onclick="snoozeTask(${t.id},'3d')">In 3 days</button>
+          <button onclick="snoozeTask(${t.id},'next_week')">Next week</button>
+          <button onclick="snoozeTask(${t.id},'2w')">In 2 weeks</button>
+        </div>
       </div>
       <button class="task-del" title="Delete" onclick="deleteTask(${t.id})">✕</button>
     </div>`;
@@ -459,8 +478,19 @@ async function addTask(){
   if(!title){ ti.focus(); return; }
   const client=document.getElementById('taskClient').value||null;
   const due=document.getElementById('taskDue').value||null;
-  try{ const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json',...H()},body:JSON.stringify({title,client_name:client,due_date:due})}); if(!r.ok) return; }catch(_){ return; }
-  ti.value=''; document.getElementById('taskDue').value=''; document.getElementById('taskClient').value='';
+  const recurrence=document.getElementById('taskRecur').value||null;
+  try{ const r=await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json',...H()},body:JSON.stringify({title,client_name:client,due_date:due,recurrence})}); if(!r.ok) return; }catch(_){ return; }
+  ti.value=''; document.getElementById('taskDue').value=''; document.getElementById('taskClient').value=''; document.getElementById('taskRecur').value='';
+  loadTasks();
+}
+function toggleSnooze(id){
+  const box=document.getElementById('snz-'+id); const open=box.classList.contains('open');
+  document.querySelectorAll('.task-snz.open').forEach(b=>b.classList.remove('open'));
+  if(!open) box.classList.add('open');
+}
+document.addEventListener('click', e=>{ if(!e.target.closest('.task-snz')) document.querySelectorAll('.task-snz.open').forEach(b=>b.classList.remove('open')); });
+async function snoozeTask(id, until){
+  try{ await fetch('/api/tasks/'+id+'/snooze',{method:'POST',headers:{'Content-Type':'application/json',...H()},body:JSON.stringify({until})}); }catch(_){}
   loadTasks();
 }
 async function completeTask(id){

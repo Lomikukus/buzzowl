@@ -848,8 +848,13 @@ async def get_deal(org_id: int, deal_id: int) -> Optional[dict]:
     if not _pool:
         return None
     async with _pool.acquire() as conn:
-        row = await conn.fetchrow(f"SELECT {_DEAL_COLS} FROM deals WHERE org_id = $1 AND id = $2",
-                                  org_id, deal_id)
+        row = await conn.fetchrow(
+            f"""SELECT {'d.' + _DEAL_COLS.replace(', ', ', d.')}, c.name AS client_name,
+                       u.display_name AS owner_name
+                FROM deals d JOIN clients c ON c.id = d.client_id
+                LEFT JOIN users u ON u.id = d.owner_user_id
+                WHERE d.org_id = $1 AND d.id = $2""",
+            org_id, deal_id)
     return _deal_row(row) if row else None
 
 
@@ -3607,24 +3612,41 @@ async def update_contact_log(log_id: int, org_id: int,
 
 async def create_task(org_id: int, user_id: Optional[int], title: str,
                       client_name: Optional[str] = None, notes: Optional[str] = None,
-                      due_date=None, priority: int = 5, source: str = "manual") -> Optional[dict]:
-    """Create a to-do. due_date is a datetime.date or None. Returns the row (None if DB off)."""
+                      due_date=None, priority: int = 5, source: str = "manual",
+                      recurrence: Optional[str] = None, snooze_until=None,
+                      deal_id: Optional[int] = None) -> Optional[dict]:
+    """Create a to-do. due_date is a datetime.date or None. Returns the row (None if DB off).
+    recurrence: daily|weekly|monthly|None; snooze_until: aware datetime|None; deal_id: deals.id|None."""
     if not _pool or not (title or "").strip():
         return None
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO user_tasks
-                 (org_id, user_id, client_name, title, notes, due_date, priority, source)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *""",
+                 (org_id, user_id, client_name, title, notes, due_date, priority, source,
+                  recurrence, snooze_until, deal_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *""",
             org_id, user_id, (client_name or None), title.strip(),
             (notes or None), due_date, int(priority or 5), source,
+            recurrence, snooze_until, deal_id,
         )
         return dict(row) if row else None
 
 
+async def get_task(task_id: int, org_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM user_tasks WHERE id = $1 AND org_id = $2", task_id, org_id)
+        return dict(row) if row else None
+
+
 async def list_tasks(org_id: int, user_id: Optional[int] = None,
-                     include_done: bool = False, limit: int = 200) -> list[dict]:
-    """Tasks for an org, optionally scoped to one rep. Open first, soonest due first."""
+                     include_done: bool = False, limit: int = 200,
+                     include_snoozed: bool = False, deal_id: Optional[int] = None,
+                     client_name: Optional[str] = None) -> list[dict]:
+    """Tasks for an org, optionally scoped to one rep / deal / client. Open first, soonest due first.
+    Snoozed tasks (snooze_until in the future) are hidden unless include_snoozed — that is what
+    keeps them out of Home, the NBA queue and the reminder mail until they wake up."""
     if not _pool:
         return []
     conds = ["org_id = $1"]
@@ -3632,8 +3654,16 @@ async def list_tasks(org_id: int, user_id: Optional[int] = None,
     if user_id is not None:
         params.append(user_id)
         conds.append(f"user_id = ${len(params)}")
+    if deal_id is not None:
+        params.append(deal_id)
+        conds.append(f"deal_id = ${len(params)}")
+    if client_name:
+        params.append(client_name)
+        conds.append(f"client_name = ${len(params)}")
     if not include_done:
         conds.append("status = 'open'")
+    if not include_snoozed:
+        conds.append("(snooze_until IS NULL OR snooze_until <= NOW())")
     where = " AND ".join(conds)
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
@@ -3647,10 +3677,12 @@ async def list_tasks(org_id: int, user_id: Optional[int] = None,
 
 
 async def update_task(task_id: int, org_id: int, patch: dict) -> Optional[dict]:
-    """Patch title/notes/due_date/priority/status/client_name. Stamps completed_at on done."""
+    """Patch title/notes/due_date/priority/status/client_name/recurrence/snooze_until/deal_id.
+    Stamps completed_at on done. Recurrence spawning lives in the router (needs the row back)."""
     if not _pool or not patch:
         return None
-    allowed = {"title", "notes", "due_date", "priority", "status", "client_name"}
+    allowed = {"title", "notes", "due_date", "priority", "status", "client_name",
+               "recurrence", "snooze_until", "deal_id"}
     safe = {k: v for k, v in patch.items() if k in allowed}
     if not safe:
         return None
@@ -3686,10 +3718,12 @@ async def list_reminder_tasks(org_id: int) -> list[dict]:
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT t.id, t.user_id, t.title, t.client_name, t.due_date, t.priority,
+                      t.recurrence, t.deal_id,
                       u.email AS user_email, u.display_name AS user_name
                FROM user_tasks t JOIN users u ON u.id = t.user_id
                WHERE t.org_id = $1 AND t.status = 'open'
                  AND t.due_date IS NOT NULL AND t.due_date <= CURRENT_DATE
+                 AND (t.snooze_until IS NULL OR t.snooze_until <= NOW())
                ORDER BY t.user_id, t.due_date ASC""",
             org_id,
         )
