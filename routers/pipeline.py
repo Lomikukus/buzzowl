@@ -348,7 +348,11 @@ def _promote_session(session_id: str) -> dict:
     # --- DB indexing (best-effort, non-fatal) ---
     if DB_AVAILABLE:
         try:
-            org = db_module._run_coro_from_thread(db_module.get_first_org())
+            # Org comes from the session metadata (set when the recording user's
+            # /ws connected or the ingest token resolved); legacy sessions without
+            # it fall back to the first org (single-tenant installs).
+            meta_org = (meta or {}).get("org_id")
+            org = {"id": int(meta_org)} if meta_org else db_module._run_coro_from_thread(db_module.get_first_org())
             if not org:
                 console.print("[yellow]DB: no org found — run /api/auth/register first[/yellow]")
             else:
@@ -469,8 +473,12 @@ async def _trigger_enrichment(session_id: str, org_id: Optional[int]) -> None:
                 "session_id": session_id, "status": "staged", "created_at": None,
                 "duration_s": None, "speakers": None, "language": None,
                 "title": None, "entities": None, "agent_run_id": None,
-                "promoted_at": None, "error": None,
+                "promoted_at": None, "error": None, "org_id": org_id,
             })
+        elif org_id is not None and not meta.get("org_id"):
+            # multi-tenant: remember which org recorded this session so promotion
+            # and the sweep never fall back to a deployment-wide default
+            _write_session_metadata(session_id, {**meta, "org_id": org_id})
         transcript_path = BASE_DIR / "data" / "raw"    / session_id / "transcript.txt"
         summary_path    = BASE_DIR / "data" / "staged" / session_id / "summary.md"
         if not transcript_path.exists():
@@ -2655,13 +2663,14 @@ async def _start_heartbeat_scheduler() -> None:
                     "stale synthesis that lags newer findings, cross-client contamination, and "
                     "claims with no sources. Write flags into each doc + a QA summary report."),
             }
-            org_id = await context._default_org_id()
-            if org_id:
+            # every org (multi-tenant): each existing org gets the types it lacks
+            for org_row in await db_module.list_orgs():
+                org_id = org_row["id"]
                 existing_types = {h["agent_type"] for h in await db_module.list_all_heartbeats(org_id)}
                 for hb_type, (cron_expr, hb_task) in late_additions.items():
                     if hb_type not in existing_types:
                         await db_module.create_heartbeat(org_id, hb_type, cron_expr, hb_task)
-                        console.print(f"  [green]{hb_type} heartbeat created ({cron_expr})[/green]")
+                        console.print(f"  [green]{hb_type} heartbeat created for org {org_id} ({cron_expr})[/green]")
         except Exception as exc:
             console.print(f"  [yellow]Could not seed late-addition heartbeats: {exc}[/yellow]")
         try:
@@ -3042,7 +3051,7 @@ async def _pipeline_sweep() -> None:
             continue
 
         if status in ("staged", "failed"):
-            asyncio.create_task(_trigger_enrichment(session_dir.name, org_id))
+            asyncio.create_task(_trigger_enrichment(session_dir.name, (meta or {}).get("org_id") or org_id))
             triggered += 1
         elif status == "agent_done":
             # Agent finished but promotion failed — retry promote only
@@ -3169,12 +3178,16 @@ async def ingest_transcript_chunk(body: _TranscriptChunk, request: Request):
         # Broadcast to any browser clients connected via /ws so live transcript updates
         dead: set = set()
         msg = json.dumps({"type": "live", "text": chunk, "start": 0, "end": 0})
-        for ws in context._live_ws_connections:
+        # Only browsers of the SAME org may see this transcript (multi-tenant).
+        for ws, ws_org in list(context._live_ws_connections.items()):
+            if ws_org is not None and org_id is not None and ws_org != org_id:
+                continue
             try:
                 await ws.send_text(msg)
             except Exception:
                 dead.add(ws)
-        context._live_ws_connections.difference_update(dead)
+        for ws in dead:
+            context._live_ws_connections.pop(ws, None)
 
     if not body.is_final:
         return {"ok": True}
@@ -3218,8 +3231,9 @@ async def ingest_transcript_chunk(body: _TranscriptChunk, request: Request):
 
 
 @router.post("/api/sessions/text")
-async def create_text_session(body: dict):
-    """Accept a typed/pasted transcript, stage it, and kick off the enrichment pipeline."""
+async def create_text_session(body: dict, user: dict = Depends(current_user)):
+    """Accept a typed/pasted transcript, stage it, and kick off the enrichment pipeline
+    for the caller's org (multi-tenant: never a deployment-wide default org)."""
     text = body.get("text", "").strip()
     if not text:
         return {"ok": False, "error": "text is required"}
@@ -3244,7 +3258,7 @@ async def create_text_session(body: dict):
         "title": title, "visibility": visibility, "entities": None, "agent_run_id": None,
     })
 
-    org_id = await context._default_org_id()
+    org_id = user["org_id"]
     asyncio.create_task(_trigger_enrichment(session_id, org_id))
 
     console.print(f"[cyan]Text session created: {session_id}[/cyan]")

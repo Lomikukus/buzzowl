@@ -58,7 +58,7 @@ _model_lock = threading.Lock()
 _metadata_lock = threading.Lock()
 
 # Active browser WebSocket connections — used to broadcast live text from the Mac app
-_live_ws_connections: set = set()
+_live_ws_connections: dict = {}   # WebSocket -> org_id (multi-tenant: broadcasts are org-scoped)
 
 
 # ---------------------------------------------------------------------------
@@ -152,13 +152,20 @@ def cache_get(key):
 
 
 def cache_set(key, value, ttl: float = 15.0) -> None:
-    if len(_ttl_cache) > 256:   # safety bound — never grows unchecked
+    if len(_ttl_cache) > 4096:   # safety bound — never grows unchecked (many orgs share it)
         _ttl_cache.clear()
     _ttl_cache[key] = (time.monotonic() + ttl, value)
 
 
-def cache_clear() -> None:
-    _ttl_cache.clear()
+def cache_clear(org_id=None) -> None:
+    """Invalidate cached reads. With org_id only that org's entries go (keys are
+    tuples that contain the org id) — one tenant's write must not evict every
+    other tenant's hot cache. Without org_id: everything (legacy/admin)."""
+    if org_id is None:
+        _ttl_cache.clear()
+        return
+    for k in [k for k in _ttl_cache if isinstance(k, tuple) and org_id in k]:
+        _ttl_cache.pop(k, None)
 
 
 # ---------------------------------------------------------------------------

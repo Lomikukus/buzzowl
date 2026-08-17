@@ -174,6 +174,7 @@ def build_orchestrator_tools(
             task_type, task_id, _subject, brain_override or "ollama", model_override or "default",
         )
         await _emit({
+            "org_id": org_id,
             "type": "task_enqueued",
             "subject": _subject,
             "task_type": task_type,

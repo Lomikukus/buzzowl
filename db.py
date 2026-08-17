@@ -724,7 +724,8 @@ async def update_document_metadata(org_id: int, int_id: int, metadata: dict,
     return res.endswith("1")
 
 
-async def claim_next_approved_outreach(org_id: Optional[int] = None) -> Optional[dict]:
+async def claim_next_approved_outreach(org_id: Optional[int] = None,
+                                       exclude_org_ids: Optional[set] = None) -> Optional[dict]:
     """Send-worker pickup: atomically move ONE approved outreach doc to 'queued'
     (worker actor) and return it. Row-locked so two worker ticks never send the
     same mail. Returns None when nothing is approved."""
@@ -737,9 +738,10 @@ async def claim_next_approved_outreach(org_id: Optional[int] = None) -> Optional
                      FROM documents
                     WHERE type = 'outreach' AND metadata->>'state' = 'approved'
                       AND ($1::bigint IS NULL OR org_id = $1)
+                      AND NOT (org_id = ANY($2::bigint[]))
                     ORDER BY (metadata->>'approved_at') NULLS FIRST, id
                     LIMIT 1 FOR UPDATE SKIP LOCKED""",
-                org_id,
+                org_id, list(exclude_org_ids or []),
             )
             if not row:
                 return None
@@ -3002,8 +3004,8 @@ async def enqueue_research_task(
         return row["id"]
 
 
-async def claim_research_task(org_id: int) -> Optional[dict]:
-    """Atomically claim one pending task for this org. Returns task dict or None.
+async def claim_research_task(org_id: Optional[int] = None) -> Optional[dict]:
+    """Atomically claim one pending task for this org (or any org when None). Returns task dict or None.
 
     Uses SELECT FOR UPDATE SKIP LOCKED inside an explicit transaction so the
     UPDATE is part of the same atomic unit as the SELECT. Multiple concurrent
@@ -3016,7 +3018,7 @@ async def claim_research_task(org_id: int) -> Optional[dict]:
             row = await conn.fetchrow(
                 """
                 SELECT * FROM research_tasks
-                WHERE org_id = $1
+                WHERE ($1::bigint IS NULL OR org_id = $1)
                   AND status = 'pending'
                 ORDER BY priority DESC, id ASC
                 LIMIT 1

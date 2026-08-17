@@ -92,7 +92,7 @@
             </div>
         </div>
         <div id="registerFields" class="login-fields" style="display:none">
-            <div class="login-field">
+            <div class="login-field" id="regKeyField">
                 <label>Registration key</label>
                 <input type="text" id="regKey" placeholder="Paste key from your operator" autocomplete="off">
             </div>
@@ -196,6 +196,13 @@
             finally     { loginSubmitBtn.disabled = false; }
         });
 
+        // Hosted deployments may open self-service signup — then no key is needed.
+        fetch('/api/auth/signup-status').then(r => r.ok ? r.json() : {}).then(d => {
+            if (d && d.signup_enabled) {
+                const f = document.getElementById('regKeyField'); if (f) f.style.display = 'none';
+                const t = document.querySelector('[data-tab="register"], #tabRegister'); if (t) t.textContent = 'Create your workspace';
+            }
+        }).catch(() => {});
         ['loginOrg','loginUser','loginPass','joinKey','joinUser','joinName','joinPass','regKey','regOrgName','regUser','regPass'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') loginSubmitBtn.click(); });

@@ -42,8 +42,12 @@ logger = logging.getLogger(__name__)
 _PAUSED = False
 
 # Post-queue org-hygiene trigger state
-_last_task_completed = 0   # incremented after every completed task
-_org_triggered_after = 0   # value of _last_task_completed when org was last triggered
+_last_task_completed = 0   # incremented after every completed task (all orgs)
+_org_triggered_after = 0   # legacy single-org marker (kept for tests)
+# Multi-tenant (Phase 6a): one worker pool serves every org; the drain→hygiene
+# trigger is tracked per org so orgs don't mask each other.
+_completed_by_org: dict = {}     # org_id -> completed count
+_triggered_by_org: dict = {}     # org_id -> completed count at last trigger
 
 
 def pause_workers() -> None:
@@ -56,13 +60,14 @@ def resume_workers() -> None:
     _PAUSED = False
 
 
-async def _reset_stale_running_tasks(org_id: int) -> int:
-    """On startup: reset tasks stuck in 'running' from a previous server session to 'pending'."""
+async def _reset_stale_running_tasks(org_id: Optional[int] = None) -> int:
+    """On startup: reset tasks stuck in 'running' from a previous server session to
+    'pending' — for one org, or for every org when org_id is None."""
     if not _db._pool:
         return 0
     async with _db._pool.acquire() as conn:
         count = await conn.fetchval(
-            "WITH updated AS (UPDATE research_tasks SET status='pending' WHERE org_id=$1 AND status='running' RETURNING id) SELECT COUNT(*) FROM updated",
+            "WITH updated AS (UPDATE research_tasks SET status='pending' WHERE ($1::bigint IS NULL OR org_id=$1) AND status='running' RETURNING id) SELECT COUNT(*) FROM updated",
             org_id,
         )
     if (count or 0) > 0:
@@ -71,12 +76,13 @@ async def _reset_stale_running_tasks(org_id: int) -> int:
 
 
 async def _maybe_trigger_org(org_id: int) -> None:
-    """Fire org-hygiene agent when the research queue has fully drained after work was done."""
+    """Fire org-hygiene agent when THIS org's research queue has fully drained after work was done."""
     global _org_triggered_after
     cfg = _load_config()
     if not cfg.get("org_agent_enabled", True):
         return
-    if _last_task_completed <= _org_triggered_after:
+    done = _completed_by_org.get(org_id, 0)
+    if done <= _triggered_by_org.get(org_id, 0):
         return
     if not _db._pool:
         return
@@ -94,7 +100,8 @@ async def _maybe_trigger_org(org_id: int) -> None:
         return
 
     _org_triggered_after = _last_task_completed
-    logger.info("Research queue drained — triggering post-research org hygiene")
+    _triggered_by_org[org_id] = done
+    logger.info("Research queue drained for org %s — triggering post-research org hygiene", org_id)
     try:
         run_id = await _db.create_agent_run(
             org_id=org_id, agent_type="org",
@@ -107,6 +114,7 @@ async def _maybe_trigger_org(org_id: int) -> None:
             "Post-research org hygiene: link new findings to clients, deduplicate contacts.",
         ))
         asyncio.create_task(_emit({
+            "org_id": org_id,
             "type": "org_sweep_triggered",
             "run_id": run_id,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -357,6 +365,7 @@ async def _emit_spawned(parent_task: dict, org_id: int) -> None:
         ]
         if new_children:
             await _emit({
+                "org_id": org_id,
                 "type": "tasks_spawned",
                 "parent_task_id": parent_task["id"],
                 "subject": parent_task["subject"],
@@ -384,11 +393,14 @@ async def _aggregate_in_flight(org_id: int, subject: str) -> bool:
         return (count or 0) > 0
 
 
-async def _worker_loop(org_id: int, worker_id: int) -> None:
-    """Single worker: claims tasks, dispatches, marks complete. Runs indefinitely."""
+async def _worker_loop(org_filter: Optional[int], worker_id: int) -> None:
+    """Single worker: claims tasks (for one org, or any org when org_filter is
+    None), dispatches, marks complete. Runs indefinitely. The task row carries
+    its own org_id — everything downstream is scoped by that."""
     global _last_task_completed
-    logger.info("Research worker %d started for org %d", worker_id, org_id)
+    logger.info("Research worker %d started for %s", worker_id, f"org {org_filter}" if org_filter else "all orgs")
     task: Optional[dict] = None
+    org_id: Optional[int] = org_filter
 
     while True:
         try:
@@ -396,16 +408,18 @@ async def _worker_loop(org_id: int, worker_id: int) -> None:
                 await asyncio.sleep(2)
                 continue
 
-            task = await _db.claim_research_task(org_id)
+            task = await _db.claim_research_task(org_filter)
             if task is None:
-                # Worker 0 owns the post-queue org trigger check
+                # Worker 0 owns the post-queue org trigger check — per org that did work
                 if worker_id == 0:
-                    try:
-                        await _maybe_trigger_org(org_id)
-                    except Exception as exc:
-                        logger.warning("_maybe_trigger_org error: %s", exc)
+                    for oid in list(_completed_by_org.keys()):
+                        try:
+                            await _maybe_trigger_org(oid)
+                        except Exception as exc:
+                            logger.warning("_maybe_trigger_org error (org %s): %s", oid, exc)
                 await asyncio.sleep(2)
                 continue
+            org_id = task["org_id"]
 
             model, num_ctx, threshold, max_depth, vault_path, brain_type = _load_runner_config()
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -416,6 +430,7 @@ async def _worker_loop(org_id: int, worker_id: int) -> None:
             )
 
             asyncio.create_task(_emit({
+                "org_id": org_id,
                 "type": "task_claimed",
                 "task_id": task["id"],
                 "task_type": task["task_type"],
@@ -439,8 +454,10 @@ async def _worker_loop(org_id: int, worker_id: int) -> None:
                 max_depth=max_depth,
             )
             _last_task_completed += 1
+            _completed_by_org[org_id] = _completed_by_org.get(org_id, 0) + 1
 
             asyncio.create_task(_emit({
+                "org_id": org_id,
                 "type": "task_completed",
                 "task_id": task["id"],
                 "task_type": task["task_type"],
@@ -488,6 +505,7 @@ async def _worker_loop(org_id: int, worker_id: int) -> None:
                         agent_run_id=task.get("assigned_agent_run_id"),
                     )
                     asyncio.create_task(_emit({
+                        "org_id": org_id,
                         "type": "aggregator_triggered",
                         "subject": task["subject"],
                         "subject_type": task["subject_type"],
@@ -504,6 +522,7 @@ async def _worker_loop(org_id: int, worker_id: int) -> None:
             logger.error("Research worker %d error: %s", worker_id, exc, exc_info=True)
             if task is not None:
                 asyncio.create_task(_emit({
+                    "org_id": org_id,
                     "type": "task_failed",
                     "task_id": task["id"],
                     "task_type": task["task_type"],
@@ -516,10 +535,12 @@ async def _worker_loop(org_id: int, worker_id: int) -> None:
             await asyncio.sleep(5)
 
 
-def run_research_workers(org_id: int, n_workers: int = 4) -> None:
+def run_research_workers(org_id: Optional[int] = None, n_workers: int = 4) -> None:
     """Start n_workers concurrent worker coroutines. Fire-and-forget (no await).
+    org_id=None (default since Phase 6a) = one pool for every org in the deployment;
+    a specific org_id pins the pool to that org (tests / single-tenant tools).
     Also resets stale 'running' tasks from previous server sessions."""
     asyncio.create_task(_reset_stale_running_tasks(org_id))
     for i in range(n_workers):
         asyncio.create_task(_worker_loop(org_id, worker_id=i))
-    logger.info("Research workers started: %d workers for org %d", n_workers, org_id)
+    logger.info("Research workers started: %d workers for %s", n_workers, f"org {org_id}" if org_id else "all orgs")

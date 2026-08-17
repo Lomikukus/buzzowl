@@ -225,11 +225,10 @@ async def startup() -> None:
 
     if DB_AVAILABLE:
         n_workers = int(config.get("research_workers", 4))
-        org = await db_module.get_first_org()
-        if org:
-            from agents.research_runner import run_research_workers
-            run_research_workers(org["id"], n_workers=n_workers)
-            console.print(f"  Research workers: [green]{n_workers} workers started[/green]")
+        # One pool serves every org (Phase 6a multi-tenant): tasks carry org_id.
+        from agents.research_runner import run_research_workers
+        run_research_workers(None, n_workers=n_workers)
+        console.print(f"  Research workers: [green]{n_workers} workers started (all orgs)[/green]")
 
     console.print(f"  Ready. Open [cyan]http://localhost:8000[/cyan]\n")
 

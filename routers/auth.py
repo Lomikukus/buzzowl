@@ -49,6 +49,21 @@ async def current_user(authorization: Optional[str] = Header(None)) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 
+def context_config() -> dict:
+    from context import config as _cfg
+    return _cfg or {}
+
+
+def _signup_open() -> bool:
+    return bool((context_config().get("hosted") or {}).get("signup_enabled"))
+
+
+@router.get("/signup-status")
+async def signup_status():
+    """Public: is self-service org creation open on this deployment?"""
+    return {"signup_enabled": _signup_open()}
+
+
 @router.post("/register")
 @_limit("5/minute")
 async def register(request: Request, body: dict):
@@ -68,17 +83,20 @@ async def register(request: Request, body: dict):
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
-    # Validate registration key
-    if not registration_key:
-        raise HTTPException(status_code=400, detail="A registration key is required to create an organisation")
-    rk = await db_module.get_registration_key(registration_key)
+    # Validate registration key — unless the operator opened self-service signup
+    # (hosted.signup_enabled), in which case anyone may create their own org.
+    open_signup = _signup_open()
     _invalid_rk = "Registration key is invalid, already used, or expired"
-    if not rk:
-        raise HTTPException(status_code=400, detail=_invalid_rk)
-    if rk["used_at"] is not None:
-        raise HTTPException(status_code=400, detail=_invalid_rk)
-    if rk["expires_at"] and rk["expires_at"].replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail=_invalid_rk)
+    if not registration_key and not open_signup:
+        raise HTTPException(status_code=400, detail="A registration key is required to create an organisation")
+    if registration_key:
+        rk = await db_module.get_registration_key(registration_key)
+        if not rk:
+            raise HTTPException(status_code=400, detail=_invalid_rk)
+        if rk["used_at"] is not None:
+            raise HTTPException(status_code=400, detail=_invalid_rk)
+        if rk["expires_at"] and rk["expires_at"].replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail=_invalid_rk)
 
     existing = await db_module.get_org_by_slug(org_slug)
     if existing:
@@ -86,9 +104,18 @@ async def register(request: Request, body: dict):
 
     org = await db_module.create_org(org_name, org_slug)
     await db_module.seed_default_heartbeats(org["id"])
-    consumed = await db_module.consume_registration_key(registration_key, org["id"])
-    if not consumed:
-        raise HTTPException(status_code=400, detail=_invalid_rk)
+    if registration_key:
+        consumed = await db_module.consume_registration_key(registration_key, org["id"])
+        if not consumed:
+            raise HTTPException(status_code=400, detail=_invalid_rk)
+    else:
+        # self-service tenant: record the plan the operator configured for signups
+        try:
+            hosted = (context_config().get("hosted") or {})
+            await db_module.update_org_settings(org["id"], {"plan": hosted.get("default_plan", "light"),
+                                                            "signup": "self_service"})
+        except Exception:
+            pass
     user = await db_module.create_user(
         org_id=org["id"],
         username=username,

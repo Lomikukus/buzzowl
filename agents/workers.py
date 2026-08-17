@@ -417,6 +417,7 @@ async def run_link_collector(
 
     ts = datetime.now(timezone.utc).isoformat()
     asyncio.create_task(_emit({
+        "org_id": org_id,
         "type": "searching",
         "task_id": task_id,
         "subject": subject,
@@ -448,6 +449,7 @@ async def run_link_collector(
         })
 
     asyncio.create_task(_emit({
+        "org_id": org_id,
         "type": "search_done",
         "task_id": task_id,
         "subject": subject,
@@ -492,6 +494,7 @@ async def run_page_reader(
     logger.info("PageReader: url=%r depth=%d", url, depth)
 
     asyncio.create_task(_emit({
+        "org_id": org_id,
         "type": "fetching",
         "task_id": task_id,
         "subject": subject,
@@ -504,6 +507,7 @@ async def run_page_reader(
 
     if fetch_result.get("error"):
         asyncio.create_task(_emit({
+            "org_id": org_id,
             "type": "fetch_done",
             "task_id": task_id,
             "subject": subject,
@@ -539,6 +543,7 @@ async def run_page_reader(
     logger.info("PageReader: url=%r relevance=%d", url, score)
 
     asyncio.create_task(_emit({
+        "org_id": org_id,
         "type": "fetch_done",
         "task_id": task_id,
         "subject": subject,
@@ -639,6 +644,7 @@ async def run_content_analyzer(
     logger.info("ContentAnalyzer: url=%r depth=%d", url, depth)
 
     asyncio.create_task(_emit({
+        "org_id": org_id,
         "type": "analyzing",
         "task_id": task_id,
         "subject": subject,
@@ -700,6 +706,7 @@ async def run_content_analyzer(
     )
 
     asyncio.create_task(_emit({
+        "org_id": org_id,
         "type": "finding",
         "task_id": task_id,
         "subject": subject,

@@ -226,12 +226,12 @@ async def _guardrails(org_id: int, to_email: str = "") -> dict:
     return status
 
 
-async def send_one(org_id: Optional[int] = None) -> Optional[dict]:
+async def send_one(org_id: Optional[int] = None, exclude_org_ids: Optional[set] = None) -> Optional[dict]:
     """One worker pass: claim → guardrails → send → sent|back-to-approved.
     Returns a summary dict or None when nothing was approved."""
     if not DB_AVAILABLE or db_module is None:
         return None
-    item = await db_module.claim_next_approved_outreach(org_id)
+    item = await db_module.claim_next_approved_outreach(org_id, exclude_org_ids=exclude_org_ids)
     if not item:
         return None
     oid, org = item["id"], item["org_id"]
@@ -242,7 +242,7 @@ async def send_one(org_id: Optional[int] = None) -> Optional[dict]:
         nonlocal meta
         meta = o.transition(meta, o.APPROVED, actor=o.WORKER, note=f"not sent: {reason}",
                             extra={"last_error": reason})
-        return {"id": oid, "sent": False, "reason": reason}
+        return {"id": oid, "org_id": org, "sent": False, "reason": reason}
 
     if not to_email:
         result = _fail("no recipient email")
@@ -289,15 +289,18 @@ async def send_one(org_id: Optional[int] = None) -> Optional[dict]:
 
 
 async def worker_tick(max_items: int = 5) -> list[dict]:
-    """APScheduler entry: send up to max_items approved mails."""
+    """APScheduler entry: send up to max_items approved mails across all orgs.
+    Multi-tenant: a guardrail refusal (cap, quiet hours, kill switch) applies to
+    ONE org — that org is skipped for the rest of this tick, the others continue."""
     results = []
+    blocked: set = set()
     for _ in range(max_items):
-        r = await send_one()
+        r = await send_one(exclude_org_ids=blocked or None)
         if r is None:
             break
         results.append(r)
-        if not r.get("sent"):
-            break          # a guardrail refusal usually applies org-wide — stop this tick
+        if not r.get("sent") and r.get("org_id") is not None:
+            blocked.add(r["org_id"])
     return results
 
 

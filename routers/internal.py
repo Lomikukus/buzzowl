@@ -61,7 +61,7 @@ async def internal_create_client(body: dict, request: Request):
     Body: { org_id: int, name: str, metadata?: dict }
     """
     _check_token(request)
-    cache_clear()
+    cache_clear(org_id)
 
     org_id: Optional[int] = body.get("org_id")
     name: str = (body.get("name") or "").strip()
@@ -162,7 +162,7 @@ async def internal_create_contact(body: dict, request: Request):
     Body: { org_id: int, name: str, client?: str, role?: str, email?: str, metadata?: dict }
     """
     _check_token(request)
-    cache_clear()
+    cache_clear(org_id)
 
     org_id: Optional[int] = body.get("org_id")
     name: str = (body.get("name") or "").strip()

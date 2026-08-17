@@ -217,7 +217,7 @@ async def assign_client_owner(name: str, body: dict, user: dict = Depends(curren
     edit metadata.owner_ids (shared ownership)."""
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
-    cache_clear()
+    cache_clear(user["org_id"])
     org_id = user["org_id"]
     action = (body.get("action") or "").strip()
     try:
@@ -258,7 +258,7 @@ async def assign_client_owner(name: str, body: dict, user: dict = Depends(curren
 
 @router.post("/api/clients")
 async def create_client(body: dict, user: dict = Depends(current_user)):
-    cache_clear()
+    cache_clear(user["org_id"])
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
@@ -701,7 +701,7 @@ _MAX_SOURCES = 6
 async def put_client_sources(name: str, body: dict, user: dict = Depends(current_user)):
     """Replace the client's monitored-sources list (UI add/remove sends the full list).
     Per-source fingerprint state is preserved by URL so edits don't reset baselines."""
-    cache_clear()
+    cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
     client = await db_module.get_client(user["org_id"], name)
@@ -738,7 +738,7 @@ async def put_client_sources(name: str, body: dict, user: dict = Depends(current
 @router.post("/api/clients/{name}/sources/discover")
 async def discover_client_sources_endpoint(name: str, user: dict = Depends(current_user)):
     """Find newsroom/press pages for this client via SearXNG heuristics (no LLM)."""
-    cache_clear()
+    cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
     client = await db_module.get_client(user["org_id"], name)
@@ -752,7 +752,7 @@ async def discover_client_sources_endpoint(name: str, user: dict = Depends(curre
 async def check_client_sources_endpoint(name: str, user: dict = Depends(current_user)):
     """Run the source-monitor check for this client right now. Same behavior as
     the daily sweep (focus clients with changes get researched) minus Telegram."""
-    cache_clear()
+    cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
     client = await db_module.get_client(user["org_id"], name)
@@ -778,7 +778,7 @@ async def get_client(name: str, user: dict = Depends(current_user)):
 
 @router.patch("/api/clients/{name}")
 async def patch_client(name: str, body: dict, user: dict = Depends(current_user)):
-    cache_clear()
+    cache_clear(user["org_id"])
     patch = dict(body.get("metadata", body))
     # Focus is per-rep — translate is_focus into a focus_user_ids mutation
     # scoped to the current user (keeps the union flag derived server-side).
@@ -799,7 +799,7 @@ async def patch_client(name: str, body: dict, user: dict = Depends(current_user)
 
 @router.delete("/api/clients")
 async def delete_client(name: str = Query(...), user: dict = Depends(current_user)):
-    cache_clear()
+    cache_clear(user["org_id"])
     deleted = await db_module.delete_client(user["org_id"], name)
     if not deleted:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -2523,7 +2523,7 @@ async def get_people(client_name: Optional[str] = None, user: dict = Depends(cur
 
 @router.post("/api/contacts")
 async def create_contact(body: dict, user: dict = Depends(current_user)):
-    cache_clear()
+    cache_clear(user["org_id"])
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
@@ -2560,7 +2560,7 @@ async def import_contacts_csv(
     user: dict = Depends(current_user),
 ):
     """Import contacts from a CSV file. Columns: name (or first_name+last_name), email, role."""
-    cache_clear()
+    cache_clear(user["org_id"])
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only .csv files are accepted")
 

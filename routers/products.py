@@ -106,7 +106,7 @@ async def get_seller_company_endpoint(user: dict = Depends(current_user)):
 @router.post("/api/seller/company")
 async def upsert_seller_company_endpoint(body: dict, user: dict = Depends(current_user)):
     """Upsert the seller company and trigger Hermes product research."""
-    cache_clear()
+    cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
@@ -356,7 +356,7 @@ async def list_products_endpoint(
 @router.post("/api/products")
 async def create_product_endpoint(body: dict, user: dict = Depends(current_user)):
     """Manually create a product."""
-    cache_clear()
+    cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
     company = await db_module.get_seller_company(user["org_id"])
@@ -401,7 +401,7 @@ async def get_product_endpoint(product_id: int, user: dict = Depends(current_use
 
 @router.patch("/api/products/{product_id}")
 async def update_product_endpoint(product_id: int, body: dict, user: dict = Depends(current_user)):
-    cache_clear()
+    cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
     patch = {k: v for k, v in body.items() if k in _PATCHABLE_PRODUCT_FIELDS}
@@ -415,7 +415,7 @@ async def update_product_endpoint(product_id: int, body: dict, user: dict = Depe
 
 @router.delete("/api/products/{product_id}")
 async def delete_product_endpoint(product_id: int, user: dict = Depends(current_user)):
-    cache_clear()
+    cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
     deleted = await db_module.delete_product(product_id, user["org_id"])

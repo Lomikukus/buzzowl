@@ -730,7 +730,8 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         await ws.send_text(json.dumps({"type": "error", "text": "Server transcription disabled (transcription_mode: app)"}))
         await ws.close()
         return
-    context._live_ws_connections.add(ws)
+    ws_org_id = ws_user["org_id"] if (_dba and _dbm is not None and ws_user) else None
+    context._live_ws_connections[ws] = ws_org_id
     console.print("[cyan]Client connected[/cyan]")
 
     language: str | None    = None
@@ -869,7 +870,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                         await _stream_summary(
                             ws, segments, ollama_model, detected_language, loop, summary_path
                         )
-                        org_id = await _default_org_id()
+                        org_id = ws_org_id if ws_org_id is not None else await _default_org_id()
                         asyncio.create_task(_trigger_enrichment(session_id, org_id))
 
                 elif action == "summarize":
@@ -884,7 +885,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                         )
                         meta = _read_session_metadata(last_session_id)
                         if not meta or meta.get("status") != "promoted":
-                            org_id = await _default_org_id()
+                            org_id = ws_org_id if ws_org_id is not None else await _default_org_id()
                             asyncio.create_task(_trigger_enrichment(last_session_id, org_id))
 
                     audio_buffer       = np.array([], dtype=np.float32)
@@ -895,6 +896,6 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        context._live_ws_connections.discard(ws)
+        context._live_ws_connections.pop(ws, None)
 
     console.print("[yellow]Client disconnected[/yellow]")

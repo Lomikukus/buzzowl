@@ -223,6 +223,13 @@ nba_weights:
 #   - { id: won,         label: Won,         probability: 100, status: won }
 #   - { id: lost,        label: Lost,        probability: 0,   status: lost }
 
+# Hosted / multi-tenant (Phase 6a). Self-hosters keep this off: new orgs then
+# need an operator-issued registration key. A hosted operator can open signup so
+# anyone can create their own org (tenant) from the login page.
+hosted:
+  signup_enabled: false      # true → POST /api/auth/register works without a registration key
+  default_plan: light        # plan for self-signed-up orgs: light (own LLM key) | premium (billed)
+
 # Web search
 # SearXNG (primary): self-hosted metasearch engine — docker compose up -d starts it at :8080
 # DuckDuckGo (fallback): used automatically when SearXNG is unreachable, no key needed

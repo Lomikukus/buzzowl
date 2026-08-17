@@ -833,25 +833,18 @@ async def internal_trigger_run(body: dict, request: Request):
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
-    # Resolve org_id: explicit → client lookup → first org
+    # Resolve org_id: explicit only. Multi-tenant (Phase 6a): never a cross-org
+    # client-name lookup and never a first-org fallback — the Pi tools always
+    # send the org of the run that is calling (tools.ts: org_id: orgId).
     org_id: Optional[int] = None
     try:
         org_id = int(body.get("org_id") or 0) or None
     except (TypeError, ValueError):
         pass
-    if not org_id and db_module._pool:
-        async with db_module._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT org_id FROM clients WHERE lower(name) = lower($1) ORDER BY id LIMIT 1",
-                subject,
-            )
-        if row:
-            org_id = row["org_id"]
     if not org_id:
-        org = await db_module.get_first_org()
-        if not org:
-            raise HTTPException(status_code=503, detail="No org found")
-        org_id = org["id"]
+        raise HTTPException(status_code=400, detail="org_id required")
+    if not await db_module.get_org(org_id):
+        raise HTTPException(status_code=404, detail="unknown org_id")
 
     if not task:
         task = _RESEARCH_TASK_TEMPLATE.format(subject=subject)
@@ -1628,6 +1621,7 @@ async def cancel_research_subject_tasks(body: dict, user: dict = Depends(current
     try:
         from agents.events import emit as _emit
         await _emit({
+            "org_id": user["org_id"],
             "type": "subject_cancelled", "subject": subject,
             "count": count, "ts": datetime.now(timezone.utc).isoformat(),
         })
@@ -1923,21 +1917,19 @@ async def agents_ws(ws: WebSocket) -> None:
             return
     await ws.accept()
     from agents.events import subscribe, unsubscribe
-    subscribe(ws)
+    ws_org_id = ws_user["org_id"] if (DB_AVAILABLE and db_module is not None) else None
+    subscribe(ws, ws_org_id)
     try:
-        # Send initial queue snapshot so the dashboard renders immediately
-        if DB_AVAILABLE:
-            org = await db_module.get_first_org()
-            if org:
-                tasks = await db_module.list_research_tasks(org["id"])
-                await ws.send_text(json.dumps({"type": "queue_snapshot", "tasks": tasks}, default=str))
+        # Send initial queue snapshot so the dashboard renders immediately — the
+        # connecting user's own org, never a deployment-wide default.
+        if DB_AVAILABLE and ws_org_id is not None:
+            tasks = await db_module.list_research_tasks(ws_org_id)
+            await ws.send_text(json.dumps({"type": "queue_snapshot", "tasks": tasks}, default=str))
 
         async def _send_snapshot() -> None:
-            if DB_AVAILABLE:
-                org2 = await db_module.get_first_org()
-                if org2:
-                    snap = await db_module.list_research_tasks(org2["id"])
-                    await ws.send_text(json.dumps({"type": "queue_snapshot", "tasks": snap}, default=str))
+            if DB_AVAILABLE and ws_org_id is not None:
+                snap = await db_module.list_research_tasks(ws_org_id)
+                await ws.send_text(json.dumps({"type": "queue_snapshot", "tasks": snap}, default=str))
 
         while True:
             try:
