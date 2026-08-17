@@ -762,8 +762,16 @@ async def agent_service_callback(body: dict, request: Request):
         try:
             import datetime as _dt
             import notifications as _notify
+            # Routed to PEOPLE (Phase 6b): the user who triggered the run; automatic runs only
+            # to members who opted into 'auto_runs'. Never an org-wide broadcast.
+            _run_for_notify = None
+            if db_run_id:
+                try:
+                    _run_for_notify = await db_module.get_agent_run(db_run_id)
+                except Exception:
+                    _run_for_notify = None
             if agent_type == "monitor":
-                _notify.notify(
+                await _notify.notify_run(org_id, _run_for_notify,
                     f"🔍 *Monitor complete*\n"
                     f"🔄 Research queued for {len(stale_clients)} stale client(s)"
                     + (f": {', '.join(stale_clients[:3])}" if stale_clients else "")
@@ -784,19 +792,21 @@ async def agent_service_callback(body: dict, request: Request):
                         org_id, int(svc_run_id),
                     )
                 if _rdoc:
-                    _notify.notify_research_report(
+                    _doc = _notify.build_research_report(
                         subject=subject,
                         findings=[dict(r) for r in _findings],
                         signals=[dict(r) for r in _signals],
                         synthesized_report=_rdoc["content"],
                         today=_dt.date.today().isoformat(),
                     )
+                    await _notify.notify_run(org_id, _run_for_notify, _doc[0], document=_doc)
                 else:
                     findings_count = output.get("findings_saved", 0)
-                    _notify.notify(f"✅ *{agent_type.title()} complete: {subject}*\n📄 {findings_count} document(s) written")
+                    await _notify.notify_run(org_id, _run_for_notify,
+                        f"✅ *{agent_type.title()} complete: {subject}*\n📄 {findings_count} document(s) written")
             else:
                 findings_count = output.get("findings_saved", output.get("documents_written", 0))
-                _notify.notify(
+                await _notify.notify_run(org_id, _run_for_notify,
                     f"✅ *{agent_type.title()} complete: {subject}*\n"
                     f"📄 {findings_count} document(s) written"
                 )
@@ -948,10 +958,10 @@ async def _handle_product_research_callback(org_id: int, svc_run_id, company_nam
 
         try:
             import notifications as _notify
-            _notify.notify(
+            await _notify.notify_org(org_id,
                 f"🏭 *Product research complete: {company_name}*\n"
-                f"📦 {products_created} products found — select your focus at /products"
-            )
+                f"📦 {products_created} products found — select your focus at /products",
+                "runs", roles=("admin",))
         except Exception:
             pass
 
@@ -1147,10 +1157,10 @@ async def _handle_product_deep_research_callback(org_id: int, svc_run_id, compan
 
         try:
             import notifications as _notify
-            _notify.notify(
+            await _notify.notify_org(org_id,
                 f"🔬 *Deep product research done: {company_name}*\n"
-                f"💬 Pi verification chat ready — open /knowledge to review"
-            )
+                f"💬 Pi verification chat ready — open /knowledge to review",
+                "runs", roles=("admin",))
         except Exception:
             pass
 
@@ -1351,10 +1361,10 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
 
         try:
             import notifications as _notify
-            _notify.notify(
+            await _notify.notify_org(org_id,
                 f"🎯 *Match report ready: {client_name}*\n"
-                f"Product-client fit analysis complete — view at /match"
-            )
+                f"Product-client fit analysis complete — view at /match",
+                "runs")
         except Exception:
             pass
 

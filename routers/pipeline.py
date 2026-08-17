@@ -2177,10 +2177,10 @@ async def _build_rep_digests(org_id: int) -> dict:
             import notifications as _notify
             blocked = (f", {no_email} blocked (no email: {', '.join(blocked_reps)})"
                        if no_email else "")
-            _notify.notify(
+            await _notify.notify_org(org_id,
                 f"📬 {built} rep digest(s) built — {sent} sent, {pending} pending review"
-                f"{blocked} — open /insights"
-            )
+                f"{blocked} — open /insights",
+                "digest", roles=("admin",))
         except Exception:
             pass
     return {"digests_built": built, "auto_sent": sent, "pending": pending,
@@ -2382,7 +2382,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             from routers.notifications import _build_digest_stats
             import notifications as _notify
             stats = await _build_digest_stats(org_id)
-            _notify.notify_weekly_digest(stats)
+            await _notify.notify_org(org_id, _notify.weekly_digest_text(stats), "digest")
             await db_module.update_agent_run(run_id, "done", output=stats)
 
         elif agent_type == "stale_clients":
@@ -2390,7 +2390,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             import notifications as _notify
             stale = await _get_stale_clients(org_id, days=30)
             if stale:
-                _notify.notify_stale_clients(stale)
+                await _notify.notify_org(org_id, _notify.stale_clients_text(stale), "digest")
             await db_module.update_agent_run(run_id, "done", output={"stale_count": len(stale)})
 
         elif agent_type in ("research", "osint") and backend in ("pi", "hermes", "split"):
@@ -2537,7 +2537,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                     lines.append(
                         "New info (research manually): " + ", ".join(s["client"] for s in flagged)
                     )
-                _notify.notify("\n".join(lines))
+                await _notify.notify_org(org_id, "\n".join(lines), "signals")
             await db_module.update_agent_run(
                 run_id, "done",
                 output={
@@ -2716,6 +2716,16 @@ async def _start_heartbeat_scheduler() -> None:
         job_count += 1
     except Exception as exc:
         console.print(f"  [yellow]IMAP sync not scheduled: {exc}[/yellow]")
+    # Telegram bot inbound (Phase 6b): poll getUpdates when no webhook is configured
+    # (links chats to users via /start <code>; answers linked users from their org).
+    try:
+        import notifications as _tg
+        if _tg.polling_enabled():
+            context._scheduler.add_job(_tg.poll_updates, "interval", id="telegram_poll",
+                                       seconds=15, misfire_grace_time=20, coalesce=True, max_instances=1)
+            job_count += 1
+    except Exception as exc:
+        console.print(f"  [yellow]Telegram polling not scheduled: {exc}[/yellow]")
     # Shared clients (Phase 6a): drain the sync outbox filled by DB triggers.
     try:
         import sharing as _sharing

@@ -243,4 +243,15 @@ async def send_task_reminders(org_id: int) -> str:
         )
         sent += 1 if ok else 0
         skipped += 0 if ok else 1
+        # Telegram too, if this person linked a chat and wants reminders
+        try:
+            import notifications as _notify
+            tg_lines = [f"⏰ *{len(tasks)} task(s) due today or overdue:*"]
+            for t in tasks[:8]:
+                due = t.get("due_date")
+                tg_lines.append(f"• {t['title']}" + (f" — {t['client_name']}" if t.get("client_name") else "")
+                                + (f" (due {due.isoformat()})" if due else ""))
+            await _notify.notify_user(_uid, "\n".join(tg_lines), "reminders")
+        except Exception:
+            pass
     return f"reminders emailed to {sent} rep(s), {skipped} skipped"

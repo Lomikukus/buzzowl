@@ -4548,3 +4548,92 @@ async def sharing_add_member_to_group(group_id: int, org_id: int, client_id: int
                 group_id, org_id, client_id, role, user_id)
             if monitor_local:
                 await conn.execute("UPDATE shared_clients SET monitor_org_id = $2, monitor_partner_id = NULL WHERE id = $1", group_id, org_id)
+
+
+# ---------------------------------------------------------------------------
+# Telegram per-user linking (notifications.py)
+# ---------------------------------------------------------------------------
+
+async def list_users_with_settings(org_id: int) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, org_id, username, display_name, email, role, settings FROM users WHERE org_id = $1 ORDER BY id", org_id)
+        out = []
+        for r in rows:
+            d = dict(r)
+            if isinstance(d.get("settings"), str):
+                try:
+                    d["settings"] = json.loads(d["settings"])
+                except json.JSONDecodeError:
+                    d["settings"] = {}
+            d["settings"] = d.get("settings") or {}
+            out.append(d)
+        return out
+
+
+async def get_user_with_settings(user_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        r = await conn.fetchrow(
+            """SELECT u.id, u.org_id, u.username, u.display_name, u.email, u.role, u.settings, o.name AS org_name
+                 FROM users u JOIN orgs o ON o.id = u.org_id WHERE u.id = $1""", user_id)
+    if not r:
+        return None
+    d = dict(r)
+    if isinstance(d.get("settings"), str):
+        try:
+            d["settings"] = json.loads(d["settings"])
+        except json.JSONDecodeError:
+            d["settings"] = {}
+    d["settings"] = d.get("settings") or {}
+    return d
+
+
+async def find_user_by_telegram_chat(chat_id: str) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        r = await conn.fetchrow(
+            """SELECT u.id, u.org_id, u.username, u.display_name, u.email, u.role, u.settings, o.name AS org_name
+                 FROM users u JOIN orgs o ON o.id = u.org_id
+                WHERE u.settings->'telegram'->>'chat_id' = $1 LIMIT 1""", str(chat_id))
+    return dict(r) if r else None
+
+
+async def find_user_by_telegram_link_code(code: str) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        r = await conn.fetchrow(
+            """SELECT u.id, u.org_id, u.username, u.display_name, u.email, u.role, u.settings, o.name AS org_name
+                 FROM users u JOIN orgs o ON o.id = u.org_id
+                WHERE u.settings->'telegram_link'->>'code' = $1 LIMIT 1""", code)
+    return dict(r) if r else None
+
+
+async def patch_user_settings_by_id(user_id: int, patch: dict) -> dict:
+    """Shallow-merge into users.settings by user id (org-agnostic; used by the bot)."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE users SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb WHERE id = $1 RETURNING settings",
+            user_id, patch)
+    s = row["settings"] if row else {}
+    if isinstance(s, str):
+        try:
+            s = json.loads(s)
+        except json.JSONDecodeError:
+            s = {}
+    return s or {}
+
+
+async def remove_user_setting_keys(user_id: int, keys: list[str]) -> None:
+    if not _pool or not keys:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("UPDATE users SET settings = COALESCE(settings, '{}'::jsonb) - $2::text[] WHERE id = $1",
+                           user_id, keys)

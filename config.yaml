@@ -238,6 +238,14 @@ hosted:
 # hosted deployments and never rotate it without re-entering keys.
 # llm_prices: { "gpt-4o-mini": [0.15, 0.60] }   # USD per 1M tokens (in, out) — overrides plans.py defaults
 
+# Notifications (Telegram). Per-user routing: every person links their own chat
+# (Settings → Notifications) and picks runs / auto_runs / digest / reminders /
+# signals / admin. TELEGRAM_CHAT_ID (.env) is the operator chat for feedback and
+# system messages only.
+notifications:
+  telegram_polling: true          # bot fetches updates itself every 15 s (works behind NAT)
+  telegram_webhook_url: ""        # set to https://<public>/api/telegram/webhook to use a webhook instead (disables polling)
+
 # External login (Phase 6b): exchange a JWT from an identity provider — Supabase
 # Auth, Auth0, Keycloak, any OIDC issuer — for a Buzzowl session via
 # POST /api/auth/external {token}. Used by a hosted control plane (SSO) or by

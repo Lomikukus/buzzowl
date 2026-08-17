@@ -22,21 +22,59 @@ logger = logging.getLogger("whisper.notifications_router")
 
 @router.post("/api/notifications/test")
 async def send_test(user: dict = Depends(current_user)):
-    """Send a test Telegram message to verify the integration is working."""
-    ok = _notify.notify(
-        f"✅ *Buzzowl connected*\n"
-        f"Notifications are working. Logged in as: {user.get('display_name') or user.get('username')}"
-    )
-    return {"ok": ok, "configured": _notify._configured()}
+    """Send a test message to the CURRENT USER's linked Telegram chat."""
+    ok = await _notify.notify_user(user["id"], f"✅ *Buzzowl connected*\nNotifications reach you here, "
+                                              f"{user.get('display_name') or user.get('username')}.", "admin")
+    return {"ok": ok, "configured": _notify._configured(), "linked": ok or bool(await _linked(user["id"]))}
+
+
+async def _linked(user_id: int):
+    u = await db_module.get_user_with_settings(user_id) if DB_AVAILABLE else None
+    return (u or {}).get("settings", {}).get("telegram") if u else None
 
 
 @router.get("/api/notifications/status")
 async def get_status(user: dict = Depends(current_user)):
-    """Return whether Telegram is configured."""
+    """Bot configured? Is THIS user linked? Their preferences."""
+    u = await db_module.get_user_with_settings(user["id"]) if DB_AVAILABLE else None
+    settings = (u or {}).get("settings") or {}
+    tg = settings.get("telegram") or {}
     return {
         "configured": _notify._configured(),
+        "bot_username": _notify.bot_username() if _notify._configured() else None,
         "channel": "telegram" if _notify._configured() else None,
+        "linked": bool(tg.get("chat_id")),
+        "telegram": {k: tg.get(k) for k in ("username", "first_name", "linked_at")} if tg else None,
+        "prefs": _notify.prefs_of(settings),
+        "kinds": list(_notify.KINDS),
+        "polling": _notify.polling_enabled(),
+        "admin_chat_configured": _notify._admin_chat_configured(),
     }
+
+
+@router.post("/api/notifications/telegram/link")
+async def start_telegram_link(user: dict = Depends(current_user)):
+    """One-time code + t.me deep link; the bot completes the link on /start <code>."""
+    if not _notify._configured():
+        return {"ok": False, "error": "Telegram bot not configured on this install (TELEGRAMBOT)"}
+    return {"ok": True, **(await _notify.start_link(user["id"]))}
+
+
+@router.delete("/api/notifications/telegram/link")
+async def unlink_telegram(user: dict = Depends(current_user)):
+    await _notify.unlink(user["id"])
+    return {"ok": True}
+
+
+@router.post("/api/notifications/prefs")
+async def set_prefs(body: dict, user: dict = Depends(current_user)):
+    patch = {k: bool(v) for k, v in (body or {}).items() if k in _notify.KINDS}
+    if not patch:
+        return {"ok": False, "error": "no known keys"}
+    current = _notify.prefs_of((await db_module.get_user_with_settings(user["id"]) or {}).get("settings") or {})
+    current.update(patch)
+    await db_module.patch_user_settings_by_id(user["id"], {"telegram_prefs": current})
+    return {"ok": True, "prefs": current}
 
 
 @router.post("/api/notifications/digest")
@@ -44,8 +82,8 @@ async def send_digest(user: dict = Depends(current_user)):
     """Manually trigger the weekly digest."""
     org_id = user["org_id"]
     stats = await _build_digest_stats(org_id)
-    _notify.notify_weekly_digest(stats)
-    return {"ok": True, "stats": stats}
+    n = await _notify.notify_org(org_id, _notify.weekly_digest_text(stats), "digest")
+    return {"ok": True, "stats": stats, "recipients": n}
 
 
 # PHASE20: internal-only — triggered by heartbeat scheduler, not frontend; verify before removing
@@ -57,9 +95,10 @@ async def send_stale_clients(user: dict = Depends(current_user)):
     if not DB_AVAILABLE:
         return {"ok": False, "error": "DB unavailable"}
     stale = await _get_stale_clients(org_id, days=30)
+    n = 0
     if stale:
-        _notify.notify_stale_clients(stale)
-    return {"ok": True, "stale_count": len(stale)}
+        n = await _notify.notify_org(org_id, _notify.stale_clients_text(stale), "digest")
+    return {"ok": True, "stale_count": len(stale), "recipients": n}
 
 
 # ---------------------------------------------------------------------------
@@ -68,75 +107,16 @@ async def send_stale_clients(user: dict = Depends(current_user)):
 
 @router.post("/api/telegram/webhook")
 async def telegram_webhook(request: Request):
-    """Receive Telegram bot messages and reply with KB answers.
-
-    Security: only responds to chat IDs listed in TELEGRAM_CHAT_ID env var.
-    All other senders are silently ignored.
-    Register this URL with Telegram via:
-      curl "https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://your-domain/api/telegram/webhook"
-    """
+    """Telegram → Buzzowl. /start <code> links a chat to a user, /stop unlinks,
+    other messages are answered from the linked user's org knowledge base.
+    Unlinked chats only get a hint. Register with setWebhook when not polling
+    (config notifications.telegram_webhook_url)."""
     try:
         body = await request.json()
     except Exception:
         return {"ok": True}
-
-    message = body.get("message") or body.get("edited_message")
-    if not message:
-        return {"ok": True}
-
-    chat_id = str(message.get("chat", {}).get("id", ""))
-    text = (message.get("text") or "").strip()
-
-    if not text or not chat_id:
-        return {"ok": True}
-
-    # Security gate — silently ignore unauthorised senders
-    allowed = _notify._chat_ids()
-    if chat_id not in allowed:
-        logger.warning("Telegram webhook: ignored message from unauthorized chat_id=%s", chat_id)
-        return {"ok": True}
-
-    asyncio.create_task(_handle_telegram_message(chat_id, text))
+    asyncio.create_task(_notify.handle_update(body))
     return {"ok": True}
-
-
-async def _handle_telegram_message(chat_id: str, text: str) -> None:
-    """Background: process a Telegram message and send the AI reply."""
-    if not DB_AVAILABLE:
-        _notify.send_to(chat_id, "Knowledge base is currently unavailable.")
-        return
-
-    org = await db_module.get_first_org()
-    if not org:
-        _notify.send_to(chat_id, "No organisation configured in the knowledge base.")
-        return
-
-    org_id = org["id"]
-    org_name = org.get("name", "your organisation")
-    backend = config.get("agent_service_backend", "python")
-
-    try:
-        if backend in ("pi", "hermes", "split"):
-            from routers.chat import _call_pi_chat
-            answer, _ = await _call_pi_chat(text, org_id, None, org_name, [])
-        else:
-            from routers.chat import _build_roster, _run_tool_loop
-            clients = await db_module.list_clients(org_id) or []
-            contacts = await db_module.list_contacts(org_id) or []
-            roster_str = _build_roster(clients, contacts)
-            model = config.get("ollama_model", "llama3.2")
-            system = (
-                f"You are a sales intelligence assistant for {org_name}. "
-                "Use your tools to search the knowledge base before answering. "
-                "Be concise and cite sources.\n\n"
-                f"ROSTER:\n{roster_str}"
-            )
-            answer, _ = await _run_tool_loop(system, text, org_id, model)
-    except Exception as exc:
-        logger.warning("Telegram bot chat error: %s", exc)
-        answer = f"Error: {exc}"
-
-    _notify.send_to(chat_id, (answer or "(No answer returned)")[:4000])
 
 
 # ---------------------------------------------------------------------------

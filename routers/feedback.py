@@ -75,8 +75,11 @@ async def submit_feedback(request: Request):
         who = username or "anonymous"
         org_label = f" (org {org_id})" if org_id else ""
         text = f"\U0001f4ac Feedback from {who}{org_label}\nSubject: {subject}\n\n{message}"
+        # operator/admin chat (legacy TELEGRAM_CHAT_ID) + the org's linked admins
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _notify.notify, text)
+        await loop.run_in_executor(None, _notify.notify_admin_chat, text)
+        if org_id:
+            await _notify.notify_org(org_id, text, "admin", roles=("admin",), exclude_user_id=user_id)
     except Exception as exc:
         logger.warning("feedback: Telegram notify failed: %s", exc)
 

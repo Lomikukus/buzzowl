@@ -105,6 +105,42 @@ tr:hover td { background: var(--c-linefaint, #222); }
 
   <div class="content" id="mainContent" style="display:none">
 
+    <!-- Notifications (all users) — Telegram per person, Phase 6b -->
+    <div class="section" id="notifSection">
+      <h2>Notifications</h2>
+      <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
+        Get your research results, digests and reminders on Telegram — <b>yours only</b>. Each person connects their own
+        chat and picks what to receive; nothing is broadcast to the whole team.
+      </p>
+      <div id="notifBox" style="max-width:640px;font-size:0.8rem">
+        <div id="notifNotConfigured" style="display:none;color:var(--c-muted2, #666)">The Telegram bot is not configured on this install (admin: set <code>TELEGRAMBOT</code> in .env).</div>
+        <div id="notifUnlinked" style="display:none">
+          <button class="btn primary" onclick="tgConnect()">Connect Telegram</button>
+          <div id="tgLinkBox" style="display:none;margin-top:0.6rem;border:1px solid var(--c-line, #2a2a2a);border-radius:6px;padding:0.6rem 0.8rem;background:var(--c-bg2, #1a1a1a)">
+            <div>1. Open the bot: <a id="tgDeepLink" href="#" target="_blank" rel="noopener" style="color:var(--c-accent, #4ec9b0)">t.me/…</a></div>
+            <div style="margin-top:0.25rem">2. Tap <b>Start</b> — or send it <code id="tgCode" style="background:#111;border:1px solid #333;border-radius:4px;padding:0.1rem 0.4rem">/start …</code></div>
+            <div style="margin-top:0.25rem;color:var(--c-muted2, #666);font-size:0.72rem">The code is valid for 15 minutes. This page updates automatically once the bot confirms.</div>
+          </div>
+        </div>
+        <div id="notifLinked" style="display:none">
+          <div>Connected as <b id="tgWho">—</b> <span id="tgSince" style="color:var(--c-muted2, #666);font-size:0.72rem"></span>
+            <button class="btn" style="margin-left:0.6rem;font-size:0.7rem;padding:0.1rem 0.5rem" onclick="tgTest()">Send test</button>
+            <button class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem;color:var(--c-danger, #e06c75)" onclick="tgDisconnect()">Disconnect</button>
+          </div>
+          <div id="tgPrefs" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.3rem 1rem;margin-top:0.7rem">
+            <label><input type="checkbox" data-pref="runs"> Results of runs <b>I</b> start</label>
+            <label><input type="checkbox" data-pref="auto_runs"> Results of automatic runs (heartbeats, autonomy)</label>
+            <label><input type="checkbox" data-pref="digest"> Weekly digest, stale clients, rep digests</label>
+            <label><input type="checkbox" data-pref="reminders"> Task reminders (due today / overdue)</label>
+            <label><input type="checkbox" data-pref="signals"> Signal & source-monitor summaries</label>
+            <label><input type="checkbox" data-pref="admin"> Admin events (feedback, system) — admins only</label>
+          </div>
+          <div style="font-size:0.7rem;color:var(--c-muted2, #666);margin-top:0.35rem">You can also chat with the bot: it answers from your workspace's knowledge base. /stop disconnects.</div>
+        </div>
+        <div id="tgStatus" style="font-size:0.72rem;color:var(--c-muted2, #666);min-height:1rem;margin-top:0.35rem"></div>
+      </div>
+    </div>
+
     <!-- Mac App Token (all users) -->
     <div class="section">
       <h2>Your Account</h2>
@@ -571,6 +607,7 @@ async function init() {
   document.getElementById('mainContent').style.display = 'block';
   // Populate Mac App Token (all users)
   document.getElementById('macTokenDisplay').value = _token;
+  loadNotifications();
   loadHeartbeats();
   if (_meUser.role === 'admin') {
     document.getElementById('adminSections').style.display = 'block';
@@ -583,6 +620,52 @@ async function init() {
     loadPlan();
     loadFederation();
   }
+}
+
+// ── Notifications / Telegram per person (all users, Phase 6b) ─────────────
+let _tgPollTimer = null;
+async function loadNotifications() {
+  let st;
+  try { const r = await fetch('/api/notifications/status', { headers: H(), cache: 'no-store' }); if (!r.ok) return; st = await r.json(); } catch (_) { return; }
+  const nc = document.getElementById('notifNotConfigured'), un = document.getElementById('notifUnlinked'), li = document.getElementById('notifLinked');
+  nc.style.display = st.configured ? 'none' : ''; un.style.display = (st.configured && !st.linked) ? '' : 'none'; li.style.display = (st.configured && st.linked) ? '' : 'none';
+  if (st.linked) {
+    document.getElementById('tgWho').textContent = st.telegram?.username ? '@' + st.telegram.username : (st.telegram?.first_name || 'Telegram');
+    document.getElementById('tgSince').textContent = st.telegram?.linked_at ? '· since ' + String(st.telegram.linked_at).slice(0, 10) : '';
+    document.querySelectorAll('#tgPrefs input[data-pref]').forEach(cb => { cb.checked = !!(st.prefs || {})[cb.dataset.pref]; cb.onchange = () => tgSavePrefs(); });
+    if (_tgPollTimer) { clearInterval(_tgPollTimer); _tgPollTimer = null; }
+  }
+}
+async function tgConnect() {
+  const st = document.getElementById('tgStatus'); st.textContent = 'Creating link…';
+  const r = await fetch('/api/notifications/telegram/link', { method: 'POST', headers: H() });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok) { st.textContent = d.error || 'Could not create a link'; return; }
+  st.textContent = '';
+  const box = document.getElementById('tgLinkBox'); box.style.display = '';
+  const a = document.getElementById('tgDeepLink');
+  if (d.deep_link) { a.href = d.deep_link; a.textContent = d.deep_link.replace('https://', ''); }
+  else { a.removeAttribute('href'); a.textContent = '(bot username unknown — send the command below to your bot)'; }
+  document.getElementById('tgCode').textContent = '/start ' + d.code;
+  if (_tgPollTimer) clearInterval(_tgPollTimer);
+  _tgPollTimer = setInterval(async () => {
+    const r2 = await fetch('/api/notifications/status', { headers: H(), cache: 'no-store' }); const s2 = r2.ok ? await r2.json() : {};
+    if (s2.linked) { clearInterval(_tgPollTimer); _tgPollTimer = null; document.getElementById('tgStatus').textContent = 'Connected ✓'; loadNotifications(); }
+  }, 3000);
+}
+async function tgSavePrefs() {
+  const body = {}; document.querySelectorAll('#tgPrefs input[data-pref]').forEach(cb => body[cb.dataset.pref] = cb.checked);
+  const r = await fetch('/api/notifications/prefs', { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  document.getElementById('tgStatus').textContent = r.ok ? 'Preferences saved.' : 'Could not save preferences';
+}
+async function tgTest() {
+  const r = await fetch('/api/notifications/test', { method: 'POST', headers: H() }); const d = await r.json().catch(() => ({}));
+  document.getElementById('tgStatus').textContent = d.ok ? 'Test message sent to your chat.' : 'Could not send — is the chat still connected?';
+}
+async function tgDisconnect() {
+  if (!confirm('Disconnect your Telegram chat?')) return;
+  await fetch('/api/notifications/telegram/link', { method: 'DELETE', headers: H() });
+  document.getElementById('tgLinkBox').style.display = 'none'; loadNotifications();
 }
 
 // ── Federation (admin, Phase 5b) ──────────────────────────────────────────
