@@ -29,10 +29,11 @@ router = APIRouter(prefix="/api/auth")
 # Dependency: resolve Bearer token → user row
 # ---------------------------------------------------------------------------
 
-async def current_user(authorization: Optional[str] = Header(None)) -> dict:
+async def current_user(request: Request, authorization: Optional[str] = Header(None)) -> dict:
     """FastAPI dependency. Validates Bearer token and returns the user row.
 
-    Raises 401 if missing/invalid, 503 if DB is unavailable.
+    Raises 401 if missing/invalid, 503 if DB is unavailable, 402 for writes when
+    the org is suspended (hosted: subscription lapsed — data kept, read-only).
     """
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
@@ -42,6 +43,10 @@ async def current_user(authorization: Optional[str] = Header(None)) -> dict:
     user = await db_module.get_user_by_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and not request.url.path.startswith("/api/auth/"):
+        from routers.operator import is_suspended
+        if await is_suspended(user["org_id"]):
+            raise HTTPException(status_code=402, detail="This workspace is suspended (subscription inactive) — read-only until it is resumed")
     return user
 
 
@@ -197,8 +202,150 @@ async def me(user: dict = Depends(current_user)):
             "display_name": user["display_name"], "role": user["role"],
             "ui_variant": user.get("ui_variant", "classic"),
         },
-        "org": {"id": user["org_id"], "name": user["org_name"], "slug": user["org_slug"]},
+        "org": {"id": user["org_id"], "name": user["org_name"], "slug": user["org_slug"],
+                **(await _org_flags(user["org_id"]))},
     }
+
+
+async def _org_flags(org_id: int) -> dict:
+    """plan + suspended for the UI (banner / plan badge); tolerant when DB helpers are absent."""
+    try:
+        import plans as _plans
+        s = await db_module.get_org_settings(org_id)
+        return {"plan": _plans.plan_of(s), "suspended": bool(s.get("suspended")),
+                "suspended_reason": s.get("suspended_reason") or None}
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# External login (Phase 6b): exchange a JWT from an identity provider — Supabase
+# Auth, Auth0, Keycloak, any OIDC issuer — for a Buzzowl session. Configured in
+# config.yaml `auth.external`; the control plane calls this after its own login
+# and redirects the browser to /login#token=<session token>.
+# ---------------------------------------------------------------------------
+
+def _ext_cfg() -> dict:
+    from context import config as _cfg
+    return ((_cfg or {}).get("auth") or {}).get("external") or {}
+
+
+_jwks_cache: dict = {}
+
+
+def _verify_external_jwt(token: str) -> dict:
+    """Returns the claims or raises HTTPException(401)."""
+    import time
+    import jwt as _jwt
+    cfg = _ext_cfg()
+    if not cfg.get("enabled"):
+        raise HTTPException(status_code=404, detail="external login is not enabled")
+    audience = cfg.get("audience") or None
+    issuer = cfg.get("issuer") or None
+    opts = {"verify_aud": bool(audience)}
+    try:
+        header = _jwt.get_unverified_header(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="malformed token")
+    alg = header.get("alg", "")
+    try:
+        if alg.startswith("HS"):
+            secret = cfg.get("hs256_secret") or ""
+            if not secret:
+                raise HTTPException(status_code=401, detail="token uses HS256 but auth.external.hs256_secret is not set")
+            return _jwt.decode(token, secret, algorithms=["HS256"], audience=audience, issuer=issuer, options=opts)
+        jwks_url = cfg.get("jwks_url") or ""
+        if not jwks_url:
+            raise HTTPException(status_code=401, detail="token uses an asymmetric key but auth.external.jwks_url is not set")
+        now = time.time()
+        client = _jwks_cache.get(jwks_url)
+        if not client or client[0] < now:
+            client = (now + 3600, _jwt.PyJWKClient(jwks_url, cache_keys=True))
+            _jwks_cache[jwks_url] = client
+        key = client[1].get_signing_key_from_jwt(token).key
+        return _jwt.decode(token, key, algorithms=[alg], audience=audience, issuer=issuer, options=opts)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"token rejected: {type(exc).__name__}")
+
+
+def _claim(claims: dict, path: str):
+    cur = claims
+    for part in (path or "").split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+@router.get("/external/config")
+async def external_config():
+    """Public: whether external login is on (login page shows the button/hint)."""
+    cfg = _ext_cfg()
+    return {"enabled": bool(cfg.get("enabled")), "label": cfg.get("label") or "Sign in with your account",
+            "login_url": cfg.get("login_url") or ""}
+
+
+@router.post("/external")
+@_limit("20/minute")
+async def external_login(request: Request, body: dict):
+    """{token} → {token (Buzzowl session), user, org}. Maps the identity to a user by
+    email; picks the org from the claim `org_claim` (default app_metadata.org_slug),
+    else the user's existing org, else — with auto_provision — a fresh personal
+    workspace named after the person."""
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    raw = (body.get("token") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="token required")
+    cfg = _ext_cfg()
+    claims = _verify_external_jwt(raw)
+    email = (_claim(claims, cfg.get("email_claim") or "email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="token has no email claim")
+    subject = str(claims.get("sub") or "")
+    display = (_claim(claims, cfg.get("name_claim") or "user_metadata.full_name") or email.split("@")[0]).strip()[:120]
+    org_slug = _claim(claims, cfg.get("org_claim") or "app_metadata.org_slug")
+
+    org = await db_module.get_org_by_slug(str(org_slug)) if org_slug else None
+    user = None
+    if org:
+        user = next((u for u in await db_module.list_users(org["id"]) if (u.get("email") or "").lower() == email), None)
+    else:
+        hits = await db_module.find_users_global(email, exclude_org_id=None, limit=1)
+        if hits and (hits[0].get("email") or "").lower() == email:
+            user = await db_module.get_user_by_id(hits[0]["id"])
+            org = await db_module.get_org(user["org_id"])
+    if not user:
+        if not cfg.get("auto_provision", True):
+            raise HTTPException(status_code=403, detail="no workspace for this account — ask your operator")
+        if not org:
+            base = re.sub(r"[^a-z0-9]+", "-", (display or email.split("@")[0]).lower()).strip("-")[:40] or "workspace"
+            slug, n = base, 2
+            while await db_module.get_org_by_slug(slug):
+                slug = f"{base}-{n}"; n += 1
+            org = await db_module.create_org(f"{display}'s workspace", slug)
+            try:
+                await db_module.seed_default_heartbeats(org["id"])
+            except Exception:
+                pass
+            from context import config as _cfg
+            plan = ((_cfg or {}).get("hosted") or {}).get("default_plan", "light")
+            await db_module.update_org_settings(org["id"], {"plan": plan, "signup": "external", "external_subject": subject})
+        username = re.sub(r"[^a-z0-9]+", "-", email.split("@")[0].lower()).strip("-") or "user"
+        role = "admin" if not await db_module.list_users(org["id"]) else "member"
+        user = await db_module.create_user(org_id=org["id"], username=username, display_name=display,
+                                           password_hash=pwd_context.hash(secrets.token_urlsafe(24)), email=email, role=role)
+    token = secrets.token_urlsafe(32)
+    await db_module.create_session_token(user["id"], token, datetime.now(timezone.utc) + timedelta(days=30))
+    try:
+        db_module.log_prompt(org["id"], user["id"], "login", f"external:{subject}", {})
+    except Exception:
+        pass
+    return {"token": token,
+            "user": {"id": user["id"], "username": user["username"], "display_name": user["display_name"], "role": user["role"]},
+            "org": {"id": org["id"], "name": org["name"], "slug": org["slug"]}}
 
 
 @router.post("/theme")

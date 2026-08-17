@@ -20,3 +20,4 @@ requests
 slowapi>=0.1.9
 cryptography>=42.0        # AES-GCM for per-org LLM keys at rest (Phase 6a)
 matrix-nio[e2e]>=0.26.0     # Matrix federation transport (Phase 5b); vodozemac wheel, no libolm
+PyJWT[crypto]>=2.8            # external login (Supabase/OIDC JWT exchange, Phase 6b)

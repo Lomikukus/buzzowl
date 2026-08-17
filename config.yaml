@@ -238,6 +238,24 @@ hosted:
 # hosted deployments and never rotate it without re-entering keys.
 # llm_prices: { "gpt-4o-mini": [0.15, 0.60] }   # USD per 1M tokens (in, out) — overrides plans.py defaults
 
+# External login (Phase 6b): exchange a JWT from an identity provider — Supabase
+# Auth, Auth0, Keycloak, any OIDC issuer — for a Buzzowl session via
+# POST /api/auth/external {token}. Used by a hosted control plane (SSO) or by
+# self-hosters who want company login. Off by default.
+auth:
+  external:
+    enabled: false
+    label: "Sign in with your account"
+    login_url: ""               # where the login page sends people (the control plane / IdP)
+    jwks_url: ""                # e.g. https://<project>.supabase.co/auth/v1/.well-known/jwks.json (RS256/ES256)
+    hs256_secret: ""            # legacy Supabase projects: the project JWT secret (HS256)
+    issuer: ""                  # e.g. https://<project>.supabase.co/auth/v1
+    audience: "authenticated"   # Supabase default; leave empty to skip the aud check
+    email_claim: email
+    name_claim: user_metadata.full_name
+    org_claim: app_metadata.org_slug   # optional: which workspace the token belongs to
+    auto_provision: true        # unknown person → personal workspace (hosted.default_plan)
+
 # Matrix federation (Phase 5b) — sharing clients with reps on OTHER Buzzowl installs.
 # One bot account per org lives on a Matrix homeserver (yours via
 # `docker compose --profile federation up`, or any homeserver you trust);

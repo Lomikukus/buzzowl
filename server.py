@@ -26,7 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import context
 from context import BASE_DIR, DB_AVAILABLE, RATE_LIMIT_AVAILABLE, config, console, db_module, executor, limiter, pwd_context
-from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router
+from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
 from routers.pipeline import (
     ensure_dirs,
     _migrate_legacy_dirs,
@@ -438,6 +438,7 @@ app.include_router(outreach_router.router)
 app.include_router(deals_router.router)
 app.include_router(sharing_router.router)
 app.include_router(federation_router.router)
+app.include_router(operator_router.router)
 app.include_router(pipeline.router)
 app.include_router(knowledge.router)
 app.include_router(agents.router)

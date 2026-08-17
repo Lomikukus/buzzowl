@@ -3029,10 +3029,12 @@ async def claim_research_task(org_id: Optional[int] = None) -> Optional[dict]:
         async with conn.transaction():
             row = await conn.fetchrow(
                 """
-                SELECT * FROM research_tasks
-                WHERE ($1::bigint IS NULL OR org_id = $1)
-                  AND status = 'pending'
-                ORDER BY priority DESC, id ASC
+                SELECT rt.* FROM research_tasks rt
+                JOIN orgs o ON o.id = rt.org_id
+                WHERE ($1::bigint IS NULL OR rt.org_id = $1)
+                  AND rt.status = 'pending'
+                  AND COALESCE((o.settings->>'suspended')::boolean, false) = false   -- hosted: lapsed subscription
+                ORDER BY rt.priority DESC, rt.id ASC
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
                 """,

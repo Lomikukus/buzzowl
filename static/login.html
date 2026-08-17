@@ -196,6 +196,15 @@
             finally     { loginSubmitBtn.disabled = false; }
         });
 
+        // SSO hand-off from a control plane / operator: /login#token=<session token>
+        (function () {
+            const m = /(?:^|[#&])token=([^&]+)/.exec(location.hash || '');
+            if (m) {
+                try { localStorage.setItem('wk_token', decodeURIComponent(m[1])); } catch (_) {}
+                history.replaceState(null, '', location.pathname);
+                location.href = '/';
+            }
+        })();
         // Hosted deployments may open self-service signup — then no key is needed.
         fetch('/api/auth/signup-status').then(r => r.ok ? r.json() : {}).then(d => {
             if (d && d.signup_enabled) {

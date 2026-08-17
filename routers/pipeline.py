@@ -2324,6 +2324,14 @@ def _heartbeat_decision_ctx(client: dict, agent_type: str, task: str) -> "autono
 
 async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str) -> None:
     """Execute one heartbeat job — called by APScheduler for each cron entry."""
+    # Hosted: a suspended tenant (subscription lapsed) runs no scheduled work.
+    try:
+        from routers.operator import is_suspended as _is_suspended
+        if await _is_suspended(org_id):
+            console.print(f"[dim]heartbeat {agent_type} skipped — org {org_id} suspended[/dim]")
+            return
+    except Exception:
+        pass
     if not DB_AVAILABLE:
         return
     console.print(f"[dim]Heartbeat: {agent_type} — {task[:60]}[/dim]")
