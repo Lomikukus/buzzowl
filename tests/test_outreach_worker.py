@@ -61,8 +61,10 @@ class FakeDB:
                         "content": content, "metadata": meta, "type": "outreach", "created_by": 1}
         return i
 
-    async def claim_next_approved_outreach(self, org_id=None):
+    async def claim_next_approved_outreach(self, org_id=None, exclude_org_ids=None):
         for d in sorted(self.docs.values(), key=lambda x: x["id"]):
+            if d["org_id"] in (exclude_org_ids or set()):
+                continue
             if d["metadata"].get("state") == o.APPROVED and (org_id is None or d["org_id"] == org_id):
                 d["metadata"] = o.transition(d["metadata"], o.QUEUED, actor=o.WORKER)
                 return dict(d)
@@ -205,7 +207,8 @@ async def test_worker_tick_stops_after_refusal(env):
     db.settings["outreach_enabled"] = False
     db.add(1, _approved()); db.add(1, _approved(to="b@x.test"))
     results = await r.worker_tick()
-    assert len(results) == 1            # org-wide refusal → don't hammer the rest
+    assert len(results) == 1            # org-wide refusal → don't hammer the rest of THAT org
+    assert results[0]["org_id"] == 1 and results[0]["sent"] is False
 
 
 async def test_guardrail_status_endpoint_shape(env):

@@ -231,7 +231,8 @@ async def send_one(org_id: Optional[int] = None, exclude_org_ids: Optional[set] 
     Returns a summary dict or None when nothing was approved."""
     if not DB_AVAILABLE or db_module is None:
         return None
-    item = await db_module.claim_next_approved_outreach(org_id, exclude_org_ids=exclude_org_ids)
+    item = (await db_module.claim_next_approved_outreach(org_id, exclude_org_ids=exclude_org_ids)
+            if exclude_org_ids else await db_module.claim_next_approved_outreach(org_id))
     if not item:
         return None
     oid, org = item["id"], item["org_id"]
