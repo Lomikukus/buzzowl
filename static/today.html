@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Today — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; padding: 1.2rem 1.5rem; max-width: 900px; width: 100%; margin: 0 auto; }
+
+/* Toolbar */
+.toolbar {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  padding: 0.75rem 1rem; background: var(--c-bg2, #1a1a1a); border-bottom: 1px solid var(--c-linefaint, #222);
+  flex-shrink: 0;
+}
+.toolbar-title { font-size: 0.78rem; font-weight: 700; color: var(--c-accent, #4ec9b0); text-transform: uppercase; letter-spacing: 0.08em; }
+.toolbar-meta { font-size: 0.72rem; color: var(--c-faint, #555); }
+.llm-badge {
+  padding: 0.1rem 0.45rem; border-radius: 8px; font-size: 0.62rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.llm-badge.llm { background: var(--c-postint, #0d2a1a); color: var(--c-accent, #4ec9b0); }
+.llm-badge.template { background: var(--c-orangetint, #2e1a0a); color: var(--c-orange, #ce9178); }
+.refresh-btn {
+  margin-left: auto; background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888);
+  border-radius: 4px; padding: 0.22rem 0.65rem; font-size: 0.72rem; cursor: pointer;
+}
+.refresh-btn:hover:not(:disabled) { color: var(--c-text, #d4d4d4); border-color: var(--c-faint, #555); }
+.refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.refresh-status { font-size: 0.72rem; color: var(--c-orange, #ce9178); }
+
+/* Queue cards */
+.nba-card {
+  background: var(--c-bg2, #1a1a1a); border: 1px solid #242424; border-radius: 6px;
+  padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.45rem;
+  border-left: 3px solid var(--c-accentline, #2d5a48); margin-bottom: 0.75rem;
+}
+.nba-card.focus { border-left-color: var(--c-accent, #4ec9b0); }
+.card-top { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.nba-rank { color: var(--c-faint2, #444); font-size: 0.85rem; font-weight: 700; flex-shrink: 0; }
+.nba-client { color: var(--c-text, #d4d4d4); font-weight: 700; font-size: 0.95rem; text-decoration: none; cursor: pointer; }
+.nba-client:hover { color: var(--c-accent, #4ec9b0); }
+.nba-focus-star { color: var(--c-accent, #4ec9b0); font-size: 0.85rem; }
+.nba-score { margin-left: auto; font-size: 0.65rem; color: var(--c-faint, #555); background: #242424; border-radius: 8px; padding: 0.08rem 0.5rem; flex-shrink: 0; }
+.nba-reason { font-size: 0.82rem; color: var(--c-text3, #aaa); line-height: 1.5; }
+.reason-src { font-size: 0.6rem; color: var(--c-line3, #3a3a3a); margin-left: 0.3rem; }
+
+/* Facts */
+.facts-toggle { font-size: 0.7rem; color: var(--c-blue, #569cd6); cursor: pointer; user-select: none; width: fit-content; }
+.facts-toggle:hover { color: #7ec8e3; }
+.facts-list { display: none; flex-direction: column; gap: 0.25rem; padding: 0.4rem 0 0.1rem 0.4rem; border-top: 1px solid var(--c-linefaint, #222); margin-top: 0.2rem; }
+.facts-list.open { display: flex; }
+.fact-row { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.74rem; }
+.fact-badge {
+  padding: 0.05rem 0.4rem; border-radius: 8px; font-size: 0.58rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0;
+}
+.fb-signal { background: var(--c-bluetint, #0d1a2e); color: var(--c-blue, #569cd6); }
+.fb-news_pending { background: var(--c-postint, #0d2a1a); color: var(--c-accent, #4ec9b0); }
+.fb-outreach_draft { background: var(--c-orangetint, #2e1a0a); color: var(--c-orange, #ce9178); }
+.fb-outreach_followup { background: var(--c-redtint, #3a1010); color: var(--c-red, #f14c4c); }
+.fb-stale { background: var(--c-line, #2a2a2a); color: var(--c-muted, #888); }
+.fact-headline { color: var(--c-text4, #999); flex: 1; }
+.fact-link { color: var(--c-blue, #569cd6); text-decoration: none; font-size: 0.68rem; white-space: nowrap; }
+.fact-link:hover { text-decoration: underline; }
+
+/* Action row */
+.card-actions { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.2rem; }
+.action-btn {
+  background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text3, #aaa); border-radius: 4px;
+  padding: 0.22rem 0.7rem; font-size: 0.72rem; cursor: pointer; font-family: inherit;
+  transition: color 0.12s, border-color 0.12s;
+}
+.action-btn:hover:not(:disabled) { color: var(--c-text, #d4d4d4); border-color: var(--c-faint, #555); }
+.action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.action-btn.primary { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accentline, #2d5a48); color: var(--c-accent, #4ec9b0); }
+.action-btn.primary:hover:not(:disabled) { background: var(--c-accenttint2, #1f4a38); border-color: var(--c-accent, #4ec9b0); }
+.outreach-select {
+  background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text3, #aaa); border-radius: 4px;
+  padding: 0.18rem 0.4rem; font-size: 0.7rem; cursor: pointer; font-family: inherit;
+}
+.outreach-select:focus { outline: none; border-color: var(--c-accent, #4ec9b0); }
+.action-status { font-size: 0.7rem; color: var(--c-accent, #4ec9b0); }
+
+/* Empty / loading */
+.empty-state { text-align: center; padding: 3rem 1rem; color: var(--c-faint, #555); }
+.empty-state a { color: var(--c-accent, #4ec9b0); }
+.loading-text { color: var(--c-faint2, #444); font-size: 0.82rem; padding: 2rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <div class="toolbar">
+    <span class="toolbar-title">Who to contact today</span>
+    <span class="toolbar-meta" id="computedAt"></span>
+    <span class="llm-badge" id="llmBadge" style="display:none"></span>
+    <span class="refresh-status" id="refreshStatus"></span>
+    <button class="refresh-btn" id="refreshBtn">↻ Refresh</button>
+  </div>
+
+  <div class="content">
+    <div id="queueList"></div>
+    <div class="empty-state" id="emptyState" style="display:none">
+      Nothing actionable right now. Signals, source changes, and open outreach feed this queue.<br>
+      <a href="/clients">Open Clients →</a>
+    </div>
+    <div class="loading-text" id="loadingText">Loading…</div>
+  </div>
+</div>
+
+<script>
+initNavbar({ active: 'today' });
+
+const TOKEN_KEY = 'wk_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const H = () => {
+  const t = getToken();
+  return t ? { 'Authorization': `Bearer ${t}` } : {};
+};
+
+if (!getToken()) { window.location.href = '/'; }
+
+const ACTION_LABELS = { send_draft: '📤 Send draft', follow_up: '💬 Follow up', mail: '✉ Draft mail', research: '🔎 Research' };
+const FACT_LABELS = { signal: 'Signal', news_pending: 'New info', outreach_draft: 'Draft', outreach_followup: 'No reply', stale: 'Stale' };
+const OUTREACH_STATUSES = ['generated', 'sent', 'replied', 'meeting'];
+
+function esc(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function logClick(client, action, rank) {
+  fetch('/api/next-actions/click', {
+    method: 'POST', keepalive: true,
+    headers: { 'Content-Type': 'application/json', ...H() },
+    body: JSON.stringify({ client, action, rank, page: 'today' }),
+  }).catch(() => {});
+}
+
+function renderFact(f) {
+  const badgeCls = 'fb-' + (f.type || 'stale');
+  const label = FACT_LABELS[f.type] || f.type;
+  let headline = f.headline || '';
+  if (f.type === 'signal' && f.relevance) headline += ` (${f.relevance}/5)`;
+  if (f.type === 'outreach_followup' && f.days_since_sent != null) headline += ` — ${f.days_since_sent}d ago`;
+  if (f.type === 'news_pending' && Array.isArray(f.detail) && f.detail.length) headline += `: ${f.detail.join(', ')}`;
+  const links = [];
+  if (f.link) links.push(`<a class="fact-link" href="${esc(f.link)}">open →</a>`);
+  if (f.source_url) links.push(`<a class="fact-link" href="${esc(f.source_url)}" target="_blank" rel="noopener">↗ source</a>`);
+  return `<div class="fact-row">
+    <span class="fact-badge ${badgeCls}">${esc(label)}</span>
+    <span class="fact-headline">${esc(headline)}</span>
+    ${links.join(' ')}
+  </div>`;
+}
+
+function renderCard(e) {
+  const card = document.createElement('div');
+  card.className = 'nba-card' + (e.is_focus ? ' focus' : '');
+  const clientUrl = '/client/' + encodeURIComponent(e.client);
+  const outreachFact = (e.facts || []).find(f => f.type === 'outreach_draft' || f.type === 'outreach_followup');
+
+  card.innerHTML = `
+    <div class="card-top">
+      <span class="nba-rank">${e.rank}.</span>
+      <a class="nba-client" href="${esc(clientUrl)}" data-act="open">${esc(e.client)}</a>
+      ${e.is_focus ? '<span class="nba-focus-star" title="Focus client">★</span>' : ''}
+      <span class="nba-score" title="Priority score">${e.score}</span>
+    </div>
+    <div class="nba-reason">${esc(e.reason)}<span class="reason-src">${e.reason_source === 'llm' ? '' : '(auto)'}</span></div>
+    <span class="facts-toggle" data-toggle>▸ Why? ${(e.facts || []).length} fact${(e.facts || []).length === 1 ? '' : 's'}</span>
+    <div class="facts-list">${(e.facts || []).map(renderFact).join('')}</div>
+    <div class="card-actions">
+      <button class="action-btn primary" data-act="${esc(e.suggested_action)}" data-link="${esc(e.action_link)}">${ACTION_LABELS[e.suggested_action] || 'Open'}</button>
+      <button class="action-btn" data-act="open" data-link="${esc(clientUrl)}">Open client</button>
+      <button class="action-btn" data-act="research-now">Run research</button>
+      ${e.suggested_action !== 'mail' ? `<button class="action-btn" data-act="mail" data-link="/match?client=${encodeURIComponent(e.client)}">Draft mail</button>` : ''}
+      ${outreachFact && outreachFact.doc_ref ? `
+        <select class="outreach-select" data-doc="${esc(outreachFact.doc_ref)}" title="Update outreach status">
+          <option value="">Mail status…</option>
+          ${OUTREACH_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}
+        </select>` : ''}
+      <span class="action-status"></span>
+    </div>`;
+
+  card.querySelector('[data-toggle]').addEventListener('click', ev => {
+    const list = card.querySelector('.facts-list');
+    const open = list.classList.toggle('open');
+    ev.target.textContent = `${open ? '▾' : '▸'} Why? ${(e.facts || []).length} fact${(e.facts || []).length === 1 ? '' : 's'}`;
+  });
+
+  card.querySelectorAll('[data-act]').forEach(el => {
+    el.addEventListener('click', async ev => {
+      const act = el.dataset.act;
+      logClick(e.client, act, e.rank);
+      if (act === 'research-now') {
+        ev.preventDefault();
+        el.disabled = true;
+        const status = card.querySelector('.action-status');
+        try {
+          const r = await fetch(`/api/clients/${encodeURIComponent(e.client)}/trigger-research`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...H() }, body: '{}',
+          });
+          status.textContent = r.ok ? 'research queued ✓' : 'failed to queue';
+        } catch (_) { status.textContent = 'failed to queue'; }
+        return;
+      }
+      if (el.dataset.link) {
+        ev.preventDefault();
+        location.href = el.dataset.link;
+      }
+    });
+  });
+
+  const sel = card.querySelector('.outreach-select');
+  if (sel) {
+    sel.addEventListener('change', async () => {
+      if (!sel.value) return;
+      logClick(e.client, 'outreach_status:' + sel.value, e.rank);
+      const status = card.querySelector('.action-status');
+      try {
+        const r = await fetch(`/api/outreach/${encodeURIComponent(sel.dataset.doc)}/status`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...H() },
+          body: JSON.stringify({ status: sel.value }),
+        });
+        status.textContent = r.ok ? `mail → ${sel.value} ✓` : 'update failed';
+      } catch (_) { status.textContent = 'update failed'; }
+    });
+  }
+  return card;
+}
+
+function renderQueue(data) {
+  const list = document.getElementById('queueList');
+  list.innerHTML = '';
+  const queue = data.queue || [];
+  document.getElementById('loadingText').style.display = 'none';
+  document.getElementById('emptyState').style.display = queue.length ? 'none' : 'block';
+
+  const ts = data.computed_at ? new Date(data.computed_at) : null;
+  document.getElementById('computedAt').textContent = ts ? `computed ${ts.toLocaleString()}` : '';
+  const badge = document.getElementById('llmBadge');
+  badge.style.display = '';
+  badge.className = 'llm-badge ' + (data.llm_used ? 'llm' : 'template');
+  badge.textContent = data.llm_used ? 'AI reasons' : 'auto reasons';
+
+  queue.forEach(e => list.appendChild(renderCard(e)));
+}
+
+async function loadQueue() {
+  try {
+    const r = await fetch('/api/next-actions', { headers: H() });
+    if (r.status === 401) { window.location.href = '/'; return; }
+    if (!r.ok) { document.getElementById('loadingText').textContent = 'Failed to load queue.'; return; }
+    renderQueue(await r.json());
+  } catch (e) {
+    document.getElementById('loadingText').textContent = 'Error: ' + e.message;
+  }
+}
+
+document.getElementById('refreshBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('refreshBtn');
+  const status = document.getElementById('refreshStatus');
+  btn.disabled = true;
+  btn.textContent = 'Recomputing…';
+  status.textContent = '';
+  try {
+    const r = await fetch('/api/next-actions/refresh', { method: 'POST', headers: H() });
+    if (r.status === 429) {
+      status.textContent = 'rate-limited — try again in a minute';
+    } else if (r.ok) {
+      renderQueue(await r.json());
+    } else {
+      status.textContent = 'refresh failed';
+    }
+  } catch (_) { status.textContent = 'refresh failed'; }
+  btn.disabled = false;
+  btn.textContent = '↻ Refresh';
+});
+
+loadQueue();
+</script>
+</body>
+</html>

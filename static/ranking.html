@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Best chances — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; padding: 1.2rem 1.5rem; max-width: 900px; width: 100%; margin: 0 auto; }
+
+.toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.75rem 1rem; background: var(--c-bg2, #1a1a1a); border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.toolbar-title { font-size: 0.78rem; font-weight: 700; color: var(--c-accent, #4ec9b0); text-transform: uppercase; letter-spacing: 0.08em; }
+.toolbar-meta { font-size: 0.72rem; color: var(--c-faint, #555); }
+.scope-tabs { display: flex; gap: 0.35rem; margin-left: auto; }
+.scope-tab { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888); border-radius: 4px; padding: 0.22rem 0.7rem; font-size: 0.72rem; cursor: pointer; font-family: inherit; }
+.scope-tab:hover { color: var(--c-text, #d4d4d4); }
+.scope-tab.active { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+
+.rank-card { background: var(--c-bg2, #1a1a1a); border: 1px solid #242424; border-radius: 6px; padding: 0.7rem 1rem; display: flex; align-items: center; gap: 0.85rem; border-left: 3px solid var(--c-accentline, #2d5a48); margin-bottom: 0.6rem; }
+.rank-card.focus { border-left-color: var(--c-accent, #4ec9b0); }
+.rank-num { color: var(--c-faint2, #444); font-size: 1.1rem; font-weight: 700; min-width: 1.8rem; text-align: right; flex-shrink: 0; }
+.rank-body { flex: 1; min-width: 0; }
+.rank-client { color: var(--c-text, #d4d4d4); font-weight: 700; font-size: 0.95rem; text-decoration: none; }
+.rank-client:hover { color: var(--c-accent, #4ec9b0); }
+.rank-focus-star { color: var(--c-accent, #4ec9b0); font-size: 0.82rem; margin-left: 0.3rem; }
+.rank-reasons { font-size: 0.78rem; color: var(--c-text4, #999); margin-top: 0.15rem; }
+.rank-reasons .r { display: inline-block; }
+.rank-reasons .r::after { content: '·'; margin: 0 0.4rem; color: var(--c-faint2, #444); }
+.rank-reasons .r:last-child::after { content: ''; }
+.rank-score { flex-shrink: 0; text-align: center; }
+.rank-score .val { font-size: 1.15rem; font-weight: 700; color: var(--c-accent, #4ec9b0); }
+.rank-score .lbl { font-size: 0.58rem; color: var(--c-faint, #555); text-transform: uppercase; letter-spacing: 0.05em; }
+
+.empty-state { text-align: center; padding: 3rem 1rem; color: var(--c-faint, #555); }
+.empty-state a { color: var(--c-accent, #4ec9b0); }
+.loading-text { color: var(--c-faint2, #444); font-size: 0.82rem; padding: 2rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <div class="toolbar">
+    <span class="toolbar-title">Best chances to win</span>
+    <span class="toolbar-meta">ranked by buying intent, engagement &amp; fit — not neglect</span>
+    <div class="scope-tabs">
+      <button class="scope-tab active" data-scope="mine">My clients</button>
+      <button class="scope-tab" data-scope="focus">★ Focus</button>
+      <button class="scope-tab" data-scope="all">All</button>
+    </div>
+  </div>
+
+  <div class="content">
+    <div id="rankList"></div>
+    <div class="empty-state" id="emptyState" style="display:none">
+      No open opportunities in this view yet. Buying signals, replies, product matches and monitored changes feed this ranking.<br>
+      <a href="/clients">Open Clients →</a>
+    </div>
+    <div class="loading-text" id="loadingText">Loading…</div>
+  </div>
+</div>
+
+<script>
+initNavbar({ active: 'ranking' });
+
+const TOKEN_KEY = 'wk_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const H = () => { const t = getToken(); return t ? { 'Authorization': `Bearer ${t}` } : {}; };
+if (!getToken()) { window.location.href = '/'; }
+
+let _scope = 'mine';
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderList(items) {
+  const list = document.getElementById('rankList');
+  document.getElementById('loadingText').style.display = 'none';
+  document.getElementById('emptyState').style.display = items.length ? 'none' : 'block';
+  list.innerHTML = items.map(e => `
+    <div class="rank-card${e.is_focus ? ' focus' : ''}">
+      <div class="rank-num">${e.rank}</div>
+      <div class="rank-body">
+        <a class="rank-client" href="/client/${encodeURIComponent(e.client)}">${esc(e.client)}</a>
+        ${e.is_focus ? '<span class="rank-focus-star" title="Focus client">★</span>' : ''}
+        <div class="rank-reasons">${(e.reasons || []).map(r => `<span class="r">${esc(r)}</span>`).join('') || '<span class="r" style="color:var(--c-faint, #555)">momentum / fit</span>'}</div>
+      </div>
+      <div class="rank-score"><div class="val">${e.score}</div><div class="lbl">chance</div></div>
+    </div>`).join('');
+}
+
+async function load() {
+  document.getElementById('loadingText').style.display = 'block';
+  document.getElementById('rankList').innerHTML = '';
+  try {
+    const r = await fetch(`/api/ranking?scope=${_scope}&limit=100`, { headers: H() });
+    if (r.status === 401) { window.location.href = '/'; return; }
+    if (!r.ok) { document.getElementById('loadingText').textContent = 'Failed to load ranking.'; return; }
+    const d = await r.json();
+    renderList(d.items || []);
+  } catch (e) {
+    document.getElementById('loadingText').textContent = 'Error: ' + e.message;
+  }
+}
+
+document.querySelectorAll('.scope-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.scope-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    _scope = tab.dataset.scope;
+    load();
+  });
+});
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clients — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.btn { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text2, #ccc); border-radius: 4px; padding: 0.28rem 0.75rem; font-size: 0.78rem; cursor: pointer; transition: background 0.15s; }
+.btn:hover { background: var(--c-surface2, #2d2d2d); }
+.btn-teal { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.btn-teal:hover { background: var(--c-accenttint2, #1f4a38); }
+
+.toolbar { display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222); background: var(--c-bg2, #1a1a1a); flex-shrink: 0; flex-wrap: wrap; }
+.search-input { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.3rem 0.75rem; font-size: 0.82rem; width: 220px; }
+.search-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.filter-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-muted, #888); border-radius: 12px; padding: 0.18rem 0.65rem; font-size: 0.72rem; cursor: pointer; transition: all 0.15s; }
+.chip:hover { border-color: var(--c-faint, #555); color: var(--c-text2, #ccc); }
+.chip.active { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+
+.stats-bar { display: flex; gap: 0.5rem; padding: 0.5rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; background: var(--c-bg2, #1a1a1a); flex-wrap: wrap; }
+.stat-chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 5px; padding: 0.25rem 0.7rem; font-size: 0.76rem; }
+.stat-val { color: var(--c-bluehi, #9cdcfe); font-weight: 700; margin-right: 0.3rem; }
+.stat-label { color: var(--c-muted2, #666); }
+
+.content { flex: 1; overflow-y: auto; padding: 1.2rem 1.5rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.85rem; }
+
+.client-card { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 7px; padding: 1rem; cursor: pointer; transition: border-color 0.15s, background 0.15s; text-decoration: none; display: flex; flex-direction: column; gap: 0.5rem; }
+.client-card:hover { border-color: var(--c-accent, #4ec9b0); background: var(--c-surface2, #292929); }
+/* Card corner controls (focus star + delete) — kept clearly visible on the dark card. */
+.card-icon-btn { position: absolute; z-index: 1; background: rgba(0,0,0,0.28); border: 1px solid var(--c-line3, #3a3a3a); cursor: pointer; line-height: 1; padding: 0.14rem 0.28rem; border-radius: 6px; transition: background 0.12s, transform 0.12s, color 0.12s, border-color 0.12s; }
+.card-icon-btn:hover { background: var(--c-bg4, #141414); transform: scale(1.12); }
+.card-star { font-size: 1.2rem; }
+.card-star:hover { color: #f5c518 !important; border-color: #6b5e1a; }
+.card-del { font-size: 1rem; color: #b0b0b0; }
+.card-del:hover { color: #ff5a52 !important; border-color: #6b2020; }
+/* Name row reserves the top-right corner for the absolute star + delete buttons.
+   Status / "New info" moved to their own row below so they never clip under them. */
+.card-header { display: flex; align-items: flex-start; padding-right: 3.6rem; }
+.card-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin-top: 0.15rem; }
+.card-name { font-size: 0.92rem; font-weight: 700; color: var(--c-text, #d4d4d4); line-height: 1.3; }
+.status-badge { display: inline-block; font-size: 0.58rem; padding: 0.1rem 0.4rem; border-radius: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; margin-top: 0.1rem; }
+.badge-active   { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+.badge-prospect { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.badge-inactive { background: var(--c-line, #2a2a2a); color: var(--c-muted2, #666); }
+.badge-churned  { background: var(--c-redtint, #3a1a1a); color: var(--c-red, #f14c4c); }
+
+.card-meta { display: flex; flex-wrap: wrap; gap: 0.35rem 0.7rem; }
+.meta-item { font-size: 0.72rem; color: var(--c-muted2, #777); }
+.meta-item span { color: var(--c-text3, #aaa); }
+.card-industry { font-size: 0.71rem; background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); border-radius: 10px; padding: 0.1rem 0.5rem; display: inline-block; }
+.card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 0.25rem; }
+.card-stat { font-size: 0.7rem; color: var(--c-muted2, #666); }
+.card-stat strong { color: var(--c-muted, #888); }
+
+.empty { text-align: center; color: var(--c-faint, #555); padding: 3rem 1rem; font-size: 0.9rem; }
+
+/* Auth overlay */
+.auth-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.auth-box { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 8px; padding: 2rem; width: 320px; display: flex; flex-direction: column; gap: 0.85rem; }
+.auth-box h2 { font-size: 1rem; color: var(--c-text, #d4d4d4); margin-bottom: 0.25rem; }
+.auth-input { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.4rem 0.7rem; font-size: 0.85rem; width: 100%; }
+.auth-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.auth-btn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border: none; border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; font-weight: 700; cursor: pointer; width: 100%; }
+.auth-btn:hover { background: var(--c-accent2, #3ab89e); }
+.auth-error { color: var(--c-red, #f14c4c); font-size: 0.78rem; display: none; }
+
+/* Toast */
+.toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 6px; padding: 0.65rem 1rem; font-size: 0.82rem; color: var(--c-text2, #ccc); z-index: 200; display: none; max-width: 320px; animation: fadeIn 0.2s; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <input class="search-input" type="search" placeholder="Search clients…" id="searchInput" oninput="applyFilter()">
+    <div class="filter-chips" id="filterChips">
+      <span class="chip active" data-status="all"   onclick="setFilter(this,'all')">All</span>
+      <span class="chip"        data-status="active"   onclick="setFilter(this,'active')">Active</span>
+      <span class="chip"        data-status="prospect" onclick="setFilter(this,'prospect')">Prospect</span>
+      <span class="chip"        data-status="inactive" onclick="setFilter(this,'inactive')">Inactive</span>
+      <span class="chip"        data-status="churned"  onclick="setFilter(this,'churned')">Churned</span>
+      <span class="chip"        data-status="mine"     onclick="setFilter(this,'mine')" title="Clients you added or claimed">👤 My clients</span>
+      <span class="chip"        data-status="focus"    onclick="setFilter(this,'focus')" title="Your personal focus clients — monitored automatically by the background agents">★ My focus</span>
+      <span class="chip"        data-status="newinfo"  onclick="setFilter(this,'newinfo')" title="Monitored pages changed — research not yet run">● New info</span>
+    </div>
+    <select id="sortSelect" title="Sort clients" onchange="setSort(this.value)"
+            style="background:var(--c-surface, #252526);border:1px solid var(--c-line2, #333);color:var(--c-text2, #ccc);border-radius:5px;padding:0.3rem 0.5rem;font-size:0.78rem;cursor:pointer;margin-left:auto">
+      <option value="name">Sort: A–Z</option>
+      <option value="recent">Sort: Latest activity</option>
+      <option value="owner">Sort: Owner (A–Z)</option>
+    </select>
+  </div>
+
+  <!-- Stats bar -->
+  <div class="stats-bar" id="statsBar">
+    <span class="stat-chip"><span class="stat-val" id="statTotal">—</span><span class="stat-label">Total</span></span>
+    <span class="stat-chip"><span class="stat-val" id="statActive">—</span><span class="stat-label">Active</span></span>
+    <span class="stat-chip"><span class="stat-val" id="statProspect">—</span><span class="stat-label">Prospects</span></span>
+    <span class="stat-chip"><span class="stat-val" id="statMeetings">—</span><span class="stat-label">Total meetings</span></span>
+  </div>
+
+  <!-- Grid -->
+  <div class="content">
+    <div class="grid" id="clientGrid"></div>
+  </div>
+</div>
+
+<!-- Auth overlay -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-box">
+    <h2>Sign in</h2>
+    <input class="auth-input" id="authOrg"  type="text"     placeholder="Organisation slug" value="north">
+    <input class="auth-input" id="authUser" type="text"     placeholder="Username">
+    <input class="auth-input" id="authPass" type="password" placeholder="Password">
+    <div class="auth-error" id="authError"></div>
+    <button class="auth-btn" onclick="doLogin()">Sign in</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+let _token = localStorage.getItem('wk_token') || '';
+let _allClients = [];
+let _activeFilter = 'all';
+let _me = null;       // current user {id, username, display_name}
+let _members = [];    // org members for owner-assignment pickers
+let _sortMode = localStorage.getItem('wk_clients_sort') || 'name';
+
+function setSort(mode) {
+  _sortMode = mode;
+  try { localStorage.setItem('wk_clients_sort', mode); } catch (_) {}
+  applyFilter();
+}
+
+function sortClients(arr) {
+  const copy = arr.slice();
+  if (_sortMode === 'recent') {
+    copy.sort((a, b) => {
+      const ta = Date.parse(a.last_activity || safeMeta(a, 'last_activity', '')) || 0;
+      const tb = Date.parse(b.last_activity || safeMeta(b, 'last_activity', '')) || 0;
+      return tb - ta;
+    });
+  } else if (_sortMode === 'owner') {
+    // Group visually by seller: sort by owner name, then client name. Unowned sink to the end.
+    const ownerName = c => (c.owner_display_name || c.owner_username || '~~~').toLowerCase();
+    copy.sort((a, b) =>
+      ownerName(a).localeCompare(ownerName(b), undefined, { sensitivity: 'base' }) ||
+      (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+  } else {
+    copy.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+  }
+  return copy;
+}
+
+function authHeaders() {
+  return { 'Authorization': `Bearer ${_token}`, 'Content-Type': 'application/json' };
+}
+
+// A client is "mine" if I created it or I'm listed in its owner_ids.
+function isMine(c) {
+  if (!_me) return false;
+  if (c.created_by === _me.id) return true;
+  const owners = safeMeta(c, 'owner_ids', []);
+  return Array.isArray(owners) && owners.includes(_me.id);
+}
+
+// Focus is per-rep: a client is *my* focus if I'm in its focus_user_ids.
+// is_focus (the metadata flag) is the team-wide union, used for "team focus".
+function isMyFocus(c) {
+  if (!_me) return false;
+  const ids = safeMeta(c, 'focus_user_ids', []);
+  return Array.isArray(ids) && ids.includes(_me.id);
+}
+function isTeamFocus(c) {
+  return !!safeMeta(c, 'is_focus') && !isMyFocus(c);
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Industry values are stored snake_case — show them human-readably.
+function humanizeIndustry(s) {
+  return String(s || '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/\b\w/g, c => c.toUpperCase())
+    .replace(/\b(It|Ev|Ai|Bi|Hr|Erp|Crm|Saas|Iot|Sap)\b/g, m => m.toUpperCase());
+}
+
+function safeMeta(client, key, fallback='') {
+  const m = client.metadata;
+  if (!m) return fallback;
+  const obj = typeof m === 'string' ? JSON.parse(m) : m;
+  return obj[key] || fallback;
+}
+
+function statusBadge(status) {
+  const s = (status || 'prospect').toLowerCase();
+  const cls = { active:'badge-active', prospect:'badge-prospect', inactive:'badge-inactive', churned:'badge-churned' }[s] || 'badge-prospect';
+  return `<span class="status-badge ${cls}">${esc(s)}</span>`;
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+}
+
+// ---- Auth ----
+async function doLogin() {
+  const org  = document.getElementById('authOrg').value.trim();
+  const user = document.getElementById('authUser').value.trim();
+  const pass = document.getElementById('authPass').value;
+  const err  = document.getElementById('authError');
+  err.style.display = 'none';
+  const r = await fetch(`${API}/api/auth/login`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ org_slug: org, username: user, password: pass }),
+  });
+  const d = await r.json();
+  if (!r.ok) { err.textContent = d.detail || 'Login failed'; err.style.display = 'block'; return; }
+  _token = d.token;
+  localStorage.setItem('wk_token', _token);
+  document.getElementById('authOverlay').style.display = 'none';
+  window.navbarRefreshUser?.();
+  loadClients();
+}
+
+
+// ---- Load ----
+async function loadClients() {
+  // Identify the current user (for "my clients") + load org members (for owner pickers)
+  if (!_me) {
+    try {
+      const meR = await fetch(`${API}/api/auth/me`, { headers: authHeaders() });
+      if (meR.ok) { const md = await meR.json(); _me = md.user; }
+    } catch (_) {}
+    try {
+      const mR = await fetch(`${API}/api/org/members`, { headers: authHeaders() });
+      if (mR.ok) { _members = (await mR.json()).members || []; }
+    } catch (_) {}
+    const sortSel = document.getElementById('sortSelect');
+    if (sortSel) sortSel.value = _sortMode;
+  }
+  // Try authenticated endpoint first; fall back to unauthenticated list
+  let r = await fetch(`${API}/api/clients`, { headers: authHeaders() });
+  if (r.status === 401) { document.getElementById('authOverlay').style.display = 'flex'; return; }
+  const d = await r.json();
+  _allClients = (d.clients || []).filter(c => c.name !== 'Unknown');
+  updateStats();
+  applyFilter();
+}
+
+function updateStats() {
+  document.getElementById('statTotal').textContent   = _allClients.length;
+  document.getElementById('statActive').textContent  = _allClients.filter(c => safeMeta(c,'status') === 'active').length;
+  document.getElementById('statProspect').textContent= _allClients.filter(c => {
+    const s = safeMeta(c,'status','prospect'); return !s || s === 'prospect';
+  }).length;
+  const meetings = _allClients.reduce((acc,c) => acc + (c.session_count || 0), 0);
+  document.getElementById('statMeetings').textContent = meetings;
+}
+
+function setFilter(el, status) {
+  document.querySelectorAll('.chip[data-status]').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  _activeFilter = status;
+  applyFilter();
+}
+
+function applyFilter() {
+  const q = (document.getElementById('searchInput').value || '').toLowerCase();
+  const filtered = _allClients.filter(c => {
+    const status = safeMeta(c,'status','prospect').toLowerCase();
+    const matchStatus = _activeFilter === 'all'
+      || (_activeFilter === 'mine'    ? isMine(c)
+      :  _activeFilter === 'focus'   ? isMyFocus(c)
+      :  _activeFilter === 'newinfo' ? !!safeMeta(c,'news_pending')
+      :  status === _activeFilter);
+    const matchQ = !q || c.name.toLowerCase().includes(q) ||
+      safeMeta(c,'industry','').toLowerCase().includes(q) ||
+      safeMeta(c,'deal_stage','').toLowerCase().includes(q);
+    return matchStatus && matchQ;
+  });
+  renderGrid(sortClients(filtered));
+}
+
+function renderGrid(clients) {
+  const grid = document.getElementById('clientGrid');
+  if (!clients.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1">No clients match.</div>';
+    return;
+  }
+  grid.innerHTML = clients.map(c => {
+    const meta    = typeof c.metadata === 'string' ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+    const status  = (meta.status || 'prospect').toLowerCase();
+    const industry= meta.industry || '';
+    const stage   = meta.deal_stage || '';
+    const lastAct = formatDate(c.last_activity || meta.last_activity);
+    const meetings= c.session_count || 0;
+    const name    = esc(c.name);
+
+    // Per-rep focus: solid gold ★ = my focus; dim gold ☆ = a teammate's focus; grey ☆ = none.
+    const isFocus    = isMyFocus(c);
+    const teamFocus  = isTeamFocus(c);
+    const starColor  = isFocus ? '#f5c518' : (teamFocus ? '#c2a12e' : '#9a9a9a');
+    const starTitle  = isFocus ? 'Remove from my focus'
+                     : (teamFocus ? 'A teammate has this as focus — click to add to mine too'
+                                  : 'Mark as my focus');
+    return `
+    <div style="position:relative">
+      <button onclick="event.preventDefault();toggleFocus(this,'${esc(c.name)}')"
+              title="${starTitle}"
+              class="card-icon-btn card-star"
+              style="top:0.4rem;right:0.4rem;color:${starColor}">${isFocus ? '★' : '☆'}</button>
+      <button onclick="event.preventDefault();deleteClient('${esc(c.name)}')"
+              title="Delete client"
+              class="card-icon-btn card-del"
+              style="top:0.45rem;right:2.35rem">✕</button>
+      <a class="client-card" href="/client/${encodeURIComponent(c.name)}">
+        <div class="card-header">
+          <div class="card-name">${name}</div>
+        </div>
+        <div class="card-badges">
+          ${meta.news_pending ? '<span title="Monitored pages changed — open client to run research" style="color:var(--c-accent, #4ec9b0);font-size:0.66rem;font-weight:600;white-space:nowrap">● New info</span>' : ''}
+          ${statusBadge(status)}
+        </div>
+        ${industry ? `<div><span class="card-industry">${esc(humanizeIndustry(industry))}</span></div>` : ''}
+        <div class="card-meta">
+          ${stage    ? `<span class="meta-item">Stage: <span>${esc(stage)}</span></span>` : ''}
+          <span class="meta-item">Last active: <span>${lastAct}</span></span>
+        </div>
+        <div class="card-footer">
+          <span class="card-stat"><strong>${meetings}</strong> meeting${meetings!==1?'s':''}</span>
+          ${ownerChip(c, meta)}
+        </div>
+      </a>
+    </div>`;
+  }).join('');
+}
+
+// Owner chip in the card footer: "You" (teal) if mine, else the owner's name,
+// plus an "Assign" button that opens the ownership modal.
+function ownerChip(c, meta) {
+  const owner = c.owner_display_name || c.owner_username;
+  const label = isMine(c)
+    ? '<span class="card-stat" style="color:var(--c-accent, #4ec9b0);font-size:0.68rem" title="You own this client">👤 You</span>'
+    : (owner ? `<span class="card-stat" style="font-size:0.68rem" title="Owned by ${esc(owner)}">👤 ${esc(owner)}</span>` : '');
+  const assign = `<button onclick="event.preventDefault();openAssign('${esc(c.name).replace(/'/g, "\\'")}')"
+      title="Assign / share this client" style="background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-muted, #888);border-radius:3px;padding:0.05rem 0.4rem;font-size:0.64rem;cursor:pointer;margin-left:0.4rem">Assign</button>`;
+  return `<span style="display:flex;align-items:center;gap:0.2rem">${label}${assign}</span>`;
+}
+
+// ---- Assign-owner modal ----
+let _assignClient = null;
+function memberName(id) { const m = _members.find(x => x.id === id); return m ? (m.display_name || m.username) : ('user ' + id); }
+
+function openAssign(name) {
+  const c = _allClients.find(x => x.name === name);
+  if (!c) return;
+  _assignClient = c;
+  const meta = typeof c.metadata === 'string' ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+  const coOwners = Array.isArray(meta.owner_ids) ? meta.owner_ids : [];
+  const primary = c.owner_display_name || c.owner_username || (c.created_by ? memberName(c.created_by) : '—');
+  document.getElementById('assignTitle').textContent = `Ownership · ${name}`;
+  document.getElementById('assignPrimary').textContent = primary;
+  const opts = _members.map(m => `<option value="${m.id}">${esc(m.display_name || m.username)}</option>`).join('');
+  document.getElementById('assignSelect').innerHTML = opts;
+  document.getElementById('assignCoOwners').innerHTML = coOwners.length
+    ? coOwners.map(id => `<span style="display:inline-flex;align-items:center;gap:0.3rem;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);border-radius:10px;padding:0.1rem 0.5rem;font-size:0.72rem;color:var(--c-text2, #ccc);margin:0 0.3rem 0.3rem 0">${esc(memberName(id))}
+        <span onclick="assignAction('remove_co_owner', ${id})" style="cursor:pointer;color:var(--c-redhi, #f48771)">✕</span></span>`).join('')
+    : '<span style="color:var(--c-faint, #555);font-size:0.74rem">No co-owners</span>';
+  document.getElementById('assignOverlay').style.display = 'flex';
+}
+function closeAssign() { document.getElementById('assignOverlay').style.display = 'none'; }
+
+async function assignAction(action, userId) {
+  if (!_assignClient) return;
+  const uid = userId != null ? userId : parseInt(document.getElementById('assignSelect').value, 10);
+  if (!uid) return;
+  const r = await fetch(`${API}/api/clients/${encodeURIComponent(_assignClient.name)}/owner`, {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({ action, user_id: uid }),
+  });
+  if (!r.ok) { showToast('Assignment failed'); return; }
+  showToast(action === 'set_primary' ? `Primary owner set to ${memberName(uid)}`
+          : action === 'add_co_owner' ? `Shared with ${memberName(uid)}`
+          : `Removed ${memberName(uid)}`);
+  closeAssign();
+  await loadClients();          // refresh owner data from server
+  openAssign(_assignClient.name); // reopen to show updated state
+}
+
+// ---- Focus toggle (per-rep) ----
+async function toggleFocus(btn, name) {
+  const c = _allClients.find(x => x.name === name);
+  const newVal = !(c && isMyFocus(c));
+  btn.textContent = newVal ? '★' : (c && isTeamFocus(c) ? '☆' : '☆');
+  btn.style.color = newVal ? '#f5c518' : (c && isTeamFocus(c) ? '#c2a12e' : '#9a9a9a');
+  btn.title = newVal ? 'Remove from my focus' : 'Mark as my focus';
+  // update local cache (focus_user_ids + derived is_focus) so re-renders keep state
+  if (c && _me) {
+    if (typeof c.metadata === 'string') c.metadata = JSON.parse(c.metadata || '{}');
+    let ids = Array.isArray(c.metadata.focus_user_ids) ? c.metadata.focus_user_ids.slice() : [];
+    ids = newVal ? [...new Set([...ids, _me.id])] : ids.filter(id => id !== _me.id);
+    c.metadata.focus_user_ids = ids;
+    c.metadata.is_focus = ids.length > 0;
+  }
+  await fetch(`${API}/api/clients/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_focus: newVal }),
+  });
+}
+
+// ---- CSV import ----
+async function deleteClient(name) {
+  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  const r = await fetch(`${API}/api/clients?name=${encodeURIComponent(name)}`, {
+    method: 'DELETE', headers: authHeaders(),
+  });
+  if (!r.ok) { showToast('Delete failed'); return; }
+  showToast(`"${name}" deleted`);
+  loadClients();
+}
+
+async function cancelAllResearch() {
+  if (!confirm('Cancel all running research tasks?')) return;
+  const r = await fetch(`${API}/api/agents/runs/cancel-all-running`, {
+    method: 'POST', headers: authHeaders(),
+  });
+  const d = await r.json();
+  if (!r.ok) { showToast('Cancel failed'); return; }
+  showToast(`Cancelled ${d.cancelled} running agent run${d.cancelled !== 1 ? 's' : ''}`);
+}
+
+async function handleCsvImport(evt) {
+  const file = evt.target.files[0];
+  evt.target.value = '';
+  if (!file) return;
+
+  const raw = await file.text();
+  const text = raw.replace(/^﻿/, ''); // strip BOM
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+
+  // Auto-detect delimiter — German Excel exports use ';' (comma is the decimal
+  // separator here), so accept both. Pick whichever the header line has more of.
+  const headerLine = lines[0] || '';
+  const DELIM = (headerLine.split(';').length > headerLine.split(',').length) ? ';' : ',';
+
+  // Auto-detect format: if first line looks like a header with contact columns → rich mode
+  const CONTACT_HEADER_COLS = ['email', 'contact', 'contact_name', 'name', 'first_name'];
+  const firstLineCols = headerLine.split(DELIM).map(h => h.trim().toLowerCase());
+  const isRichMode = firstLineCols.some(h => CONTACT_HEADER_COLS.includes(h));
+
+  if (isRichMode) {
+    await _handleRichCsvImport(file);  // server re-parses & sniffs the delimiter itself
+    return;
+  }
+
+  // ── Plain company-name list (existing behaviour, unchanged) ──────────────
+  const names = lines
+    .map(line => line.split(DELIM)[0].trim().replace(/^["']|["']$/g, ''))
+    .filter(n => n && !/^(name|client|company|organization|org|firma|kunde)$/i.test(n));
+
+  if (!names.length) { showToast('No client names found in CSV'); return; }
+  if (names.length > 200) { showToast('CSV limited to 200 names per import'); return; }
+
+  const overlay   = document.getElementById('importOverlay');
+  const progressEl = document.getElementById('importProgress');
+  const barEl     = document.getElementById('importBar');
+  const logEl     = document.getElementById('importLog');
+  const closeBtn  = document.getElementById('importCloseBtn');
+
+  overlay.style.display  = 'flex';
+  logEl.textContent      = '';
+  closeBtn.style.display = 'none';
+
+  function appendLog(msg) {
+    logEl.textContent += msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // Phase 1 — create all clients immediately (no research triggered) so they all appear in the list
+  progressEl.textContent = `Creating ${names.length} client${names.length !== 1 ? 's' : ''}…`;
+  appendLog('── Phase 1: adding all clients ──');
+  const created = [];
+  for (const name of names) {
+    try {
+      const res = await fetch(`${API}/api/clients`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ name, skip_research: true }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        appendLog(`✗ ${name}: ${d.detail || 'create failed'}`);
+      } else {
+        appendLog(`✓ ${name}`);
+        created.push(name);
+      }
+    } catch (e) {
+      appendLog(`✗ ${name}: ${e.message}`);
+    }
+  }
+  loadClients(); // refresh list — all clients visible now
+
+  // Phase 2 — hand research off to the SERVER. The old loop polled each run in
+  // this browser tab (up to 8 min × N clients); closing the tab dropped every
+  // client that hadn't been reached yet. Now the server queues them all and
+  // researches in the background, so the tab can be closed immediately.
+  appendLog(`\n── Phase 2: queueing research for ${created.length} client${created.length !== 1 ? 's' : ''} on the server ──`);
+  progressEl.textContent = 'Queueing research on the server…';
+  try {
+    const res = await fetch(`${API}/api/clients/bulk-research`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ names: created, only_missing: true }),
+    });
+    const d = await res.json();
+    if (res.ok) {
+      appendLog(`✓ Queued ${d.queued} client${d.queued !== 1 ? 's' : ''} for research.`);
+      appendLog('  Research now runs in the background on the server — you can safely close this window.');
+      appendLog('  Reports appear on each client page as they finish (a few minutes each).');
+      progressEl.textContent = `Queued ${d.queued} client${d.queued !== 1 ? 's' : ''} for background research`;
+    } else {
+      appendLog(`✗ Failed to queue research: ${d.detail || 'error'}`);
+      progressEl.textContent = 'Clients created, but research queueing failed';
+    }
+  } catch (e) {
+    appendLog(`✗ ${e.message}`);
+    progressEl.textContent = 'Clients created, but research queueing failed';
+  }
+
+  barEl.style.width      = '100%';
+  appendLog('\n✅ Import complete. Research continues on the server.');
+  closeBtn.style.display = 'block';
+  loadClients();
+}
+
+// ── Rich CSV import (companies + contacts) ────────────────────────────────
+async function _handleRichCsvImport(file) {
+  const overlay    = document.getElementById('importOverlay');
+  const progressEl = document.getElementById('importProgress');
+  const barEl      = document.getElementById('importBar');
+  const logEl      = document.getElementById('importLog');
+  const closeBtn   = document.getElementById('importCloseBtn');
+
+  overlay.style.display  = 'flex';
+  logEl.textContent      = '';
+  closeBtn.style.display = 'none';
+  progressEl.textContent = 'Importing…';
+  barEl.style.width      = '30%';
+
+  function appendLog(msg) {
+    logEl.textContent += msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  appendLog('── Importing companies + contacts ──');
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const r = await fetch(`${API}/api/clients/bulk-import-csv`, {
+      method: 'POST',
+      headers: { 'Authorization': _token ? 'Bearer ' + _token : '' },
+      body: form,
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      const detail = d?.detail;
+      appendLog('✗ ' + (typeof detail === 'string' ? detail : JSON.stringify(detail) || r.statusText));
+      closeBtn.style.display = 'block';
+      return;
+    }
+
+    // Show how the server interpreted the columns — surfaces header mistakes early.
+    const dc = d.detected_columns || {};
+    appendLog(`Columns read → company: ${dc.company || '⚠ none'} · contact: ${dc.contact || '—'} · email: ${dc.email || '—'} · role: ${dc.role || '—'}`);
+    if (!dc.company || dc.company === '(first column)') {
+      appendLog('⚠ No recognized "company" header — using the first column. Add a "company" header for reliable import.');
+    }
+    appendLog('');
+
+    for (const name of (d.clients_created || [])) {
+      appendLog(`✔ ${name} — new client`);
+    }
+    for (const m of (d.clients_matched || [])) {
+      appendLog(`~ ${m.raw} — matched "${m.canonical}"`);
+    }
+    if (d.contacts_created) appendLog(`  + ${d.contacts_created} new contact${d.contacts_created !== 1 ? 's' : ''} added`);
+    if (d.contacts_updated) appendLog(`  ~ ${d.contacts_updated} existing contact${d.contacts_updated !== 1 ? 's' : ''} updated`);
+    for (const e of (d.errors || [])) appendLog(`✗ ${e}`);
+
+    const nc = (d.clients_created || []).length;
+    const nm = (d.clients_matched || []).length;
+    appendLog(`\n── ${d.rows_processed} rows · ${nc} client${nc !== 1 ? 's' : ''} created · ${nm} matched · ${d.contacts_created} contact${d.contacts_created !== 1 ? 's' : ''} added · ${d.contacts_updated} updated ──`);
+
+    barEl.style.width      = '100%';
+    progressEl.textContent = `Done — ${nc} new client${nc !== 1 ? 's' : ''}, ${d.contacts_created + d.contacts_updated} contacts`;
+    loadClients();
+  } catch (e) {
+    appendLog('✗ ' + (e.message || 'Import failed'));
+  }
+  closeBtn.style.display = 'block';
+}
+
+async function downloadCsvTemplate() {
+  const r = await fetch(`${API}/api/clients/csv-template`, { headers: authHeaders() });
+  if (!r.ok) { showToast('Template download failed'); return; }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'buzzowl-clients-template.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ---- New client modal (with owner assignment) ----
+function newClient() {
+  document.getElementById('ncName').value = '';
+  // Primary owner dropdown defaults to me; co-owner checkboxes for the rest.
+  const ownerOpts = _members.map(m =>
+    `<option value="${m.id}" ${_me && m.id === _me.id ? 'selected' : ''}>${esc(m.display_name || m.username)}${_me && m.id === _me.id ? ' (you)' : ''}</option>`).join('');
+  document.getElementById('ncOwner').innerHTML = ownerOpts || '<option value="">(you)</option>';
+  document.getElementById('ncCoOwners').innerHTML = _members
+    .filter(m => !_me || m.id !== _me.id)
+    .map(m => `<label style="display:inline-flex;align-items:center;gap:0.3rem;margin:0 0.6rem 0.4rem 0;font-size:0.78rem;color:var(--c-text2, #ccc);cursor:pointer">
+        <input type="checkbox" class="nc-co" value="${m.id}"> ${esc(m.display_name || m.username)}</label>`).join('')
+    || '<span style="color:var(--c-faint, #555);font-size:0.74rem">No other members</span>';
+  document.getElementById('newClientOverlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('ncName').focus(), 50);
+}
+function closeNewClient() { document.getElementById('newClientOverlay').style.display = 'none'; }
+
+async function submitNewClient() {
+  const name = document.getElementById('ncName').value.trim();
+  if (!name) { showToast('Enter a client name'); return; }
+  const owner_id = parseInt(document.getElementById('ncOwner').value, 10) || (_me && _me.id) || null;
+  const co_owner_ids = [...document.querySelectorAll('.nc-co:checked')].map(cb => parseInt(cb.value, 10));
+  const r = await fetch(`${API}/api/clients`, {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({ name, owner_id, co_owner_ids }),
+  });
+  const d = await r.json();
+  if (!r.ok) { showToast('Error: ' + (d.detail || 'failed')); return; }
+  closeNewClient();
+  showToast(`✓ "${name}" added — researching in the background (~a few min). Refresh to see the brief, product fit & open positions.`);
+  loadClients();
+}
+
+function showToast(msg, ms=3500) {
+  const t = document.getElementById('toast');
+  t.innerHTML = msg;
+  t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none'; }, ms);
+}
+
+// ---- Init ----
+window.addEventListener('DOMContentLoaded', () => {
+  initNavbar({ active: 'clients', actions: [
+    { label: '+ New Client', id: 'newClientBtn', teal: true },
+    { label: '⬆ Import CSV', id: 'importCsvBtn' },
+    { label: '✗ Cancel Research', id: 'cancelResearchBtn' },
+  ]});
+  document.getElementById('newClientBtn')?.addEventListener('click', () => newClient());
+  document.getElementById('importCsvBtn')?.addEventListener('click', () => { document.getElementById('csvHelpOverlay').style.display = 'flex'; });
+  document.getElementById('cancelResearchBtn')?.addEventListener('click', () => cancelAllResearch());
+  document.getElementById('csvFileInput')?.addEventListener('change', handleCsvImport);
+
+  const stored = localStorage.getItem('wk_token');
+  if (stored) {
+    _token = stored;
+    document.getElementById('authOverlay').style.display = 'none';
+    // Open the new-client modal straight away when arriving from the Home CTA.
+    loadClients().then(() => {
+      const params = new URLSearchParams(location.search);
+      if (params.get('new') === '1') newClient();
+      // Deep-link a filter, e.g. /clients?filter=mine from the Home "My clients" heading.
+      const f = params.get('filter');
+      if (f) { const chip = document.querySelector(`.chip[data-status="${f}"]`); if (chip) setFilter(chip, f); }
+    });
+  }
+  // Pre-fill username from previous session
+  const prev = localStorage.getItem('wk_user');
+  if (prev) document.getElementById('authUser').value = prev;
+});
+</script>
+
+<input type="file" id="csvFileInput" accept=".csv" style="display:none">
+
+<!-- New client modal -->
+<div id="newClientOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:500;align-items:center;justify-content:center;">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(460px,92vw);padding:1.5rem;display:flex;flex-direction:column;gap:0.8rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:0.95rem;font-weight:700;color:var(--c-text, #d4d4d4)">New client</div>
+      <button onclick="closeNewClient()" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:1.1rem">✕</button>
+    </div>
+    <label style="font-size:0.72rem;color:var(--c-muted, #888)">Company name
+      <input id="ncName" placeholder="e.g. ACME GmbH" style="width:100%;box-sizing:border-box;margin-top:0.25rem;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:5px;padding:0.5rem 0.7rem;font-size:0.85rem">
+    </label>
+    <label style="font-size:0.72rem;color:var(--c-muted, #888)">Owner (whose client this is)
+      <select id="ncOwner" style="width:100%;box-sizing:border-box;margin-top:0.25rem;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:5px;padding:0.45rem 0.6rem;font-size:0.84rem"></select>
+    </label>
+    <div>
+      <div style="font-size:0.72rem;color:var(--c-muted, #888);margin-bottom:0.35rem">Also assign to (shared owners)</div>
+      <div id="ncCoOwners"></div>
+    </div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+      <button class="btn" onclick="closeNewClient()">Cancel</button>
+      <button class="btn btn-teal" onclick="submitNewClient()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Assign / share ownership modal -->
+<div id="assignOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:500;align-items:center;justify-content:center;">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(460px,92vw);padding:1.5rem;display:flex;flex-direction:column;gap:0.8rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div id="assignTitle" style="font-size:0.95rem;font-weight:700;color:var(--c-text, #d4d4d4)">Ownership</div>
+      <button onclick="closeAssign()" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:1.1rem">✕</button>
+    </div>
+    <div style="font-size:0.78rem;color:var(--c-text3, #aaa)">Primary owner: <b id="assignPrimary" style="color:var(--c-accent, #4ec9b0)">—</b></div>
+    <div>
+      <div style="font-size:0.72rem;color:var(--c-muted, #888);margin-bottom:0.3rem">Shared owners</div>
+      <div id="assignCoOwners"></div>
+    </div>
+    <label style="font-size:0.72rem;color:var(--c-muted, #888)">Member
+      <select id="assignSelect" style="width:100%;box-sizing:border-box;margin-top:0.25rem;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:5px;padding:0.45rem 0.6rem;font-size:0.84rem"></select>
+    </label>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn" onclick="assignAction('add_co_owner')" title="Share this client (keep current owner)">+ Share with</button>
+      <button class="btn btn-teal" onclick="assignAction('set_primary')" title="Make this member the owner, as if they added it">Make owner</button>
+    </div>
+  </div>
+</div>
+
+<!-- CSV import help / format overlay (shown before picking a file) -->
+<div id="csvHelpOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:500;align-items:center;justify-content:center;">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(560px,94vw);padding:1.5rem;display:flex;flex-direction:column;gap:0.9rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:0.95rem;font-weight:700;color:var(--c-text, #d4d4d4)">Import clients from CSV</div>
+      <button onclick="document.getElementById('csvHelpOverlay').style.display='none'" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:1.1rem">✕</button>
+    </div>
+    <div style="font-size:0.78rem;color:var(--c-text3, #aaa);line-height:1.6">
+      Your CSV needs a <b>header row</b>. Recognised columns (case-insensitive, aliases accepted):
+      <table style="width:100%;border-collapse:collapse;font-size:0.74rem;margin-top:0.5rem">
+        <tr style="color:var(--c-muted2, #666);text-align:left"><th style="padding:0.2rem 0.4rem">Column</th><th style="padding:0.2rem 0.4rem">Accepted headers</th><th style="padding:0.2rem 0.4rem">Required?</th></tr>
+        <tr><td style="padding:0.2rem 0.4rem"><code style="color:var(--c-bluehi, #9cdcfe)">company</code></td><td style="padding:0.2rem 0.4rem">company, company_name, client, organisation</td><td style="padding:0.2rem 0.4rem;color:var(--c-orange, #ce9178)">required</td></tr>
+        <tr><td style="padding:0.2rem 0.4rem"><code style="color:var(--c-bluehi, #9cdcfe)">contact_name</code></td><td style="padding:0.2rem 0.4rem">contact_name, contact, name, first_name</td><td style="padding:0.2rem 0.4rem;color:var(--c-muted2, #666)">optional</td></tr>
+        <tr><td style="padding:0.2rem 0.4rem"><code style="color:var(--c-bluehi, #9cdcfe)">email</code></td><td style="padding:0.2rem 0.4rem">email</td><td style="padding:0.2rem 0.4rem;color:var(--c-muted2, #666)">optional</td></tr>
+        <tr><td style="padding:0.2rem 0.4rem"><code style="color:var(--c-bluehi, #9cdcfe)">role</code></td><td style="padding:0.2rem 0.4rem">role, title, job_title</td><td style="padding:0.2rem 0.4rem;color:var(--c-muted2, #666)">optional</td></tr>
+      </table>
+      <div style="margin-top:0.5rem;color:var(--c-muted, #888)">One row per contact — repeat the same <code style="color:var(--c-bluehi, #9cdcfe)">company</code> across rows to add several contacts. A row with only a company (no contact) just creates the client.</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+      <button class="btn" onclick="downloadCsvTemplate()" style="background:var(--c-bluetint, #1a2e4a);border:1px solid var(--c-blue, #569cd6);color:var(--c-bluehi, #9cdcfe)">⬇ Download template</button>
+      <button class="btn btn-teal" onclick="document.getElementById('csvHelpOverlay').style.display='none';document.getElementById('csvFileInput').click()">Choose CSV file…</button>
+    </div>
+  </div>
+</div>
+
+<!-- CSV import progress overlay -->
+<div id="importOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:500;align-items:center;justify-content:center;">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(480px,92vw);padding:1.5rem;display:flex;flex-direction:column;gap:0.9rem;">
+    <div style="font-size:0.92rem;font-weight:700;color:var(--c-text, #d4d4d4)">Importing Clients</div>
+    <div style="font-size:0.7rem;color:var(--c-faint, #555);line-height:1.5">
+      Plain list: one company name per line.<br>
+      With contacts: add a header row — <code style="color:var(--c-bluehi, #9cdcfe)">company, contact_name, email, role</code> — same company can repeat for multiple contacts.
+    </div>
+    <div id="importProgress" style="font-size:0.82rem;color:var(--c-bluehi, #9cdcfe);min-height:1.2em;"></div>
+    <div style="background:var(--c-bg2, #1a1a1a);border-radius:4px;height:6px;overflow:hidden;">
+      <div id="importBar" style="background:var(--c-accent, #4ec9b0);height:100%;width:0%;transition:width 0.3s;"></div>
+    </div>
+    <div id="importLog" style="font-size:0.73rem;color:var(--c-muted2, #666);max-height:180px;overflow-y:auto;font-family:var(--c-font-mono, 'Menlo','Consolas',monospace);white-space:pre-wrap;background:var(--c-bg2, #1a1a1a);border-radius:4px;padding:0.5rem 0.75rem;line-height:1.5;"></div>
+    <button class="btn btn-teal" id="importCloseBtn" style="display:none;align-self:flex-end;"
+            onclick="document.getElementById('importOverlay').style.display='none';">Done</button>
+  </div>
+</div>
+
+</body>
+</html>

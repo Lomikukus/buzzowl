@@ -1,0 +1,229 @@
+# Buzzowl — plain `docker compose up -d` starts the whole app:
+#   db, searxng, server, camofox, browser-service, agent-pi
+#
+# Optional profiles:
+#   --profile debug   → pgweb DB browser UI (no auth — must never run by default)
+#   --profile tunnel  → cloudflared (crash-loops unless CLOUDFLARE_TUNNEL_TOKEN is set)
+#
+# Prod note (deploy/SERVER_SETUP.md): the old `docker compose --profile research up -d`
+# keeps working — the research profile no longer exists, so the flag is a no-op and the
+# default services start anyway. pgweb now additionally needs `--profile debug`.
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: buzzowl_searxng
+    restart: unless-stopped
+    mem_limit: 288m
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      # SearXNG reads server.secret_key from the SEARXNG_SECRET env var and refuses
+      # to boot on its built-in "ultrasecretkey" placeholder, so compose always
+      # supplies a value. The dev fallback is acceptable for this internal-only
+      # container (no host port); set a real secret in .env: openssl rand -hex 32
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-buzzowl-dev-secret-change-me}
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: buzzowl_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: whisper
+      POSTGRES_PASSWORD: whisper
+      POSTGRES_DB: whisper
+    # 5432 is intentionally NOT published to the host — all services reach the DB
+    # over the compose network. Ad-hoc SQL: docker compose exec db psql -U whisper
+    # Host-dev flow (python server.py on the host with db_url localhost:5432):
+    # uncomment the ports block below. (An env-var toggle isn't possible here —
+    # with an empty host part the mapping ":5432" still publishes to a random port.)
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    # Reserve memory so a browser burst can't starve Postgres (the critical path).
+    mem_reservation: 320m
+    mem_limit: 700m
+    volumes:
+      - buzzowl_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U whisper -d whisper"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # DB browser UI — has NO auth, so it only runs with an explicit opt-in:
+  #   docker compose --profile debug up -d pgweb
+  # Its port is not published by default either; uncomment the mapping below
+  # (ideally loopback-only) when you actually need it from the host.
+  pgweb:
+    profiles: ["debug"]
+    image: sosedoff/pgweb:latest
+    container_name: buzzowl_pgweb
+    restart: unless-stopped
+    # ports:
+    #   - "127.0.0.1:5433:8081"
+    mem_limit: 96m
+    environment:
+      - DATABASE_URL=postgres://whisper:whisper@db:5432/whisper?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+  server:
+    build:
+      context: .
+      args:
+        # 1 = bake faster-whisper into the image for in-Docker live
+        # transcription (then also set TRANSCRIPTION_MODE=local in .env)
+        INSTALL_TRANSCRIBE: "${INSTALL_TRANSCRIBE:-0}"
+    container_name: buzzowl_server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data:rw
+      - ./static:/app/static:ro
+    environment:
+      - DATABASE_URL=postgresql://whisper:whisper@db:5432/whisper
+      - AGENT_PI_URL=http://agent-pi:8001
+      - SEARXNG_URL=http://searxng:8080
+      - SERVER_URL=http://server:8000
+      - BROWSER_SERVICE_URL=http://browser-service:3000
+      - CAMOFOX_URL=http://camofox:9377
+      - TRANSCRIPTION_MODE=${TRANSCRIPTION_MODE:-app}
+      - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
+      - HFTOKEN=${HFTOKEN:-}
+      - TELEGRAMBOT=${TELEGRAMBOT:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # New name first; OPENROUTE is the legacy key still present in old .env files.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-${OPENROUTE:-}}
+      - EMBED_BACKEND=${EMBED_BACKEND:-openai}
+      - EMBED_URL=${EMBED_URL:-https://openrouter.ai/api}
+      - EMBED_MODEL=${EMBED_MODEL:-openai/text-embedding-3-small}
+      - EMBED_API_KEY=${EMBED_API_KEY:-${OPENROUTER_API_KEY:-${OPENROUTE:-}}}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Buzzowl}
+      # First-boot admin bootstrap (server-side support lands separately) — set in .env.
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+    restart: unless-stopped
+    # Reserve memory so the API server stays responsive during a browser burst.
+    mem_reservation: 320m
+    mem_limit: 700m
+
+  # Camofox cannot be built straight from its Git URL: the upstream Dockerfile
+  # bind-mounts pre-downloaded browser binaries from dist/ (gitignored), which
+  # `make fetch` downloads first. One-time manual build (auto-detects the host
+  # arch; arm64 Mac → aarch64, Linux → x86_64):
+  #   git clone https://github.com/jo-inc/camofox-browser ./camofox-browser
+  #   cd camofox-browser && make build      # or explicitly: make build-arm64 / build-x86
+  # → produces the image tag referenced below. On x86_64 hosts set
+  #   CAMOFOX_ARCH=x86_64 in .env so compose picks the matching tag.
+  camofox:
+    image: camofox-browser:135.0.1-${CAMOFOX_ARCH:-aarch64}
+    # build:                          # would fail today: dist/ artifacts are not in the repo
+    #   context: https://github.com/jo-inc/camofox-browser.git
+    #   args:
+    #     ARCH: ${CAMOFOX_ARCH:-aarch64}
+    container_name: buzzowl_camofox
+    ports:
+      - "9377:9377"
+    restart: unless-stopped
+    # Cap the biggest memory hog so it can't take the whole box, but leave enough
+    # headroom (peak ~1.0 GB) that it keeps rendering pages. OOM-kills a tab, not the DB.
+    mem_limit: 1200m
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9377/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  browser-service:
+    build: ./browser_service
+    container_name: buzzowl_browser_service
+    ports:
+      - "3001:3000"
+    shm_size: '1gb'
+    restart: unless-stopped
+    mem_limit: 640m
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  agent-pi:
+    build: ./agent_service_ts
+    container_name: buzzowl_agent_pi
+    restart: unless-stopped
+    mem_limit: 448m
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      # Subscription-OAuth credential store (chmod 600 JSON) — survives rebuilds
+      - pi_oauth:/app/data
+    environment:
+      - DATABASE_URL=postgresql://whisper:whisper@db:5432/whisper
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OAUTH_STORE_PATH=/app/data/oauth.json
+      - EMBED_BACKEND=${EMBED_BACKEND:-openai}
+      - EMBED_URL=${EMBED_URL:-https://openrouter.ai/api}
+      - EMBED_MODEL=${EMBED_MODEL:-openai/text-embedding-3-small}
+      - EMBED_DIM=${EMBED_DIM:-768}
+      - EMBED_API_KEY=${EMBED_API_KEY:-${OPENROUTER_API_KEY:-${OPENROUTE:-}}}
+      # New name first; OPENROUTE is the legacy key still present in old .env files.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-${OPENROUTE:-}}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEFAULT_BRAIN=openrouter
+      - DEFAULT_MODEL=deepseek/deepseek-v4-flash
+      - SEARXNG_URL=http://searxng:8080
+      - BROWSER_SERVICE_URL=http://browser-service:3000
+      - CAMOFOX_URL=http://camofox:9377
+      - AGENT_SERVICE_PORT=8001
+      - AGENT_MAX_CONCURRENT=${AGENT_MAX_CONCURRENT:-2}
+      - MAIN_SERVER_URL=http://server:8000
+      - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # No hard dependency on camofox/browser-service: their URLs are env-configured
+    # and fetch_page degrades to plain HTTP fetch when the browser stack is down
+    # or omitted via a compose override — agent-pi must still start.
+    depends_on:
+      db:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+
+  # Cloudflare tunnel — needs CLOUDFLARE_TUNNEL_TOKEN, crash-loops without it,
+  # so it only runs with an explicit opt-in: docker compose --profile tunnel up -d
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    container_name: buzzowl_cloudflared
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    restart: unless-stopped
+    mem_limit: 96m
+    depends_on:
+      server:
+        condition: service_started
+
+volumes:
+  buzzowl_pgdata:
+    driver: local
+  pi_oauth:
+    driver: local

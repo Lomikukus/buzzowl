@@ -1,0 +1,28 @@
+{
+  "name": "whisper-agent-pi",
+  "version": "0.1.0",
+  "description": "Buzzowl agent service — Pi/TypeScript candidate (Phase 12.5 benchmark)",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "latest",
+    "@earendil-works/pi-ai": "latest",
+    "@sinclair/typebox": "^0.34",
+    "fastify": "^5",
+    "js-yaml": "^4.1.0",
+    "pg": "^8",
+    "uuid": "^11"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4",
+    "@types/node": "^22",
+    "@types/pg": "^8",
+    "@types/uuid": "^10",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}

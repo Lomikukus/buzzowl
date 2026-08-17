@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Products — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<script src="/static/components/mailtools.js?v=20260714a"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.btn { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text2, #ccc); border-radius: 4px; padding: 0.28rem 0.75rem; font-size: 0.78rem; cursor: pointer; transition: background 0.15s; font-family: inherit; }
+.btn:hover { background: var(--c-surface2, #2d2d2d); }
+.btn-teal { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.btn-teal:hover { background: var(--c-accenttint2, #1f4a38); }
+.btn-blue { background: var(--c-bluetint, #1a2e4a); border-color: var(--c-blue, #569cd6); color: var(--c-blue, #569cd6); }
+.btn-blue:hover { background: #1e3555; }
+.btn-sm { padding: 0.2rem 0.55rem; font-size: 0.72rem; }
+.btn-lg { padding: 0.55rem 1.2rem; font-size: 0.88rem; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger { border-color: var(--c-red, #f14c4c); color: var(--c-red, #f14c4c); }
+.btn-danger:hover { background: #2e1a1a; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.form-row { display: flex; flex-direction: column; gap: 0.35rem; }
+.form-label { font-size: 0.78rem; color: var(--c-muted, #888); }
+.form-input { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.45rem 0.75rem; font-size: 0.88rem; width: 100%; font-family: inherit; }
+.form-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+textarea.form-input { resize: vertical; min-height: 60px; }
+
+/* ---- Setup area (no company yet) ---- */
+#setupArea { flex: 1; display: flex; justify-content: center; align-items: flex-start; padding: 4rem 1.5rem; overflow-y: auto; }
+.setup-card { max-width: 540px; width: 100%; display: flex; flex-direction: column; gap: 1.3rem; }
+.setup-title { font-size: 1.1rem; font-weight: 700; color: var(--c-text, #d4d4d4); }
+.setup-sub { font-size: 0.85rem; color: var(--c-muted, #888); }
+.form-actions { display: flex; gap: 0.75rem; margin-top: 0.25rem; }
+
+/* ---- Layout with sidebar ---- */
+#mainLayout { flex: 1; display: flex; overflow: hidden; }
+
+/* Sidebar */
+.sidebar { width: 270px; min-width: 270px; border-right: 1px solid var(--c-bg, #1e1e1e); background: #171717; display: flex; flex-direction: column; overflow: hidden; }
+
+.sidebar-company { padding: 0.9rem 1rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.sc-name { font-size: 0.92rem; font-weight: 700; color: var(--c-text, #d4d4d4); }
+.sc-url { font-size: 0.7rem; color: var(--c-faint, #555); margin-top: 0.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-status-row { margin-top: 0.55rem; display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; color: var(--c-muted, #888); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.pending        { background: var(--c-faint, #555); }
+.status-dot.researching    { background: var(--c-neutraly, #dcdcaa); animation: pulse 1s ease-in-out infinite; }
+.status-dot.products_found { background: var(--c-blue, #569cd6); }
+.status-dot.deep_researching   { background: var(--c-neutraly, #dcdcaa); animation: pulse 1s ease-in-out infinite; }
+.status-dot.deep_research_done { background: var(--c-accent, #4ec9b0); }
+.status-dot.verified       { background: var(--c-accent, #4ec9b0); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.sidebar-list-header { padding: 0.55rem 1rem 0.4rem; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--c-bg, #1e1e1e); }
+.sidebar-list-header-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--c-faint, #555); }
+.sfchips { display: flex; gap: 0.2rem; }
+.sfchip { background: transparent; border: none; color: var(--c-faint, #555); font-size: 0.65rem; cursor: pointer; padding: 0.08rem 0.45rem; border-radius: 10px; font-family: inherit; transition: all 0.15s; }
+.sfchip:hover { color: var(--c-text3, #aaa); }
+.sfchip.active { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+
+.sidebar-product-list { flex: 1; overflow-y: auto; }
+.spi { display: flex; align-items: center; gap: 0.45rem; padding: 0.42rem 1rem; cursor: pointer; border-left: 2px solid transparent; transition: background 0.1s; }
+.spi:hover { background: var(--c-bg, #1e1e1e); }
+.spi.selected { background: #1a2a3a; border-left-color: var(--c-blue, #569cd6); }
+.spi-focus-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--c-accent, #4ec9b0); flex-shrink: 0; }
+.spi-focus-dot.hidden { visibility: hidden; }
+.spi-name { flex: 1; font-size: 0.79rem; color: var(--c-text2, #ccc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+.spi-name:hover { color: var(--c-accent, #4ec9b0); }
+.spi-cat { font-size: 0.58rem; padding: 0.05rem 0.35rem; border-radius: 8px; flex-shrink: 0; }
+.spi-star { font-size: 0.62rem; flex-shrink: 0; opacity: 0.3; cursor: pointer; }
+.spi-star.on { opacity: 1; }
+.spi-interview { font-size: 0.72rem; color: #3a6a58; text-decoration: none; flex-shrink: 0; padding: 0 0.15rem; transition: color 0.15s; }
+.spi-interview:hover { color: var(--c-accent, #4ec9b0); }
+.sidebar-empty { padding: 1rem; font-size: 0.78rem; color: var(--c-faint, #555); text-align: center; }
+
+.sidebar-more { padding: 0.75rem 1rem; border-top: 1px solid var(--c-linefaint, #222); flex-shrink: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.sidebar-more-label { font-size: 0.7rem; color: var(--c-muted2, #666); }
+.sidebar-more-status { font-size: 0.72rem; color: var(--c-accent, #4ec9b0); display: none; }
+
+/* Main area */
+.main-area { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+
+/* Banner steps in main */
+.main-banner { padding: 1.5rem 2rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.banner-title { font-size: 1rem; font-weight: 700; color: var(--c-text, #d4d4d4); margin-bottom: 0.35rem; }
+.banner-sub { font-size: 0.83rem; color: var(--c-muted, #888); margin-bottom: 1rem; }
+
+/* spinner */
+.spinner-box { display: flex; align-items: center; gap: 1rem; padding: 1rem 0; color: var(--c-muted, #888); font-size: 0.83rem; }
+.spinner { width: 24px; height: 24px; border: 2px solid var(--c-line2, #333); border-top-color: var(--c-accent, #4ec9b0); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* product checkboxes (step 3) */
+.product-check-list { display: flex; flex-direction: column; gap: 0; max-height: 260px; overflow-y: auto; border: 1px solid var(--c-line, #2a2a2a); border-radius: 6px; background: var(--c-bg2, #1a1a1a); margin-bottom: 0.75rem; }
+.product-check-item { display: flex; align-items: flex-start; gap: 0.65rem; padding: 0.5rem 0.75rem; cursor: pointer; border-bottom: 1px solid var(--c-bg, #1e1e1e); }
+.product-check-item:last-child { border-bottom: none; }
+.product-check-item input[type=checkbox] { margin-top: 3px; accent-color: var(--c-accent, #4ec9b0); width: 14px; height: 14px; flex-shrink: 0; cursor: pointer; }
+.check-name { font-size: 0.85rem; font-weight: 600; color: var(--c-text, #d4d4d4); }
+.check-cat { font-size: 0.68rem; color: var(--c-blue, #569cd6); margin-left: 0.4rem; }
+.check-desc { font-size: 0.74rem; color: var(--c-muted2, #777); margin-top: 0.05rem; }
+
+/* verify callout */
+.verify-box { background: var(--c-accenttint, #1a3a2e); border: 1px solid var(--c-accent, #4ec9b0); border-radius: 7px; padding: 1rem 1.3rem; display: flex; flex-direction: column; gap: 0.65rem; margin-bottom: 0.75rem; }
+.verify-box h3 { font-size: 0.92rem; color: var(--c-accent, #4ec9b0); }
+.verify-box p { font-size: 0.82rem; color: var(--c-text3, #aaa); }
+.verify-actions { display: flex; gap: 0.75rem; align-items: center; }
+
+/* ---- Product catalog grid ---- */
+.catalog-section { padding: 1.2rem 1.5rem; flex: 1; }
+.catalog-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.catalog-header-chips { display: flex; gap: 0.4rem; }
+.chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-muted, #888); border-radius: 12px; padding: 0.18rem 0.65rem; font-size: 0.72rem; cursor: pointer; transition: all 0.15s; }
+.chip:hover { border-color: var(--c-faint, #555); color: var(--c-text2, #ccc); }
+.chip.active { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0.85rem; }
+
+.product-card { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 7px; padding: 1rem; display: flex; flex-direction: column; gap: 0.6rem; transition: border-color 0.15s; scroll-margin-top: 1rem; }
+.product-card:hover { border-color: var(--c-line3, #3a3a3a); }
+.product-card.focus-card { border-left: 3px solid var(--c-accent, #4ec9b0); }
+.product-card.verified-card { border-top: 2px solid var(--c-accent, #4ec9b0); }
+.product-card.selected-card { border-color: var(--c-blue, #569cd6); background: #1a2332; }
+.product-card.stub-card { opacity: 0.65; }
+
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; }
+.card-name { font-size: 0.9rem; font-weight: 700; color: var(--c-text, #d4d4d4); flex: 1; }
+.cat-badge { font-size: 0.58rem; padding: 0.1rem 0.45rem; border-radius: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; margin-top: 3px; }
+.cat-SaaS       { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.cat-SDK        { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.cat-API        { background: var(--c-orangetint, #2e2a1a); color: var(--c-neutraly, #dcdcaa); }
+.cat-On-premise { background: #2a1a2a; color: var(--c-purple, #c586c0); }
+.cat-Service    { background: #1a2a2e; color: var(--c-bluehi, #9cdcfe); }
+.cat-Hardware   { background: #2e1a1a; color: var(--c-red, #f14c4c); }
+.cat-default    { background: var(--c-surface, #252526); color: var(--c-muted2, #666); }
+
+.card-desc { font-size: 0.78rem; color: var(--c-text4, #999); }
+.card-features { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.feat-tag { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line, #2a2a2a); border-radius: 3px; font-size: 0.61rem; color: var(--c-muted2, #777); padding: 0.07rem 0.4rem; }
+
+.card-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; border-top: 1px solid var(--c-linefaint, #222); padding-top: 0.55rem; margin-top: 0.1rem; }
+.priority-wrap { display: flex; align-items: center; gap: 0.35rem; font-size: 0.68rem; color: var(--c-muted2, #666); flex: 1; }
+.priority-wrap input[type=range] { width: 65px; accent-color: var(--c-accent, #4ec9b0); cursor: pointer; }
+.priority-val { color: var(--c-accent, #4ec9b0); font-weight: 700; min-width: 14px; }
+.icon-btn { background: none; border: none; font-size: 0.88rem; cursor: pointer; padding: 0.1rem 0.2rem; opacity: 0.35; transition: opacity 0.15s; }
+.icon-btn:hover { opacity: 1; }
+.icon-btn.active { opacity: 1; }
+
+.card-details { display: none; border-top: 1px solid var(--c-linefaint, #222); padding-top: 0.7rem; margin-top: 0.1rem; flex-direction: column; gap: 0.6rem; }
+.card-details.open { display: flex; }
+.detail-row { display: flex; flex-direction: column; gap: 0.15rem; }
+.detail-label { font-size: 0.68rem; color: var(--c-faint, #555); text-transform: uppercase; letter-spacing: 0.05em; }
+.detail-val { color: var(--c-text3, #bbb); font-size: 0.78rem; }
+.detail-input { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-text2, #ccc); border-radius: 3px; padding: 0.3rem 0.55rem; font-size: 0.78rem; width: 100%; font-family: inherit; }
+.detail-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+textarea.detail-input { resize: vertical; min-height: 52px; }
+.card-save-row { display: flex; gap: 0.5rem; align-items: center; }
+.card-stub-note { font-size: 0.72rem; color: var(--c-neutraly, #dcdcaa); }
+
+.prod-favicon { width: 20px; height: 20px; border-radius: 3px; flex-shrink: 0; margin-top: 1px; }
+.card-meta-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.depth-badge { font-size: 0.6rem; padding: 0.1rem 0.4rem; border-radius: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.depth-verified  { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.depth-researched { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.depth-draft     { background: var(--c-orangetint, #2e2a1a); color: var(--c-muted, #888); }
+.updated-badge { font-size: 0.62rem; color: var(--c-faint, #555); margin-left: auto; }
+.card-actions { display: flex; gap: 0.4rem; border-top: 1px solid var(--c-linefaint, #222); padding-top: 0.5rem; margin-top: 0.1rem; }
+.card-action-btn { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-text4, #999); border-radius: 4px; font-size: 0.68rem; padding: 0.2rem 0.55rem; cursor: pointer; text-decoration: none; transition: border-color 0.15s, color 0.15s; }
+.card-action-btn:hover { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.card-action-primary { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); font-weight: 600; }
+.card-action-primary:hover { background: var(--c-accenttint2, #1f4a38); color: #6ee8cc; border-color: #6ee8cc; }
+
+.empty { text-align: center; color: var(--c-faint, #555); padding: 3rem 1rem; font-size: 0.85rem; }
+
+/* Auth overlay */
+.auth-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.auth-box { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 8px; padding: 2rem; width: 320px; display: flex; flex-direction: column; gap: 0.85rem; }
+.auth-box h2 { font-size: 1rem; color: var(--c-text, #d4d4d4); }
+.auth-input { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.4rem 0.7rem; font-size: 0.85rem; width: 100%; font-family: inherit; }
+.auth-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.auth-btn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border: none; border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; font-weight: 700; cursor: pointer; width: 100%; }
+.auth-error { color: var(--c-red, #f14c4c); font-size: 0.78rem; display: none; }
+
+.toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 6px; padding: 0.65rem 1rem; font-size: 0.82rem; color: var(--c-text2, #ccc); z-index: 200; display: none; max-width: 320px; }
+.toggle-btn { background: none; border: 1px solid var(--c-line, #2a2a2a); border-radius: 4px; color: var(--c-faint, #555); font-size: 0.72rem; padding: 0.2rem 0.6rem; cursor: pointer; transition: all 0.15s; }
+.toggle-btn.on { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); background: var(--c-accenttint, #1a3a2e); }
+.toggle-btn:hover { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <!-- Setup area: shown when no seller company configured yet -->
+  <div id="setupArea" style="display:none">
+    <div class="setup-card">
+      <div class="setup-title">Set Up Your Product Intelligence</div>
+      <div class="setup-sub">Enter your company info and Hermes will map your full product catalog — including product pages, pricing, and YouTube demo videos.</div>
+      <div class="form-row">
+        <label class="form-label">Your Company Name</label>
+        <input class="form-input" id="companyName" type="text" placeholder="Acme Corp" autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Company Website URL</label>
+        <input class="form-input" id="companyUrl" type="url" placeholder="https://acme.com" autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label class="form-label">Known products (optional — helps Hermes find specific offerings)</label>
+        <input class="form-input" id="productHints" type="text" placeholder="e.g. Watson AI, IBM Cloud, IBM MQ, IBM Maximo">
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-teal btn-lg" onclick="startResearch()" id="startBtn">Start Research</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main layout: sidebar + main content (shown when company exists) -->
+  <div id="mainLayout" style="display:none">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <!-- Company card -->
+      <div class="sidebar-company">
+        <div class="sc-name" id="scName"></div>
+        <div class="sc-url" id="scUrl"></div>
+        <div class="sc-status-row">
+          <div class="status-dot" id="scDot"></div>
+          <span id="scStatusText"></span>
+        </div>
+        <div style="margin-top:0.6rem;display:flex;gap:0.4rem">
+          <button class="btn btn-sm" onclick="rerunResearch()" title="Re-run initial product research">Re-research</button>
+          <button class="btn btn-sm" onclick="resetCompany()" title="Change company">Change Co.</button>
+        </div>
+      </div>
+
+      <!-- Product list header -->
+      <div class="sidebar-list-header">
+        <span class="sidebar-list-header-label" id="sidebarCount">Products</span>
+        <div class="sfchips">
+          <button class="sfchip active" data-sf="all"    onclick="setSF(this,'all')">All</button>
+          <button class="sfchip"        data-sf="focus"  onclick="setSF(this,'focus')">Focus</button>
+          <button class="sfchip"        data-sf="shared" onclick="setSF(this,'shared')">Shared</button>
+        </div>
+      </div>
+
+      <!-- Product list -->
+      <div class="sidebar-product-list" id="sidebarList"></div>
+
+      <!-- Research more -->
+      <div class="sidebar-more" id="researchMorePanel">
+        <div class="sidebar-more-label">Research additional products</div>
+        <input class="form-input" id="moreNames" placeholder="Product A, Product B" type="text" style="font-size:0.78rem;padding:0.35rem 0.6rem">
+        <button class="btn btn-teal btn-sm" onclick="researchMore()" style="width:100%" id="moreBtn">Research These</button>
+        <span class="sidebar-more-status" id="moreStatus">Research running…</span>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main-area">
+      <!-- Banner: shown during wizard steps (hidden in verified state) -->
+      <div id="mainBanner" style="display:none">
+
+        <!-- Researching -->
+        <div class="main-banner" id="bannerResearching" style="display:none">
+          <div class="banner-title">Mapping Your Product Catalog</div>
+          <div class="banner-sub">Hermes is fetching product pages, pricing information, and YouTube demo videos.</div>
+          <div class="spinner-box">
+            <div class="spinner"></div>
+            <span id="bannerResearchingStatus">Starting research…</span>
+          </div>
+        </div>
+
+        <!-- Products found: focus selection -->
+        <div class="main-banner" id="bannerProductsFound" style="display:none">
+          <div class="banner-title">Products Found — Select Your Focus</div>
+          <div class="banner-sub" id="bannerPFSub">Check the products you actively sell for deeper intelligence.</div>
+          <div class="product-check-list" id="productCheckList"></div>
+          <div style="display:flex;gap:0.75rem;align-items:center">
+            <button class="btn btn-teal btn-lg" onclick="submitFocusSelection()" id="focusBtn">Research Focus Products →</button>
+            <button class="btn" onclick="dismissBanner()">Skip</button>
+          </div>
+        </div>
+
+        <!-- Deep researching -->
+        <div class="main-banner" id="bannerDeepResearching" style="display:none">
+          <div class="banner-title">Deep Research Running</div>
+          <div class="banner-sub">Hermes is doing a deep dive — product pages, YouTube demos, customer reviews, competitive positioning.</div>
+          <div class="spinner-box">
+            <div class="spinner"></div>
+            <span id="bannerDeepStatus">Fetching product details and transcribing demo videos…</span>
+          </div>
+        </div>
+
+        <!-- Verification ready -->
+        <div class="main-banner" id="bannerVerify" style="display:none">
+          <div class="verify-box">
+            <h3>Verification ready — interview with Pi</h3>
+            <p>Hermes has built detailed profiles for your focus products. Pi will walk through each one with you — confirming descriptions, pain points, pricing, and target buyers.</p>
+            <div class="verify-actions">
+              <button class="btn btn-teal btn-lg" onclick="openVerification()">Open Pi Verification Chat →</button>
+              <button class="btn" onclick="dismissBanner()">Not now</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /mainBanner -->
+
+      <!-- Product catalog grid -->
+      <div class="catalog-section" id="catalogSection">
+        <div class="catalog-header">
+          <div class="catalog-header-chips" id="catalogFilterChips">
+            <span class="chip active" data-f="all"    onclick="setFilter(this,'all')">All</span>
+            <span class="chip"        data-f="focus"  onclick="setFilter(this,'focus')">My Focus</span>
+            <span class="chip"        data-f="shared" onclick="setFilter(this,'shared')">Shared</span>
+          </div>
+          <button class="btn btn-sm" onclick="openAddProduct()" style="margin-left:auto">+ Add Product</button>
+        </div>
+        <div class="catalog-grid" id="productGrid"></div>
+      </div>
+
+    </main>
+  </div><!-- /mainLayout -->
+</div>
+
+<!-- Auth overlay -->
+<div class="auth-overlay" id="authOverlay" style="display:none">
+  <div class="auth-box">
+    <h2>Sign in to Buzzowl</h2>
+    <input class="auth-input" id="authUser" type="text" placeholder="Username" autocomplete="username">
+    <input class="auth-input" id="authPass" type="password" placeholder="Password" autocomplete="current-password">
+    <div class="auth-error" id="authError">Invalid credentials</div>
+    <button class="auth-btn" onclick="doLogin()">Sign In</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let _token = localStorage.getItem('wk_token') || '';
+let _state = {
+  company: null,
+  products: [],
+  filter: 'all',
+  sfFilter: 'all',
+  pollTimer: null,
+  pollCount: 0,
+  selectedProductId: null,
+};
+
+const _debounceTimers = {};
+function _debounce(key, fn, ms) {
+  clearTimeout(_debounceTimers[key]);
+  _debounceTimers[key] = setTimeout(fn, ms);
+}
+
+function _hdr() { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${_token}` }; }
+
+function toast(msg, ms = 2800) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, ms);
+}
+
+async function _api(method, path, body) {
+  const opts = { method, headers: _hdr() };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (r.status === 401) { showAuth(); return null; }
+  return r;
+}
+
+function _esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function _catClass(cat) {
+  const safe = (cat || 'default').replace(/[^a-zA-Z-]/g, '') || 'default';
+  return `cat-${safe}`;
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+function showAuth() { document.getElementById('authOverlay').style.display = 'flex'; }
+function hideAuth() { document.getElementById('authOverlay').style.display = 'none'; }
+
+async function doLogin() {
+  const u = document.getElementById('authUser').value.trim();
+  const p = document.getElementById('authPass').value;
+  const r = await fetch('/api/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: u, password: p }),
+  });
+  if (!r.ok) { document.getElementById('authError').style.display = 'block'; return; }
+  const d = await r.json();
+  _token = d.token;
+  localStorage.setItem('wk_token', _token);
+  hideAuth();
+  if (window.navbarRefreshUser) window.navbarRefreshUser();
+  loadPage();
+}
+
+// ---------------------------------------------------------------------------
+// Page load
+// ---------------------------------------------------------------------------
+async function loadPage() {
+  const r = await _api('GET', '/api/seller/company');
+  if (!r) return;
+  if (!r.ok) { toast('Failed to load company info'); return; }
+  const d = await r.json();
+  _state.company = d.company;
+  _state.products = d.products || [];
+  renderPage();
+  // Deep-link from Home "Bulk emails" → open the modal directly (one click).
+  if (new URLSearchParams(location.search).get('bulkmail') === '1') openMultiMailModal();
+}
+
+// ---------------------------------------------------------------------------
+// Top-level render
+// ---------------------------------------------------------------------------
+function renderPage() {
+  stopPolling();
+  const co = _state.company;
+
+  if (!co || co.research_status === 'pending') {
+    // No company yet → show setup form
+    document.getElementById('setupArea').style.display = 'flex';
+    document.getElementById('mainLayout').style.display = 'none';
+    if (co) {
+      document.getElementById('companyName').value = co.name || '';
+      document.getElementById('companyUrl').value = co.website_url || '';
+    }
+    return;
+  }
+
+  // Company exists
+  document.getElementById('setupArea').style.display = 'none';
+  document.getElementById('mainLayout').style.display = 'flex';
+
+  updateSidebar();
+  renderBanner();
+  renderCatalog();
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+function updateSidebar() {
+  const co = _state.company;
+  document.getElementById('scName').textContent = co.name || '';
+  document.getElementById('scUrl').textContent = co.website_url || '';
+
+  const statusLabels = {
+    pending:            'Pending',
+    researching:        'Researching products…',
+    products_found:     'Products found — select focus',
+    deep_researching:   'Deep research running…',
+    deep_research_done: 'Verification ready',
+    verified:           'Verified',
+  };
+  const st = co.research_status || 'pending';
+  document.getElementById('scDot').className = `status-dot ${st}`;
+  document.getElementById('scStatusText').textContent = statusLabels[st] || st;
+
+  // Research More panel — show unless actively researching
+  const hideMore = st === 'researching' || st === 'deep_researching';
+  document.getElementById('researchMorePanel').style.display = hideMore ? 'none' : 'flex';
+
+  renderSidebarList();
+}
+
+function renderSidebarList() {
+  const list = document.getElementById('sidebarList');
+  let prods = _state.products;
+  if (_state.sfFilter === 'focus')  prods = prods.filter(p => p.is_focus);
+  if (_state.sfFilter === 'shared') prods = prods.filter(p => p.is_shared);
+
+  document.getElementById('sidebarCount').textContent = `${prods.length} product${prods.length !== 1 ? 's' : ''}`;
+
+  if (!prods.length) {
+    list.innerHTML = '<div class="sidebar-empty">No products yet</div>';
+    return;
+  }
+
+  list.innerHTML = prods.map(p => {
+    const selected = p.id === _state.selectedProductId;
+    const catCls = _catClass(p.category);
+    return `
+<div class="spi ${selected ? 'selected' : ''}" id="spi-${p.id}">
+  <div class="spi-focus-dot ${p.is_focus ? '' : 'hidden'}" onclick="selectProduct(${p.id})"></div>
+  <a class="spi-name" href="/products/${p.id}">${_esc(p.name)}</a>
+  ${p.category ? `<span class="spi-cat ${catCls}" onclick="selectProduct(${p.id})">${_esc(p.category)}</span>` : ''}
+  <a class="spi-interview" href="/products/${p.id}" title="Open interview">→</a>
+  <span class="spi-star ${p.is_favorite ? 'on' : ''}" onclick="selectProduct(${p.id})">⭐</span>
+</div>`;
+  }).join('');
+}
+
+function setSF(el, f) {
+  document.querySelectorAll('.sfchip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  _state.sfFilter = f;
+  renderSidebarList();
+}
+
+// ---------------------------------------------------------------------------
+// Banner (wizard steps shown above catalog)
+// ---------------------------------------------------------------------------
+function renderBanner() {
+  const st = (_state.company || {}).research_status;
+  const banner = document.getElementById('mainBanner');
+
+  // Hide all banner sub-sections first
+  ['bannerResearching','bannerProductsFound','bannerDeepResearching','bannerVerify'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+
+  if (st === 'researching') {
+    if (_isStaleStatus((_state.company || {}).updated_at)) {
+      _showStuckBanner();
+    } else {
+      banner.style.display = 'block';
+      document.getElementById('bannerResearching').style.display = 'block';
+      startPolling();
+    }
+  } else if (st === 'products_found') {
+    banner.style.display = 'block';
+    document.getElementById('bannerProductsFound').style.display = 'block';
+    renderProductCheckboxes();
+  } else if (st === 'deep_researching') {
+    if (_isStaleStatus((_state.company || {}).updated_at)) {
+      _showStuckBanner();
+    } else {
+      banner.style.display = 'block';
+      document.getElementById('bannerDeepResearching').style.display = 'block';
+      startPolling();
+    }
+  } else if (st === 'deep_research_done') {
+    banner.style.display = 'block';
+    document.getElementById('bannerVerify').style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function dismissBanner() {
+  document.getElementById('mainBanner').style.display = 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Polling
+// ---------------------------------------------------------------------------
+const _POLL_MAX = 120;        // 120 × 3 s = 6 min hard timeout
+const _STALE_MINUTES = 12;    // status unchanged for 12+ min → stale
+
+function _isStaleStatus(updatedAt) {
+  if (!updatedAt) return true;
+  return (Date.now() - new Date(updatedAt).getTime()) > _STALE_MINUTES * 60 * 1000;
+}
+
+function startPolling() {
+  if (_state.pollTimer) return;
+  _state.pollCount = 0;
+  _state.pollTimer = setInterval(pollStatus, 3000);
+}
+
+function stopPolling() {
+  if (_state.pollTimer) { clearInterval(_state.pollTimer); _state.pollTimer = null; }
+}
+
+async function pollStatus() {
+  _state.pollCount++;
+  if (_state.pollCount >= _POLL_MAX) {
+    stopPolling();
+    _showStuckBanner();
+    return;
+  }
+
+  const r = await _api('GET', '/api/seller/research/status');
+  if (!r || !r.ok) return;
+  const d = await r.json();
+  const prev = (_state.company || {}).research_status;
+
+  // Stale status: same researching state for >12 min → show stuck banner immediately
+  if ((prev === 'researching' || prev === 'deep_researching') &&
+      d.research_status === prev && _isStaleStatus(d.status_updated_at)) {
+    stopPolling();
+    _showStuckBanner();
+    return;
+  }
+
+  if (d.research_status !== prev) {
+    stopPolling();
+    _state.company = Object.assign({}, _state.company, {
+      research_status: d.research_status,
+    });
+    if (d.research_status !== 'researching' && d.research_status !== 'deep_researching') {
+      const pr = await _api('GET', '/api/products');
+      if (pr && pr.ok) { const pd = await pr.json(); _state.products = pd.products || []; }
+    }
+    renderPage();
+  } else if (prev === 'researching') {
+    const el = document.getElementById('bannerResearchingStatus');
+    if (el) el.textContent = `Mapping catalog… (${d.product_count || 0} products found so far)`;
+  } else if (prev === 'deep_researching') {
+    const el = document.getElementById('bannerDeepStatus');
+    if (el) el.textContent = `Deep research running… (${d.product_count || 0} products)`;
+  }
+}
+
+function _showStuckBanner() {
+  const banner = document.getElementById('mainBanner');
+  const stuckDiv = document.getElementById('bannerStuck');
+  if (stuckDiv) { stuckDiv.style.display = 'block'; return; }
+  // Insert stuck notice into banner
+  const div = document.createElement('div');
+  div.id = 'bannerStuck';
+  div.innerHTML = `
+    <div style="background:#2e1a1a;border:1px solid var(--c-red, #f14c4c);border-radius:6px;padding:0.75rem 1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+      <span style="color:var(--c-red, #f14c4c);font-size:0.85rem;">⚠ Research seems stuck. The agent may have timed out.</span>
+      <button class="btn btn-danger btn-sm" onclick="resetResearchStatus()">Reset Status</button>
+    </div>`;
+  banner.insertBefore(div, banner.firstChild);
+  banner.style.display = 'block';
+}
+
+async function resetResearchStatus() {
+  const r = await _api('POST', '/api/seller/company/reset-status', {});
+  if (!r || !r.ok) { toast('Failed to reset status'); return; }
+  const d = await r.json();
+  _state.company = Object.assign({}, _state.company, { research_status: d.research_status });
+  const stuckDiv = document.getElementById('bannerStuck');
+  if (stuckDiv) stuckDiv.remove();
+  const pr = await _api('GET', '/api/products');
+  if (pr && pr.ok) { const pd = await pr.json(); _state.products = pd.products || []; }
+  renderPage();
+  toast('Status reset');
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: Start initial research
+// ---------------------------------------------------------------------------
+async function startResearch() {
+  const name  = document.getElementById('companyName').value.trim();
+  const url   = document.getElementById('companyUrl').value.trim();
+  const hints = document.getElementById('productHints').value.trim();
+  if (!name) { toast('Enter your company name'); return; }
+  document.getElementById('startBtn').disabled = true;
+  const r = await _api('POST', '/api/seller/company', {
+    name,
+    website_url: url || null,
+    product_hints: hints || null,
+  });
+  document.getElementById('startBtn').disabled = false;
+  if (!r) return;
+  if (!r.ok) { const d = await r.json(); toast(d.detail || 'Failed to start research'); return; }
+  _state.company = { name, website_url: url, research_status: 'researching', metadata: {} };
+  _state.products = [];
+  renderPage();
+  toast('Research started — Hermes is mapping your product catalog');
+}
+
+// ---------------------------------------------------------------------------
+// Focus selection (step 3)
+// ---------------------------------------------------------------------------
+function renderProductCheckboxes() {
+  const list = document.getElementById('productCheckList');
+  const n = _state.products.length;
+  if (!n) {
+    list.innerHTML = '<div style="padding:0.75rem;color:var(--c-muted2, #666);font-size:0.82rem">No products extracted yet.</div>';
+    return;
+  }
+  document.getElementById('bannerPFSub').textContent =
+    `Hermes found ${n} product${n !== 1 ? 's' : ''}. Check the ones you actively sell for deeper research.`;
+  list.innerHTML = _state.products.map(p => `
+    <label class="product-check-item">
+      <input type="checkbox" class="focus-checkbox" data-id="${p.id}" checked>
+      <div>
+        <div class="check-name">${_esc(p.name)}<span class="check-cat">${_esc(p.category || '')}</span></div>
+        ${p.description ? `<div class="check-desc">${_esc((p.description || '').slice(0, 110))}</div>` : ''}
+      </div>
+    </label>`).join('');
+}
+
+async function submitFocusSelection() {
+  const checked = [...document.querySelectorAll('.focus-checkbox:checked')].map(el => parseInt(el.dataset.id));
+  if (!checked.length) { toast('Select at least one product'); return; }
+  document.getElementById('focusBtn').disabled = true;
+  const r = await _api('POST', '/api/seller/company/research', { product_ids: checked });
+  document.getElementById('focusBtn').disabled = false;
+  if (!r) return;
+  if (!r.ok) { const d = await r.json(); toast(d.detail || 'Failed to start deep research'); return; }
+  _state.company = Object.assign({}, _state.company, { research_status: 'deep_researching' });
+  renderPage();
+  toast('Deep research started — including YouTube demos');
+}
+
+// ---------------------------------------------------------------------------
+// Verification chat
+// ---------------------------------------------------------------------------
+function openVerification() {
+  const focusProd = _state.products.find(p => p.is_focus);
+  const target = focusProd || _state.products[0];
+  if (target) {
+    window.location.href = `/products/${target.id}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Research More — per-card trigger
+// ---------------------------------------------------------------------------
+async function triggerProductResearch(productId, productName) {
+  const btn = document.getElementById(`research-btn-${productId}`);
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Queued'; }
+  const r = await _api('POST', '/api/seller/company/research-more', { product_names: productName });
+  if (!r || !r.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Research More'; }
+    toast('Research trigger failed');
+    return;
+  }
+  toast(`Research queued for ${productName}`);
+}
+
+// ---------------------------------------------------------------------------
+// Research More (sidebar)
+// ---------------------------------------------------------------------------
+async function researchMore() {
+  const raw = document.getElementById('moreNames').value.trim();
+  if (!raw) { toast('Enter product names to research'); return; }
+  document.getElementById('moreBtn').disabled = true;
+  const r = await _api('POST', '/api/seller/company/research-more', { product_names: raw });
+  document.getElementById('moreBtn').disabled = false;
+  if (!r) return;
+  if (!r.ok) { const d = await r.json(); toast(d.detail || 'Failed'); return; }
+  const d = await r.json();
+  document.getElementById('moreNames').value = '';
+  document.getElementById('moreStatus').style.display = 'block';
+  setTimeout(() => { document.getElementById('moreStatus').style.display = 'none'; }, 8000);
+  toast(d.message || 'Research started');
+  // Reload products to show stubs
+  const pr = await _api('GET', '/api/products');
+  if (pr && pr.ok) { const pd = await pr.json(); _state.products = pd.products || []; }
+  renderSidebarList();
+  renderCatalog();
+}
+
+// ---------------------------------------------------------------------------
+// Re-research / reset
+// ---------------------------------------------------------------------------
+async function rerunResearch() {
+  if (!_state.company) return;
+  const hints = prompt('Hint at additional products (optional, comma-separated):') || '';
+  if (!confirm(`Re-run Hermes product research for ${_state.company.name}?`)) return;
+  const r = await _api('POST', '/api/seller/company', {
+    name: _state.company.name,
+    website_url: _state.company.website_url,
+    product_hints: hints || null,
+  });
+  if (!r || !r.ok) { toast('Failed to re-run research'); return; }
+  _state.company = Object.assign({}, _state.company, { research_status: 'researching' });
+  renderPage();
+  toast('Re-running product research');
+}
+
+function resetCompany() {
+  if (!confirm('This will let you enter a different company name. Current data is preserved.')) return;
+  _state.company = null;
+  renderPage();
+}
+
+// ---------------------------------------------------------------------------
+// Card helpers
+// ---------------------------------------------------------------------------
+function _relTime(iso) {
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(diffMs / 86400000);
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+function _depthBadge(p) {
+  if (p.status === 'verified')
+    return '<span class="depth-badge depth-verified">✓ Verified</span>';
+  if (p.description && (p.key_features || []).length > 0)
+    return '<span class="depth-badge depth-researched">Deep researched</span>';
+  return '<span class="depth-badge depth-draft">Initial draft</span>';
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+async function renderCatalog() {
+  let prods = _state.products;
+  if (_state.filter === 'focus')  prods = prods.filter(p => p.is_focus);
+  if (_state.filter === 'shared') prods = prods.filter(p => p.is_shared);
+
+  const grid = document.getElementById('productGrid');
+  if (!prods.length) {
+    grid.innerHTML = '<div class="empty">No products yet. Research your catalog or add products manually.</div>';
+    return;
+  }
+  grid.innerHTML = prods.map(p => renderCard(p)).join('');
+}
+
+function renderCard(p) {
+  const features = (p.key_features || []).slice(0, 4);
+  const catCls = _catClass(p.category);
+  const isStub = (p.metadata || {}).source === 'manual_hint' && !p.description;
+  // Only claim "in progress" while a run could plausibly be active (recently touched);
+  // an old empty stub means the research didn't fill it — offer a retry instead of lying.
+  const stubFresh = isStub && p.updated_at && (Date.now() - new Date(p.updated_at).getTime() < 20 * 60 * 1000);
+  const prodDomain = (p.website_url || '').replace(/^https?:\/\//, '').split('/')[0];
+  const domain = prodDomain || ((_state.company || {}).website_url || '').replace(/^https?:\/\//, '').split('/')[0];
+  const faviconHtml = domain
+    ? `<img class="prod-favicon" src="https://www.google.com/s2/favicons?domain=${_esc(domain)}&sz=32" onerror="this.style.display='none'" alt="">`
+    : '';
+  return `
+<div class="product-card ${p.is_focus ? 'focus-card' : ''} ${p.status === 'verified' ? 'verified-card' : ''} ${p.id === _state.selectedProductId ? 'selected-card' : ''} ${isStub ? 'stub-card' : ''}" id="pcard-${p.id}">
+  <div class="card-top">
+    ${faviconHtml}
+    <div class="card-name">${_esc(p.name)}</div>
+    ${p.category ? `<span class="cat-badge ${catCls}">${_esc(p.category)}</span>` : ''}
+  </div>
+  <div class="card-meta-row">
+    ${_depthBadge(p)}
+    ${p.updated_at ? `<span class="updated-badge">Updated ${_relTime(p.updated_at)}</span>` : ''}
+  </div>
+  ${isStub ? (stubFresh
+    ? '<div class="card-stub-note">⏳ Research in progress…</div>'
+    : '<div class="card-stub-note" style="color:var(--c-orange, #ce9178)">⚠ Not yet filled — open the card and click “Research More” to research it.</div>') : ''}
+  ${p.description ? `<div class="card-desc">${_esc(p.description)}</div>` : ''}
+  ${features.length ? `<div class="card-features">${features.map(f => `<span class="feat-tag">${_esc(f)}</span>`).join('')}</div>` : ''}
+
+  <div class="card-controls">
+    <div class="priority-wrap">
+      <span>Priority</span>
+      <input type="range" min="0" max="5" value="${p.priority || 0}"
+             oninput="this.nextElementSibling.textContent=this.value"
+             onchange="updatePriority(${p.id}, this.value)">
+      <span class="priority-val">${p.priority || 0}</span>
+    </div>
+    <button class="icon-btn ${p.is_favorite ? 'active' : ''}" title="Favorite" onclick="toggleFavorite(${p.id},this)">⭐</button>
+    <button class="icon-btn ${p.is_shared ? 'active' : ''}" title="${p.is_shared ? 'Shared' : 'Share with org'}" onclick="toggleShare(${p.id},this)">🔗</button>
+    <button class="icon-btn" title="Details / Edit" onclick="toggleDetails(${p.id},this)">▾</button>
+  </div>
+
+  <div class="card-details" id="details-${p.id}">
+    <div class="detail-row">
+      <div class="detail-label">Description</div>
+      <textarea class="detail-input" id="desc-${p.id}" rows="3">${_esc(p.description || '')}</textarea>
+    </div>
+    <div class="detail-row">
+      <div class="detail-label">Pricing</div>
+      <input class="detail-input" id="pricing-${p.id}" value="${_esc(p.pricing_info || '')}">
+    </div>
+    <div class="detail-row">
+      <div class="detail-label">Target Customer</div>
+      <input class="detail-input" id="target-${p.id}" value="${_esc(p.target_customer || '')}">
+    </div>
+    ${(p.key_features || []).length > 4 ? `<div class="detail-row"><div class="detail-label">All Features</div><div class="detail-val">${_esc((p.key_features || []).join(', '))}</div></div>` : ''}
+    <div class="card-save-row">
+      <button class="btn btn-teal btn-sm" onclick="saveProductEdits(${p.id})">Save Changes</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteProduct(${p.id})">Delete</button>
+    </div>
+  </div>
+  <div class="card-actions">
+    <a class="card-action-btn card-action-primary" href="/products/${p.id}">Open →</a>
+    <button class="card-action-btn" id="research-btn-${p.id}"
+            data-pid="${p.id}" data-pname="${_esc(p.name)}"
+            onclick="triggerProductResearch(parseInt(this.dataset.pid), this.dataset.pname)">Research More</button>
+    <button class="card-action-btn" onclick="selectProduct(${p.id})">Details</button>
+  </div>
+</div>`;
+}
+
+function setFilter(el, f) {
+  document.querySelectorAll('[data-f]').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  _state.filter = f;
+  renderCatalog();
+}
+
+function toggleDetails(id, btn) {
+  const el = document.getElementById(`details-${id}`);
+  if (!el) return;
+  const open = el.classList.toggle('open');
+  btn.textContent = open ? '▴' : '▾';
+}
+
+function selectProduct(id) {
+  _state.selectedProductId = id;
+  // Update sidebar selection highlight
+  document.querySelectorAll('.spi').forEach(el => el.classList.remove('selected'));
+  const spi = document.getElementById(`spi-${id}`);
+  if (spi) spi.classList.add('selected');
+  // Scroll to card in grid and expand details
+  const card = document.getElementById(`pcard-${id}`);
+  if (card) {
+    document.querySelectorAll('.product-card').forEach(c => c.classList.remove('selected-card'));
+    card.classList.add('selected-card');
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const details = document.getElementById(`details-${id}`);
+    if (details && !details.classList.contains('open')) {
+      details.classList.add('open');
+      const btn = card.querySelector('.icon-btn[title="Details / Edit"]');
+      if (btn) btn.textContent = '▴';
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Product PATCH helpers
+// ---------------------------------------------------------------------------
+function updatePriority(id, val) {
+  _debounce(`priority-${id}`, async () => {
+    await _api('PATCH', `/api/products/${id}`, { priority: parseInt(val) });
+  }, 500);
+}
+
+async function toggleFavorite(id, btn) {
+  const p = _state.products.find(x => x.id === id);
+  if (!p) return;
+  const r = await _api('PATCH', `/api/products/${id}`, { is_favorite: !p.is_favorite });
+  if (!r || !r.ok) { toast('Failed'); return; }
+  const d = await r.json();
+  p.is_favorite = d.product.is_favorite;
+  btn.classList.toggle('active', p.is_favorite);
+  const spi = document.getElementById(`spi-${id}`);
+  if (spi) { const star = spi.querySelector('.spi-star'); if (star) star.classList.toggle('on', p.is_favorite); }
+  toast(p.is_favorite ? '⭐ Marked as favorite' : 'Removed from favorites');
+}
+
+async function toggleShare(id, btn) {
+  const r = await _api('POST', `/api/products/${id}/share`);
+  if (!r || !r.ok) { toast('Failed'); return; }
+  const d = await r.json();
+  const p = _state.products.find(x => x.id === id);
+  if (p) p.is_shared = d.is_shared;
+  btn.classList.toggle('active', d.is_shared);
+  btn.title = d.is_shared ? 'Shared' : 'Share with org';
+  toast(d.is_shared ? '🔗 Shared with org' : 'Unshared');
+}
+
+async function saveProductEdits(id) {
+  const desc    = document.getElementById(`desc-${id}`)?.value || '';
+  const pricing = document.getElementById(`pricing-${id}`)?.value || '';
+  const target  = document.getElementById(`target-${id}`)?.value || '';
+  const patch = {};
+  if (desc)    patch.description  = desc;
+  if (pricing) patch.pricing_info = pricing;
+  if (target)  patch.target_customer = target;
+  if (!Object.keys(patch).length) { toast('Nothing to save'); return; }
+  const r = await _api('PATCH', `/api/products/${id}`, patch);
+  if (!r || !r.ok) { toast('Failed to save'); return; }
+  const d = await r.json();
+  const p = _state.products.find(x => x.id === id);
+  if (p && d.product) Object.assign(p, d.product);
+  toast('Changes saved');
+}
+
+async function deleteProduct(id) {
+  if (!confirm('Delete this product?')) return;
+  const r = await _api('DELETE', `/api/products/${id}`);
+  if (!r || !r.ok) { toast('Failed to delete'); return; }
+  _state.products = _state.products.filter(p => p.id !== id);
+  renderSidebarList();
+  renderCatalog();
+  toast('Product deleted');
+}
+
+async function openAddProduct() {
+  const name = prompt('Product name:');
+  if (!name || !name.trim()) return;
+  const r = await _api('POST', '/api/products', { name: name.trim() });
+  if (!r || !r.ok) { toast('Failed to create product'); return; }
+  const pr = await _api('GET', '/api/products');
+  if (pr && pr.ok) { const pd = await pr.json(); _state.products = pd.products || []; }
+  renderSidebarList();
+  renderCatalog();
+  toast('Product added');
+}
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+document.addEventListener('DOMContentLoaded', () => {
+  initNavbar({ active: 'products', actions: [
+    { label: '✉ Bulk Emails', id: 'multiMailBtn' },
+  ]});
+  document.getElementById('multiMailBtn')?.addEventListener('click', openMultiMailModal);
+  if (!_token) { showAuth(); return; }
+  loadPage();
+});
+
+// ---------------------------------------------------------------------------
+// Multi-product bulk mail
+// ---------------------------------------------------------------------------
+let _mmClients = [];
+let _mmMailMode = 'general';
+const _MM_CASUAL = () => _mmMailMode === 'casual';
+let _mmContactMap = {};
+let _mmMe = null;                 // current user {id,…} for "my clients" / "my focus" filters
+let _mmClientFilter = 'all';      // all | mine | focus | owner
+let _mmOwnerFilter = '';          // created_by id (string) when filter = owner
+let _mmSelected = new Set();      // selected client names — preserved across filter switches
+
+function setMmMode(mode) {
+  _mmMailMode = mode;
+  document.getElementById('mmModeGeneral').classList.toggle('on', mode === 'general');
+  document.getElementById('mmModeTargeted').classList.toggle('on', mode === 'targeted');
+  document.getElementById('mmModeCasual').classList.toggle('on', mode === 'casual');
+}
+
+// ── Client filtering (all / my clients / my focus / a specific owner) ────────
+function _mmMeta(c) { return (typeof c.metadata === 'string') ? (JSON.parse(c.metadata || '{}') || {}) : (c.metadata || {}); }
+function _mmIsMine(c) { if (!_mmMe) return false; if (c.created_by === _mmMe.id) return true; const o = _mmMeta(c).owner_ids; return Array.isArray(o) && o.includes(_mmMe.id); }
+function _mmIsMyFocus(c) { if (!_mmMe) return false; const f = _mmMeta(c).focus_user_ids; return Array.isArray(f) && f.includes(_mmMe.id); }
+function _mmOwnerName(c) { return c.owner_display_name || c.owner_username || (c.created_by != null ? ('User ' + c.created_by) : '—'); }
+function _mmOwnsId(c, id) { return String(c.created_by) === String(id) || (_mmMeta(c).owner_ids || []).map(String).includes(String(id)); }
+function _mmFilteredClients() {
+  return _mmClients.filter(c => {
+    if (_mmClientFilter === 'mine')  return _mmIsMine(c);
+    if (_mmClientFilter === 'focus') return _mmIsMyFocus(c);
+    if (_mmClientFilter === 'owner') return _mmOwnsId(c, _mmOwnerFilter);
+    return true;
+  });
+}
+
+function openMultiMailModal() {
+  document.getElementById('mmResults').innerHTML = '';
+  document.getElementById('mmCustom').value = '';
+  document.getElementById('mmType').value = 'event_invitation';
+  onMmTypeChange();
+  _mmSelected = new Set(); _mmClientFilter = 'all'; _mmOwnerFilter = '';
+  const products = (_state && _state.products) ? _state.products : [];
+  document.getElementById('mmProductList').innerHTML = products.map(p => `
+    <label style="display:flex;align-items:center;gap:0.35rem;background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);
+                  border-radius:4px;padding:0.25rem 0.55rem;cursor:pointer;font-size:0.78rem;color:var(--c-text2, #ccc);">
+      <input type="checkbox" data-id="${p.id}" data-name="${(p.name||'').replace(/"/g,'&quot;')}"
+             style="accent-color:var(--c-accent, #4ec9b0);"> ${p.name}
+    </label>`).join('');
+  // current user (for my-clients / my-focus); fire-and-forget, refresh bar when it lands
+  if (!_mmMe) { _api('GET', '/api/auth/me').then(async r => { if (r && r.ok) { const d = await r.json(); _mmMe = d.user || d; _renderMmClientFilterBar(); } }); }
+  const afterClients = () => { _renderMmOwnerOptions(); _renderMmClientFilterBar(); _renderMmClientList(); };
+  if (!_mmClients.length) {
+    _api('GET', '/api/clients').then(async r => {
+      if (r && r.ok) {
+        const d = await r.json();
+        _mmClients = (d.clients || []).filter(c => c.name && c.name !== 'Unknown');
+        afterClients();
+      }
+    });
+  } else {
+    afterClients();
+  }
+  document.getElementById('multiMailOverlay').style.display = 'flex';
+}
+
+function _renderMmOwnerOptions() {
+  const sel = document.getElementById('mmOwnerFilter'); if (!sel) return;
+  const owners = new Map();
+  _mmClients.forEach(c => { if (c.created_by != null) owners.set(String(c.created_by), _mmOwnerName(c)); });
+  const cur = _mmClientFilter === 'owner' ? String(_mmOwnerFilter) : '';
+  sel.innerHTML = ['<option value="">Owner: anyone</option>']
+    .concat([...owners.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, name]) => `<option value="${id}"${id === cur ? ' selected' : ''}>${_esc(name)}${_mmMe && String(_mmMe.id) === id ? ' (you)' : ''}</option>`))
+    .join('');
+}
+
+function _renderMmClientFilterBar() {
+  ['all', 'mine', 'focus'].forEach(f => {
+    const b = document.getElementById('mmcf-' + f); if (!b) return;
+    const on = _mmClientFilter === f;
+    b.style.color = on ? '#4ec9b0' : '#888';
+    b.style.borderColor = on ? '#2d5a48' : '#2a2a2a';
+    b.style.background = on ? '#13241c' : 'none';
+  });
+}
+
+function setMmClientFilter(f) {
+  _mmClientFilter = f; _mmOwnerFilter = '';
+  const s = document.getElementById('mmOwnerFilter'); if (s) s.value = '';
+  _renderMmClientFilterBar(); _renderMmClientList();
+}
+function setMmOwnerFilter(id) {
+  _mmOwnerFilter = id; _mmClientFilter = id ? 'owner' : 'all';
+  _renderMmClientFilterBar(); _renderMmClientList();
+}
+
+function _renderMmClientList() {
+  const list = _mmFilteredClients();
+  const el = document.getElementById('mmClientList');
+  if (!list.length) {
+    el.innerHTML = `<span style="color:var(--c-faint, #555);font-size:0.75rem;padding:0.2rem 0.3rem;">${_mmClientFilter !== 'all' ? 'No clients match this filter.' : 'No clients.'}</span>`;
+    _updateMmSelCount(); return;
+  }
+  el.innerHTML = list.map(c => `
+    <label style="display:flex;align-items:center;gap:0.35rem;background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);
+                  border-radius:4px;padding:0.25rem 0.55rem;cursor:pointer;font-size:0.78rem;color:var(--c-text2, #ccc);">
+      <input type="checkbox" data-name="${(c.name||'').replace(/"/g,'&quot;')}" ${_mmSelected.has(c.name) ? 'checked' : ''}
+             onchange="_onMmClientToggle(this)" style="accent-color:var(--c-accent, #4ec9b0);"> ${c.name}
+    </label>`).join('');
+  _updateMmSelCount();
+}
+
+function _onMmClientToggle(cb) {
+  if (cb.checked) _mmSelected.add(cb.dataset.name); else _mmSelected.delete(cb.dataset.name);
+  _updateMmSelCount();
+}
+function _updateMmSelCount() {
+  const el = document.getElementById('mmSelCount');
+  if (el) el.textContent = _mmSelected.size ? (_mmSelected.size + ' selected') : '';
+}
+
+function closeMultiMailModal() {
+  document.getElementById('multiMailOverlay').style.display = 'none';
+}
+
+function onMmTypeChange() {
+  const v = document.getElementById('mmType').value;
+  document.getElementById('mmEventFields').style.display = v === 'event_invitation' ? 'flex' : 'none';
+}
+
+function toggleAllMm(group, checked) {
+  const listId = group === 'products' ? 'mmProductList' : 'mmClientList';
+  // "Select all" applies to the clients currently shown; "Clear" wipes the
+  // whole selection (the count is global, so clearing only the visible subset
+  // would be confusing).
+  if (group === 'clients' && !checked) _mmSelected.clear();
+  document.querySelectorAll(`#${listId} input[type=checkbox]`).forEach(cb => {
+    cb.checked = checked;
+    if (group === 'clients' && checked) _mmSelected.add(cb.dataset.name);
+  });
+  if (group === 'clients') _updateMmSelCount();
+}
+
+async function _mmAppendResultCards(results, evName, resultsEl) {
+  await Promise.all(results.map(async r2 => {
+    try {
+      const cr = await _api('GET', `/api/people?client_name=${encodeURIComponent(r2.client_name)}`);
+      if (cr && cr.ok) { const cd = await cr.json(); _mmContactMap[r2.client_name] = (cd.contacts || []); }
+    } catch (_) {}
+  }));
+  const tmp = document.createElement('div');
+  tmp.innerHTML = results.map(r2 => {
+    const rEventName = r2.event_name || evName || '';
+    const contactRowsHtml = _renderMmContactRows(r2.client_name, rEventName);
+    const sourcesHtml = _renderSources(r2.sources_reasoning);
+    const sourcesListHtml = _renderSourcesList(r2.sources_list || [], r2.client_name);
+    const showSources = sourcesHtml || sourcesListHtml;
+    const cardSubject = rEventName ? `Einladung: ${rEventName}` : r2.client_name;
+    return `
+    <div class="mm-result-card" data-client="${_esc(r2.client_name)}" data-subject="${_esc(cardSubject)}" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);border-radius:6px;padding:0.9rem 1rem;margin-bottom:0.6rem;">
+      <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.5rem;">
+        <span style="font-size:0.82rem;font-weight:600;color:var(--c-text, #d4d4d4);">${r2.client_name}</span>
+        ${r2.error ? `<span style="font-size:0.72rem;color:var(--c-redhi, #f48771);">${r2.error}</span>` : ''}
+        ${r2.doc_id ? `<span style="font-size:0.68rem;color:var(--c-faint, #555);">doc #${r2.doc_id}</span>` : ''}
+      </div>
+      ${rEventName ? `<div style="font-size:0.72rem;color:var(--c-muted, #888);margin-bottom:0.35rem;"><span style="color:var(--c-faint, #555);text-transform:uppercase;letter-spacing:0.05em;font-size:0.66rem;">Betreff</span> &nbsp;${_esc('Einladung: ' + rEventName)}</div>` : ''}
+      <textarea rows="8" style="width:100%;background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text3, #bbb);
+                border-radius:4px;padding:0.5rem 0.7rem;font-size:0.75rem;
+                font-family:var(--c-font-mono, 'Menlo','Consolas',monospace);resize:vertical;line-height:1.55;"
+      >${r2.error ? r2.error : _esc(r2.email || '')}</textarea>
+      ${contactRowsHtml}
+      ${r2.doc_id ? outreachRow(r2.doc_id) : ''}
+      ${showSources ? `
+      <details style="margin-top:0.55rem;background:var(--c-bg4, #141414);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;">
+        <summary style="padding:0.35rem 0.65rem;cursor:pointer;font-size:0.7rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.06em;user-select:none;list-style:none;">&#9654; Sources &amp; Reasoning</summary>
+        <div style="padding:0.45rem 0.8rem 0.65rem;font-size:0.75rem;color:var(--c-text2, #ccc);line-height:1.6;border-top:1px solid var(--c-line, #2a2a2a);">${sourcesHtml}${sourcesListHtml}</div>
+      </details>` : ''}
+    </div>`;
+  }).join('');
+  resultsEl.appendChild(tmp);
+}
+
+async function generateMultiMail(clientNamesOverride) {
+  const productIds  = [...document.querySelectorAll('#mmProductList input:checked')].map(cb => parseInt(cb.dataset.id));
+  const clientNames = clientNamesOverride && clientNamesOverride.length
+    ? clientNamesOverride
+    : [..._mmSelected];   // preserved across filter switches, not just the visible checkboxes
+  // Products are optional: with none selected we send a general, product-less
+  // email (introduction / event invite / check-in).
+  if (!clientNames.length) { alert('Select at least one client');  return; }
+
+  const btn = document.getElementById('mmGenBtn');
+  btn.disabled = true;
+  btn.textContent = `Starting job for ${clientNames.length} client(s)…`;
+
+  const basePayload = { product_ids: productIds, client_names: clientNames, async_mode: true,
+                        template_type: document.getElementById('mmType').value, mail_mode: _mmMailMode };
+  const evName = document.getElementById('mmEventName').value.trim();
+  const evDate = document.getElementById('mmEventDate').value;
+  const evLink = document.getElementById('mmEventLink').value.trim();
+  const custom = document.getElementById('mmCustom').value.trim();
+  if (evName) basePayload.event_name = evName;
+  if (evDate) basePayload.event_date = evDate;
+  if (evLink) basePayload.event_link = evLink;
+  if (custom) basePayload.custom_instructions = custom;
+
+  const resultsEl = document.getElementById('mmResults');
+  resultsEl.innerHTML = '';
+  _mmContactMap = {};
+
+  // Enqueue the job, then poll — each request stays short, so no gateway
+  // timeout no matter how many clients are selected, and cards appear as
+  // soon as each email is generated.
+  try {
+    const r = await _api('POST', '/api/products/multi-mail', basePayload);
+    if (!r || !r.ok) {
+      const err = r ? await r.json().catch(() => ({})) : {};
+      resultsEl.innerHTML = `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Error: ${_esc(err.detail || 'unknown error')}</div>`;
+      return;
+    }
+    const { job_id, total } = await r.json();
+    let rendered = 0;
+    let finalResults = [];
+    for (let poll = 0; poll < 720; poll++) {
+      await new Promise(res => setTimeout(res, 2500));
+      const pr = await _api('GET', `/api/products/mail-jobs/${job_id}`);
+      if (!pr || !pr.ok) {
+        resultsEl.insertAdjacentHTML('beforeend', `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Job lost — please retry.</div>`);
+        break;
+      }
+      const job = await pr.json();
+      if (job.results.length > rendered) {
+        await _mmAppendResultCards(job.results.slice(rendered), evName, resultsEl);
+        rendered = job.results.length;
+        finalResults = job.results;
+      }
+      btn.textContent = `Generating ${rendered}/${total}…`;
+      if (job.status === 'done') break;
+      if (job.status === 'failed') {
+        resultsEl.insertAdjacentHTML('beforeend', `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Job failed: ${_esc(job.error || 'unknown error')}</div>`);
+        break;
+      }
+    }
+    const ok = finalResults.filter(r2 => !r2.error);
+    const failed = finalResults.filter(r2 => r2.error).map(r2 => r2.client_name);
+    let toolbar = '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.6rem;">';
+    if (ok.length) toolbar += `<button id="mmDownloadEml" title="Editable drafts work in Windows Outlook — on Mac use the 📧 Outlook / Copy buttons" style="background:var(--c-accenttint, #1a3a2e);border:1px solid var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0);border-radius:4px;padding:0.3rem 0.8rem;font-size:0.78rem;cursor:pointer;">⬇ Save all to Outlook drafts (.eml · Windows)</button>`;
+    if (failed.length) toolbar += `<button id="mmRetryFailed" style="background:var(--c-orangetint, #3a2a1a);border:1px solid var(--c-orange, #ce9178);color:var(--c-orange, #ce9178);border-radius:4px;padding:0.3rem 0.8rem;font-size:0.78rem;cursor:pointer;">↻ Regenerate ${failed.length} failed</button>`;
+    toolbar += `<span id="mmExportSummary" style="font-size:0.74rem;color:var(--c-muted, #888);margin-left:auto;"></span>`;
+    toolbar += `<button id="mmResetExports" title="Clear the exported marks for the recipients shown here" style="background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-muted2, #777);border-radius:4px;padding:0.3rem 0.6rem;font-size:0.72rem;cursor:pointer;">Reset marks</button>`;
+    toolbar += '</div>';
+    if (ok.length || failed.length) resultsEl.insertAdjacentHTML('afterbegin', toolbar);
+    document.getElementById('mmRetryFailed')?.addEventListener('click', () => generateMultiMail(failed));
+    document.getElementById('mmDownloadEml')?.addEventListener('click', (e) => {
+      const items = [...document.querySelectorAll('#mmResults .mm-result-card')].map(card => ({
+        client_name: card.dataset.client,
+        subject: card.dataset.subject,
+        body: card.querySelector('textarea')?.value || '',
+      })).filter(it => it.client_name && it.body);
+      WKMail.downloadEmlBundle(items, _mmMailMode === 'casual', e.target);
+      // The bundle is one draft per contact across every client — so a bulk
+      // save exports all shown recipients. Mark them so the tally reflects it.
+      WKMail.markExportedMany(_mmAllShownExportKeys());
+      _mmUpdateExportSummary();
+    });
+    document.getElementById('mmResetExports')?.addEventListener('click', () => {
+      WKMail.clearExported(_mmAllShownExportKeys());
+      _mmUpdateExportSummary();
+    });
+    _mmUpdateExportSummary();
+  } catch (e) {
+    resultsEl.insertAdjacentHTML('beforeend', `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Network error: ${e.message}</div>`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Emails';
+  }
+}
+
+function _renderSources(raw) {
+  if (!raw || !raw.trim()) return '';
+  try { return marked.parse(raw); }
+  catch (_) { return `<pre style="white-space:pre-wrap;font-size:0.74rem;color:var(--c-text2, #ccc);">${_esc(raw)}</pre>`; }
+}
+
+// ── Outreach outcome tracking (thesis evaluation: did the mail convert?) ──
+const _OUTREACH_LABELS = { sent: '📤 Sent', replied: '💬 Replied', meeting: '📅 Meeting' };
+
+function outreachRow(docId) {
+  return `<div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;">
+    <span style="font-size:0.62rem;color:var(--c-faint, #555);text-transform:uppercase;letter-spacing:0.05em;">Outreach</span>
+    ${Object.entries(_OUTREACH_LABELS).map(([s, label]) =>
+      `<button onclick="markOutreach(${docId},'${s}',this)"
+        style="background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-muted2, #777);border-radius:3px;padding:0.1rem 0.45rem;font-size:0.68rem;cursor:pointer;">${label}</button>`).join('')}
+  </div>`;
+}
+
+async function markOutreach(docId, status, btn) {
+  const r = await _api('POST', `/api/outreach/${docId}/status`, { status });
+  if (r && r.ok) {
+    [...btn.parentElement.querySelectorAll('button')].forEach(b => { b.style.borderColor = '#2a2a2a'; b.style.color = '#777'; });
+    btn.style.borderColor = '#4ec9b0';
+    btn.style.color = '#4ec9b0';
+  }
+}
+
+function _renderSourcesList(list, clientName) {
+  if (!list || !list.length) return '';
+  const colors = { pain_point:'#f14c4c', risk:'#ce9178', opportunity:'#4ec9b0', news:'#569cd6', finding:'#569cd6' };
+  const clientUrl = `/client/${encodeURIComponent(clientName)}#findings`;
+  const items = list.map(s => {
+    const color = colors[s.type] || '#888';
+    const badge = `<span style="font-size:0.62rem;padding:0.1rem 0.35rem;border-radius:3px;background:${color}22;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${s.type.replace(/_/g,' ')}</span>`;
+    const title = `<a href="${clientUrl}" target="_blank" rel="noopener" style="color:var(--c-text2, #ccc);text-decoration:none;font-size:0.74rem;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${_esc(s.title)}</a>`;
+    const ext = s.source_url ? ` <a href="${_esc(s.source_url)}" target="_blank" rel="noopener" title="Open source article" style="color:var(--c-blue, #569cd6);font-size:0.68rem;text-decoration:none;">↗</a>` : '';
+    return `<div style="display:flex;align-items:center;gap:0.4rem;padding:0.2rem 0;">${badge} ${title}${ext}</div>`;
+  }).join('');
+  return `<div style="margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--c-line, #2a2a2a);"><div style="font-size:0.65rem;color:var(--c-muted2, #666);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.35rem;">Source Documents</div>${items}</div>`;
+}
+
+function _personalizeMm(template, name, role, firstName) {
+  const greetName = _MM_CASUAL() ? (firstName || name.split(' ')[0] || '[First Name]') : (name || '[Name]');
+  return template
+    .replace(/\[Name\]/g, greetName)
+    .replace(/\[First Name\]/g, firstName || name.split(' ')[0] || '[First Name]')
+    .replace(/\[Role\]/g, role || '[Role]');
+}
+
+function _renderMmContactRows(clientName, eventName) {
+  const contacts = _mmContactMap[clientName] || [];
+  if (!contacts.length) {
+    return `<div style="font-size:0.72rem;color:var(--c-faint, #555);margin-top:0.45rem;">
+      No contacts found — <a href="/client/${encodeURIComponent(clientName)}" target="_blank"
+        style="color:var(--c-blue, #569cd6);text-decoration:none;">add on client page ↗</a></div>`;
+  }
+  const rows = contacts.map(c => {
+    const m = (typeof c.metadata === 'string') ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+    const role = m.role || '';
+    const email = m.email || '';
+    const firstName = m.first_name || (c.name || '').split(' ')[0];
+    const emailDisplay = email
+      ? `<span style="color:var(--c-blue, #569cd6);font-size:0.7rem;">${email.replace(/</g,'&lt;')}</span>`
+      : `<span style="color:var(--c-faint2, #444);font-size:0.7rem;font-style:italic;">no email</span>`;
+    const safeName   = _esc(c.name || '');
+    const safeRole   = _esc(role);
+    const safeEmail  = _esc(email);
+    const subjectVal = _esc(eventName ? `Einladung: ${eventName}` : clientName);
+    const expKey = WKMail.exportKey(clientName, email, c.name);
+    const expAt  = WKMail.exportedAt(expKey);
+    const done   = !!expAt;
+    const outlookStyle = done ? 'border-color:#2a5a3a;color:var(--c-accent, #4ec9b0);background:var(--c-accenttint, #13241c);' : 'border-color:var(--c-line, #2a2a2a);color:var(--c-accent, #4ec9b0);background:none;';
+    const outlookLabel = done ? '✓ ' + _esc(WKMail.relTime(expAt)) : '📧 Outlook';
+    const outlookTitle = done ? _esc(WKMail.exportedTitle(expAt)) : 'Open a personalized draft in Outlook';
+    return `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;border-bottom:1px solid var(--c-linefaint, #232323);">
+      <span style="font-size:0.75rem;color:var(--c-text2, #ccc);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        title="${safeName}">${safeName}${role ? ` <span style="color:var(--c-muted2, #666)">· ${safeRole}</span>` : ''}</span>
+      ${emailDisplay}
+      <button style="flex-shrink:0;background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-blue, #569cd6);border-radius:3px;
+                     padding:0.1rem 0.45rem;font-size:0.68rem;cursor:pointer;"
+              data-name="${safeName}" data-role="${safeRole}" data-first-name="${firstName.replace(/"/g,'&quot;')}" onclick="copyPersonalizedMm(this)">Copy</button>
+      <button style="flex-shrink:0;border:1px solid var(--c-line, #2a2a2a);border-radius:3px;
+                     padding:0.1rem 0.45rem;font-size:0.68rem;cursor:pointer;${outlookStyle}" title="${outlookTitle}"
+              data-name="${safeName}" data-role="${safeRole}" data-email="${safeEmail}" data-subject="${subjectVal}" data-first-name="${firstName.replace(/"/g,'&quot;')}" data-export-key="${_esc(expKey)}"
+              onclick="outlookPersonalizedMm(this)">${outlookLabel}</button>
+    </div>`;
+  }).join('');
+  const withEmail = contacts.filter(c => {
+    const m = (typeof c.metadata === 'string') ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+    return !!m.email;
+  });
+  const cDone = withEmail.filter(c => {
+    const m = (typeof c.metadata === 'string') ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+    return WKMail.isExported(WKMail.exportKey(clientName, m.email, c.name));
+  }).length;
+  const countBadge = withEmail.length
+    ? `<span data-mm-card-count style="color:${cDone === withEmail.length ? '#4ec9b0' : '#888'};text-transform:none;letter-spacing:0;font-weight:600;margin-left:0.4rem;">${cDone}/${withEmail.length} exported</span>`
+    : `<span data-mm-card-count></span>`;
+  return `<div style="margin-top:0.55rem;background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;padding:0.35rem 0.6rem;">
+    <div style="font-size:0.62rem;color:var(--c-faint, #555);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.25rem;">Contacts${countBadge}</div>
+    ${rows}
+  </div>`;
+}
+
+function copyPersonalizedMm(btn) {
+  const card = btn.closest('.mm-result-card');
+  const ta = card ? card.querySelector('textarea') : null;
+  if (!ta) return;
+  const text = _personalizeMm(ta.value, btn.dataset.name || '', btn.dataset.role || '', btn.dataset.firstName || '');
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 2000);
+  });
+}
+
+function outlookPersonalizedMm(btn) {
+  const card = btn.closest('.mm-result-card');
+  const ta = card ? card.querySelector('textarea') : null;
+  if (!ta) return;
+  const personalized = _personalizeMm(ta.value, btn.dataset.name || '', btn.dataset.role || '', btn.dataset.firstName || '');
+  // Strip the "Betreff: ..." line from the body — it belongs in the subject field, not the body
+  const body = personalized.replace(/^Betreff:[^\n]*\n+/, '');
+  const email = btn.dataset.email || '';
+  const subject = btn.dataset.subject || '';
+  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  // Remember we exported this recipient so a long list shows who's already done.
+  if (btn.dataset.exportKey) {
+    WKMail.markExported(btn.dataset.exportKey);
+    const at = WKMail.exportedAt(btn.dataset.exportKey);
+    btn.textContent = '✓ ' + WKMail.relTime(at);
+    btn.title = WKMail.exportedTitle(at);
+    btn.style.borderColor = '#2a5a3a'; btn.style.color = '#4ec9b0'; btn.style.background = '#13241c';
+    _mmUpdateExportSummary();
+  }
+  // Durable record for the Home "Last contacted" panel (best-effort).
+  try {
+    _api('POST', '/api/contact-log', {
+      client_name: card ? card.dataset.client : '',
+      contact_name: btn.dataset.name || '',
+      contact_email: email,
+      subject: subject,
+      body: body,
+    });
+  } catch (_) {}
+}
+
+// ── Export progress across the whole batch ──────────────────────────────────
+// Every contact-with-email shown across all result cards, as stable export keys.
+function _mmAllShownExportKeys() {
+  const keys = [];
+  document.querySelectorAll('#mmResults .mm-result-card').forEach(card => {
+    const client = card.dataset.client;
+    (_mmContactMap[client] || []).forEach(c => {
+      const m = (typeof c.metadata === 'string') ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+      if (m.email) keys.push(WKMail.exportKey(client, m.email, c.name));
+    });
+  });
+  return keys;
+}
+
+// Re-style the per-contact Outlook buttons + per-card tallies from localStorage
+// (used after a bulk action marks/clears many at once).
+function _mmRefreshExportedButtons() {
+  document.querySelectorAll('#mmResults [data-export-key]').forEach(btn => {
+    const at = WKMail.exportedAt(btn.dataset.exportKey);
+    const done = !!at;
+    btn.textContent = done ? '✓ ' + WKMail.relTime(at) : '📧 Outlook';
+    btn.title = done ? WKMail.exportedTitle(at) : 'Open a personalized draft in Outlook';
+    btn.style.borderColor = done ? '#2a5a3a' : '#2a2a2a';
+    btn.style.color = '#4ec9b0';
+    btn.style.background = done ? '#13241c' : 'none';
+  });
+  document.querySelectorAll('#mmResults .mm-result-card').forEach(card => {
+    const client = card.dataset.client;
+    const withEmail = (_mmContactMap[client] || []).filter(c => {
+      const m = (typeof c.metadata === 'string') ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+      return !!m.email;
+    });
+    const done = withEmail.filter(c => {
+      const m = (typeof c.metadata === 'string') ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+      return WKMail.isExported(WKMail.exportKey(client, m.email, c.name));
+    }).length;
+    const badge = card.querySelector('[data-mm-card-count]');
+    if (badge) {
+      badge.textContent = withEmail.length ? `${done}/${withEmail.length} exported` : '';
+      badge.style.color = (withEmail.length && done === withEmail.length) ? '#4ec9b0' : '#888';
+    }
+  });
+}
+
+// Update the batch summary line ("Exported N / M recipients · K left").
+function _mmUpdateExportSummary() {
+  _mmRefreshExportedButtons();
+  const keys = _mmAllShownExportKeys();
+  const total = keys.length;
+  const done = keys.filter(k => WKMail.isExported(k)).length;
+  const sum = document.getElementById('mmExportSummary');
+  if (!sum) return;
+  if (!total) { sum.innerHTML = ''; return; }
+  const left = total - done;
+  sum.innerHTML = `Exported <b style="color:var(--c-accent, #4ec9b0)">${done}</b> / ${total} recipient(s)`
+    + (left ? ` · <span style="color:var(--c-orange, #ce9178)">${left} left</span>` : ` · <span style="color:var(--c-accent, #4ec9b0)">all done ✓</span>`);
+}
+
+function renderMmResults(results) {
+  const el = document.getElementById('mmResults');
+  if (!results.length) { el.innerHTML = '<div style="color:var(--c-faint, #555);font-size:0.8rem;">No results</div>'; return; }
+  const evName = document.getElementById('mmEventName')?.value || '';
+  el.innerHTML = results.map(r => {
+    const sourcesHtml = _renderSources(r.sources_reasoning);
+    const sourcesListHtml = _renderSourcesList(r.sources_list || [], r.client_name);
+    const showSources = sourcesHtml || sourcesListHtml;
+    const rEventName = r.event_name || evName || '';
+    const contactRowsHtml = _renderMmContactRows(r.client_name, rEventName);
+    return `
+    <div class="mm-result-card" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);border-radius:6px;padding:0.9rem 1rem;">
+      <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.5rem;">
+        <span style="font-size:0.82rem;font-weight:600;color:var(--c-text, #d4d4d4);">${r.client_name}</span>
+        ${r.error ? `<span style="font-size:0.72rem;color:var(--c-redhi, #f48771);">${r.error}</span>` : ''}
+        ${r.doc_id ? `<span style="font-size:0.68rem;color:var(--c-faint, #555);">doc #${r.doc_id}</span>` : ''}
+      </div>
+      ${rEventName ? `<div style="font-size:0.72rem;color:var(--c-muted, #888);margin-bottom:0.35rem;"><span style="color:var(--c-faint, #555);text-transform:uppercase;letter-spacing:0.05em;font-size:0.66rem;">Betreff</span> &nbsp;${_esc('Einladung: ' + rEventName)}</div>` : ''}
+      <textarea rows="8" style="width:100%;background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text3, #bbb);
+                border-radius:4px;padding:0.5rem 0.7rem;font-size:0.75rem;
+                font-family:var(--c-font-mono, 'Menlo','Consolas',monospace);resize:vertical;line-height:1.55;"
+      >${r.error ? r.error : _esc(r.email || '')}</textarea>
+      ${contactRowsHtml}
+      ${showSources ? `
+      <details style="margin-top:0.55rem;background:var(--c-bg4, #141414);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;">
+        <summary style="padding:0.35rem 0.65rem;cursor:pointer;font-size:0.7rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.06em;user-select:none;list-style:none;">&#9654; Sources &amp; Reasoning</summary>
+        <div style="padding:0.45rem 0.8rem 0.65rem;font-size:0.75rem;color:var(--c-text2, #ccc);line-height:1.6;border-top:1px solid var(--c-line, #2a2a2a);">${sourcesHtml}${sourcesListHtml}</div>
+      </details>` : ''}
+    </div>`;
+  }).join('');
+}
+
+</script>
+
+<!-- Multi-product bulk mail overlay -->
+<div id="multiMailOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:800;align-items:center;justify-content:center;">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(860px,96vw);max-height:92vh;display:flex;flex-direction:column;padding:1.25rem;gap:0.9rem;overflow-y:auto;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <span style="font-size:0.92rem;font-weight:700;color:var(--c-text, #d4d4d4);">✉ Bulk Emails</span>
+      <div style="display:flex;align-items:center;gap:0.4rem;">
+        <span style="font-size:0.68rem;color:var(--c-muted2, #666);text-transform:uppercase;letter-spacing:0.05em;">Mode:</span>
+        <button id="mmModeGeneral" class="toggle-btn on" onclick="setMmMode('general')" title="Cold outreach — do not reference prior meetings">General</button>
+        <button id="mmModeTargeted" class="toggle-btn" onclick="setMmMode('targeted')" title="May reference prior meetings and relationship">Targeted</button>
+        <button id="mmModeCasual" class="toggle-btn" onclick="setMmMode('casual')" title="Casual tone — greet by first name only">Casual</button>
+      </div>
+      <button onclick="closeMultiMailModal()" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:1.1rem;">✕</button>
+    </div>
+    <div style="display:flex;gap:0.75rem;align-items:flex-start;flex-wrap:wrap;flex-shrink:0;">
+      <div style="display:flex;flex-direction:column;gap:0.3rem;">
+        <label style="font-size:0.68rem;color:var(--c-muted2, #666);text-transform:uppercase;letter-spacing:0.05em;">Template</label>
+        <select id="mmType" onchange="onMmTypeChange()" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.5rem;font-size:0.78rem;">
+          <option value="event_invitation">Event Invitation</option>
+          <option value="follow_up">Follow-up</option>
+          <option value="introduction">Introduction</option>
+          <option value="check_in">Check-in</option>
+        </select>
+      </div>
+      <div id="mmEventFields" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+        <input id="mmEventName" placeholder="Event name" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.55rem;font-size:0.78rem;width:175px;">
+        <input id="mmEventDate" type="date" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.55rem;font-size:0.78rem;">
+        <input id="mmEventLink" placeholder="Event link (optional)" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.55rem;font-size:0.78rem;width:195px;">
+      </div>
+    </div>
+    <textarea id="mmCustom" rows="2" placeholder="Custom instructions (optional)…" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.45rem 0.7rem;font-size:0.78rem;font-family:inherit;resize:vertical;flex-shrink:0;"></textarea>
+    <div style="flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.4rem;">
+        <span style="font-size:0.7rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.05em;">Products</span>
+        <span style="font-size:0.66rem;color:var(--c-muted2, #666);text-transform:none;letter-spacing:0;">optional — leave empty for a general email</span>
+        <button onclick="toggleAllMm('products',true)" style="background:none;border:none;color:var(--c-blue, #569cd6);cursor:pointer;font-size:0.72rem;">All</button>
+        <button onclick="toggleAllMm('products',false)" style="background:none;border:none;color:var(--c-blue, #569cd6);cursor:pointer;font-size:0.72rem;">None</button>
+      </div>
+      <div id="mmProductList" style="display:flex;flex-wrap:wrap;gap:0.4rem;max-height:120px;overflow-y:auto;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;padding:0.5rem;"></div>
+    </div>
+    <div style="flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;flex-wrap:wrap;">
+        <span style="font-size:0.7rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.05em;">Clients</span>
+        <button id="mmcf-all" onclick="setMmClientFilter('all')" style="background:var(--c-accenttint, #13241c);border:1px solid var(--c-accentline, #2d5a48);color:var(--c-accent, #4ec9b0);border-radius:4px;padding:0.1rem 0.45rem;font-size:0.7rem;cursor:pointer;">All</button>
+        <button id="mmcf-mine" onclick="setMmClientFilter('mine')" style="background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-muted, #888);border-radius:4px;padding:0.1rem 0.45rem;font-size:0.7rem;cursor:pointer;">My clients</button>
+        <button id="mmcf-focus" onclick="setMmClientFilter('focus')" style="background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-muted, #888);border-radius:4px;padding:0.1rem 0.45rem;font-size:0.7rem;cursor:pointer;">My focus</button>
+        <select id="mmOwnerFilter" onchange="setMmOwnerFilter(this.value)" title="Filter to a specific owner's clients" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.12rem 0.35rem;font-size:0.7rem;max-width:170px;"><option value="">Owner: anyone</option></select>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:0.6rem;">
+          <span id="mmSelCount" style="color:var(--c-accent, #4ec9b0);font-size:0.7rem;"></span>
+          <button onclick="toggleAllMm('clients',true)" title="Select all clients shown" style="background:none;border:none;color:var(--c-blue, #569cd6);cursor:pointer;font-size:0.72rem;">Select all</button>
+          <button onclick="toggleAllMm('clients',false)" title="Clear selection" style="background:none;border:none;color:var(--c-blue, #569cd6);cursor:pointer;font-size:0.72rem;">Clear</button>
+        </span>
+      </div>
+      <div id="mmClientList" style="display:flex;flex-wrap:wrap;gap:0.4rem;max-height:130px;overflow-y:auto;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;padding:0.5rem;"></div>
+    </div>
+    <button id="mmGenBtn" onclick="generateMultiMail()" style="flex-shrink:0;align-self:flex-start;background:var(--c-accenttint, #1a3a2e);border:1px solid var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0);border-radius:4px;padding:0.3rem 0.9rem;font-size:0.82rem;cursor:pointer;">Generate Emails</button>
+    <div id="mmResults" style="display:flex;flex-direction:column;gap:0.75rem;"></div>
+  </div>
+</div>
+</body>
+</html>

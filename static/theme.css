@@ -1,0 +1,2733 @@
+/* Buzzowl — opt-in IBM Carbon theme. Applied only when
+   <html data-theme="carbon">. Classic users never see these values
+   (the source var() fallbacks hold the original palette). */
+
+@font-face{font-family:'IBM Plex Sans';font-weight:300;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-sans-300.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Sans';font-weight:400;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-sans-400.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Sans';font-weight:600;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-sans-600.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Mono';font-weight:400;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-mono-400.woff2') format('woff2');}
+@font-face{font-family:'IBM Plex Mono';font-weight:500;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-mono-500.woff2') format('woff2');}
+
+:root[data-theme="carbon"]{
+  color-scheme: dark;
+  --c-font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --c-font-mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  --c-accent: #0f62fe;
+  --c-accent2: #0353e9;
+  --c-accenthi: #4589ff;
+  --c-accentline: #2f4a80;
+  --c-accenttint: #182a4d;
+  --c-accenttint2: #1d3a6b;
+  --c-bg: #161616;
+  --c-bg2: #1c1c1c;
+  --c-bg3: #161616;
+  --c-bg4: #161616;
+  --c-blue: #78a9ff;
+  --c-bluehi: #a6c8ff;
+  --c-blueline: #2f4a80;
+  --c-bluetint: #16243d;
+  --c-faint: #6f6f6f;
+  --c-faint2: #525252;
+  --c-ink: #0c0c0c;
+  --c-line: #393939;
+  --c-line2: #393939;
+  --c-line3: #525252;
+  --c-linefaint: #2a2a2a;
+  --c-muted: #8d8d8d;
+  --c-muted2: #6f6f6f;
+  --c-neutraly: #c6c6c6;
+  --c-orange: #ff832b;
+  --c-orangetint: #2c1a0d;
+  --c-postint: #132a1c;
+  --c-purple: #be95ff;
+  --c-red: #fa4d56;
+  --c-redhi: #ff8389;
+  --c-redtint: #2a1517;
+  --c-surface: #262626;
+  --c-surface2: #333333;
+  --c-text: #f4f4f4;
+  --c-text2: #c6c6c6;
+  --c-text3: #a8a8a8;
+  --c-text4: #8d8d8d;
+  --c-texthi: #ffffff;
+}
+
+/* smoother rendering for the Carbon feel */
+:root[data-theme="carbon"] body{ -webkit-font-smoothing:antialiased; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   CARBON RELAYOUT — structural changes for the opt-in redesign.
+   All rules are scoped to [data-theme="carbon"]; classic DOM is re-flowed,
+   never forked, so the classic look is unaffected.
+   ═══════════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"]{ --c-rail: 216px; }
+
+/* ── Left side-nav (replaces the crammed horizontal top bar) ── */
+:root[data-theme="carbon"] #main-nav{
+  position:fixed; top:0; left:0; bottom:0; width:var(--c-rail);
+  flex-direction:column; align-items:stretch; gap:1px;
+  padding:12px 0 14px; overflow-y:auto; z-index:60;
+  border-right:1px solid var(--c-line,#333); border-bottom:none;
+  background:var(--c-bg,#161616); min-height:0;
+}
+:root[data-theme="carbon"] #main-nav .nav-brand{
+  padding:4px 18px 16px; font-size:1rem; letter-spacing:.005em; flex-shrink:0;
+}
+:root[data-theme="carbon"] #main-nav .nav-subtitle{
+  padding:0 18px 10px; max-width:none; font-size:.72rem;
+}
+:root[data-theme="carbon"] #main-nav a.nav-link{
+  display:block; width:100%; padding:8px 18px; font-size:.84rem;
+  border-bottom:none; border-left:2px solid transparent;
+}
+:root[data-theme="carbon"] #main-nav a.nav-link:hover{ background:var(--c-bg2,#1a1a1a); }
+:root[data-theme="carbon"] #main-nav a.nav-link.nav-active{
+  border-bottom:none; border-left-color:var(--c-accent,#4ec9b0);
+  background:var(--c-surface,#252526);
+}
+/* spacer pushes the actions + user block to the bottom of the rail */
+:root[data-theme="carbon"] #main-nav .nav-spacer{ flex:1 1 auto; min-height:12px; }
+:root[data-theme="carbon"] #main-nav .nav-action-btn{ margin:3px 14px; text-align:left; }
+:root[data-theme="carbon"] #main-nav #wk-fb-btn{ align-self:flex-start; margin-left:14px; }
+:root[data-theme="carbon"] #main-nav #wk-theme-btn{ margin:8px 14px 6px; border-radius:0; text-align:center; }
+:root[data-theme="carbon"] #main-nav .nav-user{ padding:6px 18px 0; }
+:root[data-theme="carbon"] #main-nav .nav-logout{ padding:2px 18px; text-align:left; }
+:root[data-theme="carbon"] #main-nav #navSettingsGear{ margin-left:14px; }
+
+/* shift page content clear of the fixed rail — only where the rail exists
+   (contact.html mounts its nav differently, so :has() spares it). */
+:root[data-theme="carbon"] .page:has(> #main-nav){ padding-left:var(--c-rail); }
+/* index.html / knowledge.html / agents.html mount #main-nav directly under
+   <body> (no .page wrapper), so offset the body itself. The two selectors are
+   mutually exclusive — a page's nav is under .page OR under body, never both —
+   so there's no double offset. Fixed rail is viewport-anchored, unaffected. */
+:root[data-theme="carbon"] body:has(> #main-nav){ padding-left:var(--c-rail); }
+
+/* Mobile: below the rail breakpoint, fall back to the classic top bar so the
+   nav never eats a small screen. */
+@media (max-width:900px){
+  :root[data-theme="carbon"] #main-nav{
+    position:static; width:auto; flex-direction:row; align-items:center;
+    border-right:none; border-bottom:1px solid var(--c-line,#333);
+    overflow-x:auto; overflow-y:hidden; padding:0.5rem 1.2rem; gap:1rem;
+  }
+  :root[data-theme="carbon"] #main-nav .nav-brand{ padding:0; }
+  :root[data-theme="carbon"] #main-nav a.nav-link{
+    display:inline; width:auto; padding-bottom:2px; border-left:none;
+    border-bottom:2px solid transparent; white-space:nowrap;
+  }
+  :root[data-theme="carbon"] #main-nav a.nav-link.nav-active{
+    border-left:none; border-bottom-color:var(--c-accent,#4ec9b0); background:none;
+  }
+  :root[data-theme="carbon"] #main-nav .nav-action-btn{ margin:0; }
+  :root[data-theme="carbon"] #main-nav .nav-user{ padding:0; }
+  :root[data-theme="carbon"] .page:has(> #main-nav){ padding-left:0; }
+  :root[data-theme="carbon"] body:has(> #main-nav){ padding-left:0; }
+}
+
+
+/* ═══ CARBON PER-PAGE RELAYOUT (merged from carbon-css/) ═══ */
+
+/* carbon relayout: agents */
+/* Opt-in IBM Carbon LAYOUT + SHAPE for the Agent Dashboard.
+   Applies only under <html data-theme="carbon">. Color/font palette and the
+   global left side-nav live in theme.css; this file is shape only:
+   flat squared panels, hairline (var(--c-line)) borders, a Carbon tab strip,
+   compact hairline-separated feed rows, a squared task-detail panel.
+   Every selector is scoped and already exists in agents.html. The D3/SVG
+   graph internals and #main-nav are never touched. */
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   1 · SQUARE EVERYTHING — border-radius:0 on panels, cards, buttons,
+       inputs, badges, tabs. Circles (leg-dot, SVG nodes) stay round.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .btn,
+:root[data-theme="carbon"] .btn-xs,
+:root[data-theme="carbon"] select,
+:root[data-theme="carbon"] .active-card,
+:root[data-theme="carbon"] .ar-card,
+:root[data-theme="carbon"] .run-card,
+:root[data-theme="carbon"] .run-badge,
+:root[data-theme="carbon"] .detail-panel,
+:root[data-theme="carbon"] .modal,
+:root[data-theme="carbon"] .df-val.code,
+:root[data-theme="carbon"] .form-row input,
+:root[data-theme="carbon"] .form-row select{
+  border-radius:0;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   2 · SPLIT LAYOUT — sidebar │ task-graph panel │ live-feed panel,
+       framed by flat 1px hairlines. The classic dividers use invisible
+       near-bg tones; promote them to var(--c-line) so the split reads.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .sidebar{
+  border-right:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .live-feed{
+  border-left:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .sidebar-section{
+  border-bottom:1px solid var(--c-line,#393939);
+  padding:0.85rem 0.9rem;
+}
+
+/* Filter bar + queue = top/bottom rails of the task-graph panel */
+:root[data-theme="carbon"] .filter-bar{
+  border-bottom:1px solid var(--c-line,#393939);
+  padding:0.5rem 0.9rem;
+}
+:root[data-theme="carbon"] .queue-section{
+  border-top:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .queue-head{
+  border-bottom:1px solid var(--c-line,#393939);
+}
+
+/* Task-graph container: flat, no inset shadow — only its container is
+   touched; the SVG and its nodes/links/text are left entirely alone. */
+:root[data-theme="carbon"] #graph-wrapper{
+  box-shadow:none;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   3 · CARBON TAB STRIP — the Live Feed / Pipeline Log / Runs / Cron
+       tabs (#feedTab*) sit as squared tabs seated on a hairline bar;
+       hover raises a 2px accent underline. (Active-tab state is driven
+       by inline JS color, so the persistent underline is a hover
+       affordance — see structural note.)
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .feed-head{
+  align-items:stretch;
+  padding:0 8px;
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .feed-head .s-label{
+  display:flex;
+  align-items:center;
+  padding:9px 10px;
+  margin-bottom:-1px;
+  border-bottom:2px solid transparent;
+  letter-spacing:0.07em;
+}
+:root[data-theme="carbon"] .feed-head .s-label:hover{
+  border-bottom-color:var(--c-accent,#0f62fe);
+}
+:root[data-theme="carbon"] .feed-head #feed-count,
+:root[data-theme="carbon"] .feed-head .btn{
+  align-self:center;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   4 · LIVE-FEED ROWS — compact, hairline-separated rows with mono
+       timestamps (body is already mono). Kill the slide-in flourish
+       for a flat engineered feel; dense-list separators go subtle.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .feed-entry{
+  padding:0.28rem 0.75rem;
+  border-bottom:1px solid var(--c-linefaint,#2a2a2a);
+  animation:none;
+}
+:root[data-theme="carbon"] .fe-type{
+  letter-spacing:0.08em;
+}
+:root[data-theme="carbon"] .fe-ts{
+  font-variant-numeric:tabular-nums;
+}
+
+/* Tool-call stream rows (Runs tab) — squared, hairline-separated */
+:root[data-theme="carbon"] .tc-row{
+  border-bottom:1px solid var(--c-linefaint,#2a2a2a);
+  padding:0.22rem 0.75rem;
+}
+:root[data-theme="carbon"] .tc-ts{
+  font-variant-numeric:tabular-nums;
+}
+
+/* Run cards + agent-run cards + subject groups — flat squared tiles */
+:root[data-theme="carbon"] .run-card{
+  border-bottom:1px solid var(--c-linefaint,#2a2a2a);
+}
+:root[data-theme="carbon"] .subject-group{
+  border-bottom:1px solid var(--c-linefaint,#2a2a2a);
+}
+:root[data-theme="carbon"] .active-card,
+:root[data-theme="carbon"] .ar-card,
+:root[data-theme="carbon"] .run-card{
+  box-shadow:none;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   5 · ENGINEERED EYEBROWS — mono (inherited) uppercase muted labels get
+       Carbon letter-spacing. Color/transform already supplied globally.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .s-label,
+:root[data-theme="carbon"] .df-lbl,
+:root[data-theme="carbon"] .ac-type{
+  letter-spacing:0.08em;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   6 · TASK-DETAIL PANEL — squared slab, flat hairline, no shadow.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .detail-panel{
+  border-left:1px solid var(--c-line,#393939);
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .dp-head{
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .df-val.code{
+  border:1px solid var(--c-line,#393939);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   7 · RESEARCH MODAL — flat squared dialog, hairline border, no shadow.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .modal{
+  border:1px solid var(--c-line,#393939);
+  box-shadow:none;
+}
+
+/* carbon relayout: client */
+/* Layout & shape only for the client DETAIL page (static/client.html).
+   Every selector is scoped to :root[data-theme="carbon"]. Colours, fonts and
+   #main-nav are owned by theme.css and are never touched here.
+
+   Real structure: .body is a 2-column flex — .sidebar (profile / monitored
+   sources / contacts) | .main (.stats-bar + .tab-nav + .tab-panel*). The
+   overview panel (#tab-overview) stacks its sections (product-fit, jobs,
+   signals, research, brief) vertically; we keep that flow but square every
+   panel, add hairline borders, and tidy the gutters. */
+
+
+/* ── Two-column body: hairline gutter between sidebar and main ── */
+:root[data-theme="carbon"] .sidebar{
+  border-right:1px solid var(--c-line,#393939);
+  padding:1.25rem 1.1rem;
+  gap:1.5rem;
+}
+
+/* Sidebar section eyebrows → mono uppercase muted */
+:root[data-theme="carbon"] .sidebar h3{
+  font-family:var(--c-font-mono);
+  font-size:0.6875rem;
+  font-weight:500;
+  letter-spacing:0.08em;
+  color:var(--c-muted,#8d8d8d);
+}
+
+/* Profile card → flat squared panel with hairline border */
+:root[data-theme="carbon"] .profile-card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  padding:1rem;
+}
+:root[data-theme="carbon"] .profile-name{
+  font-weight:600;
+  letter-spacing:0.005em;
+}
+:root[data-theme="carbon"] .status-badge{ border-radius:0; }
+
+/* Contact rows keep their round avatars; only tidy the divider */
+:root[data-theme="carbon"] .contact-row{ border-bottom:1px solid var(--c-line,#393939); }
+/* .contact-avatar stays circular (border-radius:50%) — intentionally untouched */
+
+/* Inline edit inputs → squared */
+:root[data-theme="carbon"] .inline-edit input,
+:root[data-theme="carbon"] .inline-edit select,
+:root[data-theme="carbon"] .inline-edit textarea{ border-radius:0; }
+:root[data-theme="carbon"] .save-btn{ border-radius:0; }
+
+
+/* ── Stats bar ── */
+:root[data-theme="carbon"] .stats-bar{
+  border-bottom:1px solid var(--c-line,#393939);
+  padding:0.7rem 1.75rem;
+  gap:0.6rem;
+}
+:root[data-theme="carbon"] .stat-chip{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+}
+
+
+/* ── Carbon tabs ── horizontal bar, inactive muted, active = 2px accent underline */
+:root[data-theme="carbon"] .tab-nav{
+  border-bottom:1px solid var(--c-line,#393939);
+  padding:0 1.75rem;
+  gap:0;
+}
+:root[data-theme="carbon"] .tab-btn{
+  border-radius:0;
+  border-bottom:2px solid transparent;
+  color:var(--c-muted,#8d8d8d);
+  font-size:0.8125rem;
+  letter-spacing:0.01em;
+  padding:0.7rem 1rem;
+  margin-bottom:-1px;
+}
+:root[data-theme="carbon"] .tab-btn:hover{
+  color:var(--c-text,#f4f4f4);
+  background:var(--c-bg2,#1c1c1c);
+}
+:root[data-theme="carbon"] .tab-btn.active{
+  color:var(--c-text,#f4f4f4);
+  border-bottom-color:var(--c-accent,#0f62fe);
+  font-weight:600;
+}
+
+/* Panel gutters */
+:root[data-theme="carbon"] .tab-panel{ padding:1.75rem; }
+
+
+/* ── Section eyebrow labels → mono uppercase muted ── */
+:root[data-theme="carbon"] .section-label{
+  font-family:var(--c-font-mono);
+  font-size:0.6875rem;
+  font-weight:500;
+  letter-spacing:0.08em;
+  color:var(--c-muted,#8d8d8d);
+}
+
+
+/* ── Signals ── flat squared cards, keep the coloured left accent rail ── */
+:root[data-theme="carbon"] .signals-row{ gap:0.75rem; }
+:root[data-theme="carbon"] .signal-card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  border-left-width:3px;
+  background:var(--c-surface,#262626);
+}
+:root[data-theme="carbon"] .signal-type{
+  font-family:var(--c-font-mono);
+  letter-spacing:0.06em;
+}
+
+
+/* ── Latest research card ── */
+:root[data-theme="carbon"] .lr-card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  border-left-width:3px;
+}
+:root[data-theme="carbon"] .lr-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+  letter-spacing:0.04em;
+}
+
+
+/* ── Account Intelligence Brief ── flat squared panel, readable prose ── */
+:root[data-theme="carbon"] .brief-body{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  padding:1.5rem 1.9rem;
+}
+:root[data-theme="carbon"] .brief-body.empty{ border-style:dashed; }
+/* cap measure so long briefs stay readable */
+:root[data-theme="carbon"] .brief-body p,
+:root[data-theme="carbon"] .brief-body li{ max-width:68ch; }
+:root[data-theme="carbon"] .brief-body h1,
+:root[data-theme="carbon"] .brief-body h2{ border-bottom-color:var(--c-line,#393939); }
+:root[data-theme="carbon"] .brief-meta{
+  font-family:var(--c-font-mono);
+  letter-spacing:0.02em;
+}
+
+
+/* ── Findings grid ── squared cards, keep round relevance badge ── */
+:root[data-theme="carbon"] .findings-grid{ gap:0.75rem; }
+:root[data-theme="carbon"] .finding-card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+}
+/* .rel-badge stays circular (border-radius:50%) — intentionally untouched */
+:root[data-theme="carbon"] .source-chip,
+:root[data-theme="carbon"] .stype-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+}
+:root[data-theme="carbon"] .dl-btn{ border-radius:0; }
+
+
+/* ── Documents tab ── */
+:root[data-theme="carbon"] .filter-chip{
+  border-radius:0;                 /* pill → squared */
+  border:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .doc-row{ border-radius:0; }
+:root[data-theme="carbon"] .doc-row.expanded{ border-radius:0; }
+:root[data-theme="carbon"] .doc-type-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+}
+:root[data-theme="carbon"] .doc-panel{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  border-top:none;
+}
+:root[data-theme="carbon"] .doc-body h1,
+:root[data-theme="carbon"] .doc-body h2{ border-bottom-color:var(--c-line,#393939); }
+
+
+/* ── Buttons → squared, flat ── */
+:root[data-theme="carbon"] .btn,
+:root[data-theme="carbon"] .btn-teal{ border-radius:0; }
+
+
+/* ── Toast → squared, drop the heavy drop-shadow ── */
+:root[data-theme="carbon"] .toast{
+  border-radius:0;
+  box-shadow:none;
+  border-left:2px solid var(--c-accent,#0f62fe);
+}
+
+
+/* ── Login + meeting-prep modal → squared surfaces ── */
+:root[data-theme="carbon"] .login-box,
+:root[data-theme="carbon"] .login-box input,
+:root[data-theme="carbon"] .mp-box,
+:root[data-theme="carbon"] .mp-rendered,
+:root[data-theme="carbon"] .mp-chat-input,
+:root[data-theme="carbon"] .mp-chat-a{ border-radius:0; }
+
+/* carbon relayout: clients */
+/* Layout & shape only. Colours/fonts come from theme.css tokens.
+   Every rule is gated on :root[data-theme="carbon"] so classic users are untouched. */
+
+/* ── Toolbar ───────────────────────────────────────────────────────────── */
+:root[data-theme="carbon"] .toolbar {
+  gap: 0.65rem;
+  padding: 0.6rem 1.5rem;
+  align-items: center;
+  border-bottom: 1px solid var(--c-line, #393939);
+  background: var(--c-bg, #161616);
+}
+
+/* Squared filled search field, hairline border, accent focus. */
+:root[data-theme="carbon"] .search-input {
+  border-radius: 0;
+  border: 1px solid var(--c-line3, #525252);
+  background: var(--c-surface, #262626);
+  padding: 0.4rem 0.75rem;
+  width: 240px;
+}
+:root[data-theme="carbon"] .search-input:focus {
+  border-color: var(--c-accent, #0f62fe);
+  box-shadow: inset 0 -1px 0 0 var(--c-accent, #0f62fe);
+}
+
+/* Connected filter-chip group: squared chips that share a single hairline. */
+:root[data-theme="carbon"] .filter-chips {
+  gap: 0;
+  align-items: stretch;
+}
+:root[data-theme="carbon"] .chip {
+  border-radius: 0;
+  border: 1px solid var(--c-line3, #525252);
+  background: transparent;
+  color: var(--c-text3, #a8a8a8);
+  padding: 0.36rem 0.7rem;
+  font-family: var(--c-font-mono, ui-monospace, Menlo, monospace);
+  font-size: 0.72rem;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+/* Collapse the shared edge so the group reads as one bordered strip. */
+:root[data-theme="carbon"] .chip + .chip { margin-left: -1px; }
+:root[data-theme="carbon"] .chip:hover {
+  background: var(--c-surface, #262626);
+  border-color: var(--c-line3, #525252);
+  color: var(--c-text, #f4f4f4);
+  z-index: 1;
+}
+/* Active chip = solid accent, raised so its full border shows. */
+:root[data-theme="carbon"] .chip.active {
+  background: var(--c-accent, #0f62fe);
+  border-color: var(--c-accent, #0f62fe);
+  color: var(--c-texthi, #ffffff);
+  z-index: 2;
+}
+
+/* Sort <select> carries inline border-radius:5px — override needs !important. */
+:root[data-theme="carbon"] #sortSelect {
+  border-radius: 0 !important;
+  border: 1px solid var(--c-line3, #525252) !important;
+  background: var(--c-surface, #262626) !important;
+  padding: 0.4rem 0.6rem !important;
+}
+
+/* ── Stats bar → connected bordered KPI strip ──────────────────────────── */
+:root[data-theme="carbon"] .stats-bar {
+  gap: 0;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--c-line, #393939);
+  background: var(--c-bg, #161616);
+  align-items: stretch;
+}
+:root[data-theme="carbon"] .stat-chip {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  background: var(--c-surface, #262626);
+  padding: 0.45rem 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 92px;
+}
+:root[data-theme="carbon"] .stat-chip + .stat-chip { margin-left: -1px; }
+/* Big mono figure over an uppercase mono eyebrow label. */
+:root[data-theme="carbon"] .stat-val {
+  font-family: var(--c-font-mono, ui-monospace, Menlo, monospace);
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.1;
+  margin-right: 0;
+}
+:root[data-theme="carbon"] .stat-label {
+  font-family: var(--c-font-mono, ui-monospace, Menlo, monospace);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-muted, #8d8d8d);
+}
+
+/* ── Card grid ─────────────────────────────────────────────────────────── */
+:root[data-theme="carbon"] .content {
+  padding: 1.25rem 1.5rem;
+}
+/* Tighter, gridded: dense tile wall with 1px gutters. */
+:root[data-theme="carbon"] .grid {
+  grid-template-columns: repeat(auto-fill, minmax(244px, 1fr));
+  gap: 1px;
+}
+
+/* Flat squared tile: hairline border, no shadow. */
+:root[data-theme="carbon"] .client-card {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  background: var(--c-surface, #262626);
+  box-shadow: none;
+  padding: 1.1rem;
+  gap: 0.55rem;
+}
+/* Top accent keyline on interaction focus. (No per-card "my focus" class
+   exists in the DOM, so the keyline rides :hover / keyboard :focus.) */
+:root[data-theme="carbon"] .client-card:hover,
+:root[data-theme="carbon"] .client-card:focus {
+  border-color: var(--c-line3, #525252);
+  background: var(--c-surface2, #333333);
+  box-shadow: inset 0 2px 0 0 var(--c-accent, #0f62fe);
+  outline: none;
+}
+
+/* Corner controls: squared (glyphs stay as-is). */
+:root[data-theme="carbon"] .card-icon-btn {
+  border-radius: 0;
+  border: 1px solid var(--c-line3, #525252);
+}
+
+/* Squared status/industry tags (Carbon tag shape). Colours unchanged. */
+:root[data-theme="carbon"] .status-badge { border-radius: 0; }
+:root[data-theme="carbon"] .card-industry { border-radius: 0; }
+
+/* Gridded internal rhythm. */
+:root[data-theme="carbon"] .card-meta { gap: 0.25rem 0.7rem; }
+:root[data-theme="carbon"] .meta-item { font-size: 0.71rem; }
+:root[data-theme="carbon"] .card-footer {
+  margin-top: 0.35rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--c-linefaint, #2a2a2a);
+}
+/* Mono figure for the meeting count. */
+:root[data-theme="carbon"] .card-stat strong {
+  font-family: var(--c-font-mono, ui-monospace, Menlo, monospace);
+  color: var(--c-text2, #c6c6c6);
+}
+
+/* Empty state. */
+:root[data-theme="carbon"] .empty {
+  border: 1px solid var(--c-line, #393939);
+  background: var(--c-surface, #262626);
+}
+
+/* Modal buttons (used only in this page's dialogs, never in #main-nav). */
+:root[data-theme="carbon"] .btn,
+:root[data-theme="carbon"] .btn-teal { border-radius: 0; }
+
+/* carbon relayout: contact */
+/* Layout & shape only — flat squared panels, hairline borders, mono eyebrows.
+   Every selector scoped to :root[data-theme="carbon"]. Colors/fonts untouched. */
+
+/* ── Shell: profile rail | main content, both flush against a hairline seam ── */
+:root[data-theme="carbon"] .body{
+  gap:0;
+}
+
+:root[data-theme="carbon"] .sidebar{
+  width:288px;
+  padding:16px;
+  gap:16px;
+  border-right:1px solid var(--c-line,#393939);
+}
+
+/* mono uppercase muted eyebrow */
+:root[data-theme="carbon"] .sidebar h3{
+  font-family:var(--c-font-mono);
+  text-transform:uppercase;
+  font-size:.66rem;
+  letter-spacing:.12em;
+  color:var(--c-muted,#8d8d8d);
+  margin-bottom:.6rem;
+}
+
+/* ── Profile panel: flat, squared, hairline framed ── */
+:root[data-theme="carbon"] .profile-card{
+  border-radius:0;
+  padding:16px;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  box-shadow:none;
+}
+
+/* avatar stays a circle */
+:root[data-theme="carbon"] .profile-avatar{
+  border-radius:50%;
+}
+
+/* squared action buttons, flat */
+:root[data-theme="carbon"] .linkedin-btn,
+:root[data-theme="carbon"] .enrich-btn{
+  border-radius:0;
+  box-shadow:none;
+}
+
+/* ── Stat chips: squared hairline cells ── */
+:root[data-theme="carbon"] .stat-chip{
+  border-radius:0;
+  padding:.4rem .75rem;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+}
+
+/* ── Main column: tidy vertical rhythm ── */
+:root[data-theme="carbon"] .main{
+  padding:16px;
+  gap:16px;
+}
+
+/* mono uppercase muted eyebrow */
+:root[data-theme="carbon"] .section-title{
+  font-family:var(--c-font-mono);
+  text-transform:uppercase;
+  font-size:.66rem;
+  letter-spacing:.12em;
+  color:var(--c-muted,#8d8d8d);
+  margin-bottom:.6rem;
+}
+
+/* ── Key Facts panel: flat squared ── */
+:root[data-theme="carbon"] .facts-card{
+  border-radius:0;
+  padding:16px;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .fact-item{
+  border-bottom:1px solid var(--c-line,#393939);
+}
+
+/* ── Sources grid: clean even columns ── */
+:root[data-theme="carbon"] .findings-grid{
+  grid-template-columns:repeat(auto-fill,minmax(288px,1fr));
+  gap:16px;
+}
+:root[data-theme="carbon"] .finding-card{
+  border-radius:0;
+  padding:16px;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .finding-full{
+  border-top:1px solid var(--c-line,#393939);
+}
+
+/* squared badges/chips */
+:root[data-theme="carbon"] .source-chip,
+:root[data-theme="carbon"] .stype-badge{
+  border-radius:0;
+}
+
+/* ── Toast: squared, flat ── */
+:root[data-theme="carbon"] .toast{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  box-shadow:none;
+}
+
+/* carbon relayout: home */
+/* Scope: every rule begins with :root[data-theme="carbon"] so classic
+   (default) users are 100% unaffected. Layout & shape only — colors, fonts
+   and #main-nav are handled elsewhere in theme.css.
+   NOTE: home.html has no KPI/number-strip element in its DOM (no .kpis or
+   stats row exists), so the "connected bordered number strip" target cannot
+   be built without inventing markup — intentionally omitted per the rules. */
+
+/* ── Dashboard shell: tighter Carbon rhythm, wider productive canvas ── */
+:root[data-theme="carbon"] .content{ padding:1.5rem 1.5rem 3rem; }
+:root[data-theme="carbon"] .dash{ max-width:1200px; gap:1rem; }
+:root[data-theme="carbon"] .dash-head{ padding-bottom:2px; }
+/* Center the `.content` column in the space beside the rail — but ONLY on the
+   "content-only" pages (home, insights, settings), whose whole body lives in
+   `.content`. The shared `.content` class inherits a max-width:1056px from the
+   `today` block (~L2595); without centering that caps the column and pins it
+   against the rail, dumping all the slack on the right (the home complaint).
+   Pages that carry a full-width `.toolbar`/`.filter-bar` sibling OUTSIDE
+   `.content` (clients, news, opportunities, ranking, today, research) are
+   EXCLUDED via :not(:has(...)) — centering their capped results under a
+   full-width header would misalign them. `width:100%` keeps the flex item
+   filling to its max-width (auto margins alone shrink a stretched item to its
+   content on empty states); auto side-margins then center it. Classic
+   untouched (carbon-scoped). */
+:root[data-theme="carbon"] .page:not(:has(.toolbar)):not(:has(.filter-bar)) .content{
+  width:100%; margin-left:auto; margin-right:auto;
+}
+
+/* Two independent columns (main 1.5fr = Today + chat; side rail 1fr). The
+   grid already exists — pin it to a Carbon 16px gutter. */
+:root[data-theme="carbon"] .cols{ gap:1rem; }
+:root[data-theme="carbon"] .col{ gap:1rem; }
+
+/* ── Cards → flat squared tiles with hairline borders, no shadow ── */
+:root[data-theme="carbon"] .card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-bg2,#1c1c1c);
+  box-shadow:none;
+  padding:16px 20px;
+}
+/* Primary "Today" tile: flatten the gradient to a solid surface and carry the
+   emphasis with a Carbon left accent bar instead. */
+:root[data-theme="carbon"] .card.primary{
+  border-radius:0;
+  background:var(--c-bg2,#1c1c1c);
+  border:1px solid var(--c-line,#393939);
+  border-left:3px solid var(--c-accent,#0f62fe);
+}
+
+/* ── Eyebrow section labels: mono, uppercase, muted (Carbon caps) ── */
+:root[data-theme="carbon"] .card h2{
+  font-family:var(--c-font-mono, ui-monospace);
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--c-muted,#8d8d8d);
+  font-weight:500;
+  font-size:.68rem;
+  margin-bottom:.85rem;
+}
+/* Keep the "Full list →" / "All clients →" links legible (not caps/mono). */
+:root[data-theme="carbon"] .card h2 a{
+  text-transform:none;
+  letter-spacing:normal;
+  font-family:var(--c-font-sans);
+}
+
+/* ── Squared corners on every panel / control / badge / chip ──
+   (avatars, circular icons and status dots keep their radius — not touched;
+    .task-check stays a 50% circle by inheritance.) */
+:root[data-theme="carbon"] .chat-a,
+:root[data-theme="carbon"] #homeChatInput,
+:root[data-theme="carbon"] #homeChatSend,
+:root[data-theme="carbon"] .src-pill,
+:root[data-theme="carbon"] .nba-act,
+:root[data-theme="carbon"] .news-badge,
+:root[data-theme="carbon"] .mc-mail,
+:root[data-theme="carbon"] .mail-quick select,
+:root[data-theme="carbon"] .mail-quick button,
+:root[data-theme="carbon"] .mail-link,
+:root[data-theme="carbon"] .draft-status,
+:root[data-theme="carbon"] .lc-toggle,
+:root[data-theme="carbon"] .lc-view,
+:root[data-theme="carbon"] .lc-body,
+:root[data-theme="carbon"] .task-add input[type=text],
+:root[data-theme="carbon"] .task-add select,
+:root[data-theme="carbon"] .task-add input[type=date],
+:root[data-theme="carbon"] .task-add button,
+:root[data-theme="carbon"] .cta-btn{
+  border-radius:0;
+}
+
+/* ── Empty-state hero → flat squared tile with an accent bar ── */
+:root[data-theme="carbon"] .hero{
+  border-radius:0;
+  background:var(--c-bg2,#1c1c1c);
+  border:1px solid var(--c-line,#393939);
+  border-left:3px solid var(--c-accent,#0f62fe);
+  box-shadow:none;
+  padding:20px 24px;
+}
+
+/* ── Mono tabular numerals where the page renders numbers/times, so figures
+   line up in the Carbon way (ranks, ages, timestamps). ── */
+:root[data-theme="carbon"] .nba-rank,
+:root[data-theme="carbon"] .lc-when,
+:root[data-theme="carbon"] .task-meta{
+  font-family:var(--c-font-mono, ui-monospace);
+  font-variant-numeric:tabular-nums;
+}
+
+/* carbon relayout: index */
+/* Opt-in IBM Carbon LAYOUT & SHAPE for the recorder page (static/index.html).
+   Scoped entirely to :root[data-theme="carbon"]; classic theme is untouched.
+   Colors/fonts stack + #main-nav are owned elsewhere (theme.css) — not touched
+   here beyond assigning the mono token to eyebrows and the transcript block,
+   which the target explicitly calls for.
+
+   NOTE: this page's DOM is a vertical stack of bands (paste-transcript →
+   summary → pipeline) plus toggleable activity/search/NBA panels — there are
+   no separate live/post-pass transcript columns to grid. This file flattens
+   and squares the existing panels, turns the compose textarea into a readable
+   mono block, tidies the login/settings overlays, and makes the small labels
+   read as mono uppercase eyebrows. Scroll/overflow containers are left intact. */
+
+/* ═══════════════════════════════════════════════════════════════════
+   LOGIN OVERLAY — squared, flat, tidy
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] #loginPanel{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  box-shadow:none;
+  width:400px; padding:24px; gap:16px;
+}
+:root[data-theme="carbon"] #loginPanel h2{
+  font-family:var(--c-font-mono); text-transform:uppercase;
+  letter-spacing:.04em; font-size:.92rem;
+}
+:root[data-theme="carbon"] .login-tabs{
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .login-tab{
+  font-family:var(--c-font-mono); text-transform:uppercase;
+  letter-spacing:.05em; font-size:.72rem; border-radius:0;
+}
+:root[data-theme="carbon"] .login-field label{
+  font-family:var(--c-font-mono); text-transform:uppercase;
+  letter-spacing:.05em; font-size:.68rem; color:var(--c-muted,#8d8d8d);
+}
+:root[data-theme="carbon"] .login-field input{
+  border-radius:0; border:1px solid var(--c-line,#393939);
+  padding:.5rem .65rem;
+}
+:root[data-theme="carbon"] #loginSubmitBtn{
+  border-radius:0; padding:.6rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SETTINGS OVERLAY — squared, flat
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] #settingsPanel{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  box-shadow:none; padding:20px;
+}
+:root[data-theme="carbon"] #settingsPanel h2{
+  font-family:var(--c-font-mono); text-transform:uppercase; letter-spacing:.04em;
+}
+:root[data-theme="carbon"] .settings-field label{
+  font-family:var(--c-font-mono); text-transform:uppercase;
+  letter-spacing:.05em; font-size:.68rem;
+}
+:root[data-theme="carbon"] .settings-field input[type=password],
+:root[data-theme="carbon"] .settings-field input[type=text],
+:root[data-theme="carbon"] #settingsSaveBtn,
+:root[data-theme="carbon"] #settingsCancelBtn{
+  border-radius:0;
+}
+/* inline-styled controls carry border-radius:4px on the element itself */
+:root[data-theme="carbon"] #macTokenDisplay,
+:root[data-theme="carbon"] #macTokenShowBtn,
+:root[data-theme="carbon"] #macTokenCopyBtn,
+:root[data-theme="carbon"] #inviteUsername,
+:root[data-theme="carbon"] #invitePassword,
+:root[data-theme="carbon"] #inviteDisplay,
+:root[data-theme="carbon"] #inviteRole,
+:root[data-theme="carbon"] #inviteBtn{
+  border-radius:0 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TOGGLEABLE BANDS — activity / search / next-best-action
+   Flat inner cards, squared controls, mono eyebrow.
+   overflow-y / max-height left untouched so the lists keep scrolling.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] #activityList,
+:root[data-theme="carbon"] #searchResults,
+:root[data-theme="carbon"] #nbaList{
+  border-radius:0; border:1px solid var(--c-line,#393939);
+  padding:14px 16px;
+}
+:root[data-theme="carbon"] #nbaList{ padding:8px 14px; }
+
+:root[data-theme="carbon"] .activity-badge,
+:root[data-theme="carbon"] .ai-type,
+:root[data-theme="carbon"] .result-type,
+:root[data-theme="carbon"] .nba-action-btn{
+  border-radius:0;
+}
+
+:root[data-theme="carbon"] #searchInput,
+:root[data-theme="carbon"] #searchBtn,
+:root[data-theme="carbon"] #searchCloseBtn,
+:root[data-theme="carbon"] #activityCloseBtn{
+  border-radius:0;
+}
+
+:root[data-theme="carbon"] #nbaHeader .nba-title{
+  font-family:var(--c-font-mono); letter-spacing:.1em;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   COMPOSE / TRANSCRIPT PANEL — the paste-transcript workspace
+   Readable mono block, squared inputs, mono uppercase eyebrow.
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] #textPanel{
+  padding:16px 24px;
+}
+:root[data-theme="carbon"] #textPanelLabel{
+  font-family:var(--c-font-mono); text-transform:uppercase;
+  letter-spacing:.1em; color:var(--c-muted,#8d8d8d);
+}
+:root[data-theme="carbon"] #langSelect,
+:root[data-theme="carbon"] #textTitle,
+:root[data-theme="carbon"] #textSubmitBtn{
+  border-radius:0;
+}
+:root[data-theme="carbon"] #textInput{
+  border-radius:0; border:1px solid var(--c-line,#393939);
+  font-family:var(--c-font-mono); font-size:.82rem;
+  line-height:1.7; padding:14px 16px;
+}
+/* .vis-pill / ::after stay round — it is a toggle switch, not a panel */
+
+/* ═══════════════════════════════════════════════════════════════════
+   SUMMARY SECTION — squared output card, mono eyebrow
+   (rendered markdown stays in the sans stack for prose readability)
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .summary-label{
+  font-family:var(--c-font-mono); letter-spacing:.1em;
+}
+:root[data-theme="carbon"] #obsidianBtn,
+:root[data-theme="carbon"] #exportStatus{
+  border-radius:0;
+}
+:root[data-theme="carbon"] #summaryBox{
+  border-radius:0; border:1px solid var(--c-line,#393939);
+  padding:14px 16px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PIPELINE PANEL — flat band, squared badges & buttons, mono eyebrow
+   ═══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .pipeline-panel{
+  background:var(--c-bg,#161616);
+  border-top:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .pipeline-title{
+  font-family:var(--c-font-mono); letter-spacing:.1em;
+}
+:root[data-theme="carbon"] .pl-badge,
+:root[data-theme="carbon"] .pl-promote,
+:root[data-theme="carbon"] .pl-dismiss,
+:root[data-theme="carbon"] .ec-badge{
+  border-radius:0;   /* .ec-badge was a 10px pill → now a squared Carbon tag */
+}
+
+/* carbon relayout: insights */
+/* Layout & shape only. Every selector is scoped to [data-theme="carbon"].
+   Colors/fonts come from theme.css tokens. The fixed-height chart wrapper
+   (.chart-box / .chart-box.tall / .chart-box.short) is left untouched so
+   Chart.js keeps sizing its canvas correctly. */
+
+/* ── KPI tiles ─────────────────────────────────────────────────────────── */
+:root[data-theme="carbon"] .kpis{ gap:1px; }
+:root[data-theme="carbon"] .kpi{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  padding:16px 18px;
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .kpi .v{
+  font-variant-numeric:tabular-nums;
+  letter-spacing:-0.01em;
+}
+:root[data-theme="carbon"] .kpi .l{
+  font-family:var(--c-font-mono);
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  color:var(--c-muted,#8d8d8d);
+}
+
+/* ── Chart / content cards ─────────────────────────────────────────────── */
+:root[data-theme="carbon"] .card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  padding:16px 18px;
+  box-shadow:none;
+}
+/* mono-uppercase muted eyebrow title (keeps its flex row for the export link) */
+:root[data-theme="carbon"] .card h2{
+  font-family:var(--c-font-mono);
+  font-weight:500;
+  text-transform:uppercase;
+  letter-spacing:0.1em;
+  color:var(--c-muted,#8d8d8d);
+  margin-bottom:1rem;
+}
+
+/* ── Data tables (Carbon) ──────────────────────────────────────────────── */
+:root[data-theme="carbon"] table{ border-radius:0; }
+:root[data-theme="carbon"] th,
+:root[data-theme="carbon"] td{
+  border-bottom:1px solid var(--c-line,#393939);
+  padding:0.55rem 0.6rem;
+}
+:root[data-theme="carbon"] th{
+  font-family:var(--c-font-mono);
+  font-weight:500;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  color:var(--c-muted,#8d8d8d);
+}
+:root[data-theme="carbon"] td.num,
+:root[data-theme="carbon"] th.num{
+  font-variant-numeric:tabular-nums;
+}
+
+/* ── Rep-digest panel rows ─────────────────────────────────────────────── */
+:root[data-theme="carbon"] .dig-row{
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .dig-body{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-bg,#161616);
+  padding:14px 16px;
+}
+
+/* ── Buttons: squared, flat ────────────────────────────────────────────── */
+:root[data-theme="carbon"] .dig-btn{ border-radius:0; }
+:root[data-theme="carbon"] .tog{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .toggles .lbl{
+  font-family:var(--c-font-mono);
+}
+
+/* ── Message-your-reps: inline-styled inputs squared (overrides inline) ── */
+:root[data-theme="carbon"] .controls select,
+:root[data-theme="carbon"] #bcTopic,
+:root[data-theme="carbon"] #bcSubject,
+:root[data-theme="carbon"] #bcMessage{
+  border-radius:0 !important;
+  border-color:var(--c-line,#393939) !important;
+}
+
+/* ── Per-user timeline badge (squared Carbon tag) ──────────────────────── */
+:root[data-theme="carbon"] .tl-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+  letter-spacing:0.04em;
+}
+:root[data-theme="carbon"] .tl-time{
+  font-variant-numeric:tabular-nums;
+}
+
+/* carbon relayout: knowledge */
+/* Scope: every rule is gated on :root[data-theme="carbon"]. CSS-only, no DOM
+   changes. Targets selectors that actually exist in static/knowledge.html.
+   Goal: flat squared panels, hairline borders, tidy columns, mono uppercase
+   eyebrows, ~16px padding. Colors/fonts inherited from theme.css tokens. */
+
+/* ── Research toolbar ─────────────────────────────────────────────── */
+:root[data-theme="carbon"] .wk-toolbar{
+  padding:0.5rem 1rem;
+  border-bottom:1px solid var(--c-line,#393939);
+  background:var(--c-bg,#161616);
+}
+:root[data-theme="carbon"] .wk-toolbar button{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  color:var(--c-blue,#78a9ff);
+  padding:0.3rem 0.75rem;
+}
+:root[data-theme="carbon"] .wk-toolbar button:hover{
+  background:var(--c-surface2,#333333);
+}
+
+/* ── Main split: keep the two real columns, sharpen the divider ───── */
+:root[data-theme="carbon"] .left-panel{
+  width:300px;
+  border-right:1px solid var(--c-line,#393939);
+  background:var(--c-bg,#161616);
+}
+:root[data-theme="carbon"] .right-panel{
+  background:var(--c-bg,#161616);
+}
+
+/* ── Panel sections + eyebrow labels ──────────────────────────────── */
+:root[data-theme="carbon"] .panel-section{
+  padding:16px;
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .panel-section-title,
+:root[data-theme="carbon"] .signal-panel-title,
+:root[data-theme="carbon"] .stat-label,
+:root[data-theme="carbon"] .model-label{
+  font-family:var(--c-font-mono);
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  color:var(--c-muted,#8d8d8d);
+}
+:root[data-theme="carbon"] .panel-section-title{
+  font-size:0.66rem;
+  margin-bottom:0.65rem;
+}
+
+/* ── Stats row ────────────────────────────────────────────────────── */
+:root[data-theme="carbon"] #statsBar{
+  gap:1.4rem;
+}
+:root[data-theme="carbon"] .stat-num{
+  font-family:var(--c-font-mono);
+}
+
+/* ── Conversations / sessions ─────────────────────────────────────── */
+:root[data-theme="carbon"] #sessionsSection{
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .sessions-header{
+  padding:14px 16px 0.4rem;
+}
+:root[data-theme="carbon"] #newSessionBtn{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  padding:0.2rem 0.55rem;
+}
+:root[data-theme="carbon"] .session-row{
+  padding:0.4rem 16px;
+  border-left:2px solid transparent;
+}
+:root[data-theme="carbon"] .session-row.active{
+  border-left:2px solid var(--c-accent,#0f62fe);
+  background:var(--c-surface,#262626);
+}
+:root[data-theme="carbon"] .session-row:hover{
+  background:var(--c-bg2,#1c1c1c);
+}
+
+/* ── Clients list ─────────────────────────────────────────────────── */
+:root[data-theme="carbon"] #clientsSection .panel-section-title{
+  padding:14px 16px 0;
+  margin-bottom:0.5rem;
+}
+:root[data-theme="carbon"] #kSortSelect{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  color:var(--c-text3,#a8a8a8);
+  padding:0.15rem 0.35rem;
+}
+:root[data-theme="carbon"] .client-row{
+  padding:0.4rem 16px;
+  border-left:2px solid transparent;
+}
+:root[data-theme="carbon"] .client-row:hover{
+  background:var(--c-bg2,#1c1c1c);
+}
+:root[data-theme="carbon"] .client-row.active{
+  border-left:2px solid var(--c-accent,#0f62fe);
+  background:var(--c-surface,#262626);
+}
+
+/* ── Recent contacts ──────────────────────────────────────────────── */
+:root[data-theme="carbon"] .contact-row{
+  padding:0.25rem 0;
+}
+
+/* ── Agent activity badges ────────────────────────────────────────── */
+:root[data-theme="carbon"] .agent-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+}
+
+/* ── Signals panel + cards ────────────────────────────────────────── */
+:root[data-theme="carbon"] #signalPanel{
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .signal-panel-header{
+  padding:0.5rem 1rem;
+}
+:root[data-theme="carbon"] .signal-panel-title{
+  font-size:0.66rem;
+}
+:root[data-theme="carbon"] #signalCards{
+  padding:0 1rem 0.65rem;
+  gap:0.65rem;
+}
+:root[data-theme="carbon"] .signal-card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  padding:0.65rem 0.75rem;
+}
+:root[data-theme="carbon"] .signal-card:hover{
+  border-color:var(--c-line3,#525252);
+}
+:root[data-theme="carbon"] .signal-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+}
+:root[data-theme="carbon"] .signal-ask-btn{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+}
+
+/* ── Chat messages column ─────────────────────────────────────────── */
+:root[data-theme="carbon"] #chatMessages{
+  padding:1rem 1.25rem;
+}
+
+/* Squared bubbles (avatars/circles unaffected — there are none here) */
+:root[data-theme="carbon"] .msg-bubble,
+:root[data-theme="carbon"] .msg-user,
+:root[data-theme="carbon"] .msg-ai{
+  border-radius:0;
+}
+:root[data-theme="carbon"] .msg-user{
+  background:var(--c-accenttint,#182a4d);
+  border:1px solid var(--c-accentline,#2f4a80);
+}
+:root[data-theme="carbon"] .msg-ai{
+  background:var(--c-surface,#262626);
+  border:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .msg-ai code,
+:root[data-theme="carbon"] .msg-ai pre{
+  border-radius:0;
+}
+
+/* Source pills → squared tags */
+:root[data-theme="carbon"] .source-pill{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+}
+
+/* ── Chat footer + input bar ──────────────────────────────────────── */
+:root[data-theme="carbon"] .chat-footer{
+  padding:0.9rem 1.25rem;
+  border-top:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] #scopeLabel{
+  border-radius:0;
+  border:1px solid var(--c-accentline,#2f4a80);
+  background:var(--c-accenttint,#182a4d);
+}
+:root[data-theme="carbon"] #backendSelect,
+:root[data-theme="carbon"] #modelSelect{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+  color:var(--c-text3,#a8a8a8);
+}
+:root[data-theme="carbon"] .prompt-chip{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+}
+:root[data-theme="carbon"] .prompt-chip:hover{
+  border-color:var(--c-accent,#0f62fe);
+  background:var(--c-surface2,#333333);
+}
+:root[data-theme="carbon"] #chatInput{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-ink,#0c0c0c);
+}
+:root[data-theme="carbon"] #chatInput:focus{
+  outline:2px solid var(--c-accent,#0f62fe);
+  outline-offset:-2px;
+  border-color:var(--c-accent,#0f62fe);
+}
+:root[data-theme="carbon"] #sendBtn{
+  border-radius:0;
+}
+
+/* ── Generic buttons on the page → squared ────────────────────────── */
+:root[data-theme="carbon"] button{
+  border-radius:0;
+}
+
+/* ── Research modal + login overlay (squared, flat) ───────────────── */
+:root[data-theme="carbon"] .r-modal,
+:root[data-theme="carbon"] #loginPanel{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+}
+:root[data-theme="carbon"] .r-form-row input,
+:root[data-theme="carbon"] .r-form-row select,
+:root[data-theme="carbon"] .login-field input{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-ink,#0c0c0c);
+}
+:root[data-theme="carbon"] #loginSubmitBtn{
+  border-radius:0;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────── */
+:root[data-theme="carbon"] #toast{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+}
+
+/* carbon relayout: match */
+/* Per-client product-fit match reports. Layout & shape only — no colors/fonts,
+   no #main-nav. Every rule scoped to :root[data-theme="carbon"]. Squared flat
+   panels, hairline borders, gridded spacing, mono tabular numbers. */
+
+/* ══════════════════════════════════════════════════════════════════
+   1. SIDEBAR — client filter rail (search + sort + status chips)
+   ══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .sidebar{
+  background:var(--c-bg, #161616);
+  border-right:1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .sidebar-header{
+  padding:16px 16px 14px;
+  border-bottom:1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .sidebar-title{
+  font-family:var(--c-font-mono, monospace);
+  font-size:0.72rem; letter-spacing:0.08em; font-weight:600;
+  color:var(--c-muted, #8d8d8d);
+}
+
+/* Filter bar: search + sort become squared hairline controls */
+:root[data-theme="carbon"] .search-input{
+  border-radius:0;
+  border:1px solid var(--c-line, #393939);
+  padding:0.5rem 0.7rem;
+  margin-top:0.6rem;
+}
+:root[data-theme="carbon"] #mSortSelect{
+  border-radius:0 !important;
+  border:1px solid var(--c-line, #393939) !important;
+}
+
+/* Client rows — gridded, squared active keyline */
+:root[data-theme="carbon"] .client-item{
+  padding:0.6rem 1rem;
+  border-left:3px solid transparent;
+}
+:root[data-theme="carbon"] .client-item.active{
+  background:var(--c-surface, #262626);
+  border-left-color:var(--c-accent, #0f62fe);
+}
+:root[data-theme="carbon"] .client-industry{
+  font-family:var(--c-font-mono, monospace);
+  font-size:0.66rem; letter-spacing:0.02em;
+}
+
+/* Status chips — squared, mono, tabular */
+:root[data-theme="carbon"] .match-chip{
+  border-radius:0;
+  font-family:var(--c-font-mono, monospace);
+  font-variant-numeric:tabular-nums;
+  letter-spacing:0.06em;
+  padding:0.14rem 0.5rem;
+}
+
+/* Sidebar footer — squared batch button */
+:root[data-theme="carbon"] .sidebar-footer{
+  padding:0.75rem 1rem;
+  border-top:1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .btn-run-all{
+  border-radius:0;
+  padding:0.5rem 0.85rem;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   2. PANEL HEADER + CONTROL/FILTER BAR
+   ══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .panel-header{
+  padding:16px 1.5rem;
+  border-bottom:1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .client-heading{
+  letter-spacing:0.005em;
+}
+:root[data-theme="carbon"] .client-meta{
+  font-family:var(--c-font-mono, monospace);
+  font-size:0.7rem; letter-spacing:0.03em; text-transform:uppercase;
+  color:var(--c-muted, #8d8d8d);
+}
+
+/* Controls strip: model selects + horizontal action buttons */
+:root[data-theme="carbon"] .panel-controls{
+  padding:16px 1.5rem;
+  border-bottom:1px solid var(--c-line, #393939);
+  gap:1.4rem;
+}
+:root[data-theme="carbon"] .model-label{
+  font-family:var(--c-font-mono, monospace);
+  font-size:0.68rem; letter-spacing:0.07em;
+  color:var(--c-muted, #8d8d8d);
+}
+:root[data-theme="carbon"] .model-select{
+  border-radius:0;
+  border:1px solid var(--c-line, #393939);
+  padding:0.45rem 0.6rem;
+}
+
+/* Buttons — flat squared, no radius */
+:root[data-theme="carbon"] .btn,
+:root[data-theme="carbon"] .btn-teal,
+:root[data-theme="carbon"] .btn-red{
+  border-radius:0;
+  padding:0.45rem 0.9rem;
+}
+:root[data-theme="carbon"] .btn-xs{
+  padding:0.2rem 0.5rem;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   3. PANEL BODY — banners + report toolbar (action row)
+   ══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .panel-body{
+  padding:1.5rem;
+}
+
+/* In-progress / error banners = flat squared hairline panels.
+   Phase banner (active run) carries a top accent keyline. */
+:root[data-theme="carbon"] .phase-banner{
+  border-radius:0;
+  border:1px solid var(--c-line, #393939);
+  box-shadow:inset 0 2px 0 0 var(--c-accent, #0f62fe);
+  padding:16px 18px;
+}
+:root[data-theme="carbon"] .phase-tool-count{
+  border-radius:0;
+  font-family:var(--c-font-mono, monospace);
+  font-variant-numeric:tabular-nums;
+}
+:root[data-theme="carbon"] .error-banner{
+  border-radius:0;
+  border:1px solid var(--c-line, #393939);
+  padding:16px 18px;
+}
+:root[data-theme="carbon"] .error-actions{
+  gap:0.5rem;
+}
+
+/* Report action row */
+:root[data-theme="carbon"] .report-toolbar{
+  gap:0.5rem;
+  padding-bottom:0.85rem;
+  border-bottom:1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .report-label{
+  font-family:var(--c-font-mono, monospace);
+  font-size:0.7rem; letter-spacing:0.03em; text-transform:uppercase;
+}
+
+/* Markdown report — squared inline code; keep heading colors untouched */
+:root[data-theme="carbon"] .report-content h2{
+  border-bottom:1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .report-content code{
+  border-radius:0;
+}
+:root[data-theme="carbon"] .report-content hr{
+  border-top:1px solid var(--c-line, #393939);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   4. EVIDENCE + RESEARCH CARDS — flat squared panels, mono scores
+   ══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] .findings-section,
+:root[data-theme="carbon"] .research-docs-section{
+  border-top:1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .findings-title{
+  font-family:var(--c-font-mono, monospace);
+  letter-spacing:0.08em; font-weight:600;
+}
+:root[data-theme="carbon"] .findings-count{
+  border-radius:0;
+  border:1px solid var(--c-line, #393939);
+  font-family:var(--c-font-mono, monospace);
+  font-variant-numeric:tabular-nums;
+}
+
+/* Cards: flat, squared, hairline, gridded 16px padding */
+:root[data-theme="carbon"] .finding-card{
+  border-radius:0;
+  border:1px solid var(--c-line, #393939);
+  padding:16px;
+  margin-bottom:0.75rem;
+}
+/* Freshest/primary card in each stack gets a top accent keyline */
+:root[data-theme="carbon"] .research-docs-list .finding-card:first-child,
+:root[data-theme="carbon"] .findings-list .finding-card:first-child{
+  box-shadow:inset 0 2px 0 0 var(--c-accent, #0f62fe);
+}
+
+/* Product-fit / relevance numbers — mono, tabular, squared */
+:root[data-theme="carbon"] .finding-score{
+  border-radius:0;
+  border:1px solid var(--c-line, #393939);
+  font-family:var(--c-font-mono, monospace);
+  font-variant-numeric:tabular-nums;
+}
+:root[data-theme="carbon"] .finding-source-link{
+  font-family:var(--c-font-mono, monospace);
+  font-size:0.68rem; letter-spacing:0.01em;
+}
+:root[data-theme="carbon"] .research-doc-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono, monospace);
+  letter-spacing:0.06em;
+}
+:root[data-theme="carbon"] .research-doc-date{
+  font-family:var(--c-font-mono, monospace);
+  font-variant-numeric:tabular-nums;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   5. MODAL SURFACES — square the inline-rounded prompt/mail cards
+   ══════════════════════════════════════════════════════════════════ */
+:root[data-theme="carbon"] #ppOverlay > div,
+:root[data-theme="carbon"] #mailOverlay > div{
+  border-radius:0 !important;
+  border:1px solid var(--c-line, #393939) !important;
+}
+
+/* carbon relayout: news */
+/* Layout & shape only. Every rule is gated on :root[data-theme="carbon"].
+   No color/font-palette changes, no DOM changes, #main-nav untouched.
+   Note: per-signal type colors are applied inline via JS on .sig-badge only,
+   so a type-keyed row stripe isn't reachable in CSS — the card's left stripe
+   stays keyed to the existing importance class (.imp-high/mid/low). */
+
+/* ── Filter bar : tidy squared toolbar ───────────────────────────────── */
+:root[data-theme="carbon"] .filter-bar {
+  gap: 0.55rem;
+  padding: 0.7rem 1rem;
+  background: var(--c-bg, #161616);
+  border-bottom: 1px solid var(--c-line, #393939);
+}
+
+/* mono uppercase muted eyebrows */
+:root[data-theme="carbon"] .filter-label {
+  font-family: var(--c-font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.62rem;
+  color: var(--c-muted, #8d8d8d);
+}
+
+:root[data-theme="carbon"] .filter-select {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  background: var(--c-surface, #262626);
+  padding: 0.3rem 0.6rem;
+}
+:root[data-theme="carbon"] .filter-select:focus {
+  border-color: var(--c-accent, #0f62fe);
+  outline: 1px solid var(--c-accent, #0f62fe);
+  outline-offset: -2px;
+}
+
+:root[data-theme="carbon"] .filter-divider {
+  background: var(--c-line, #393939);
+  height: 22px;
+}
+
+/* Type chips → one connected, bordered, squared strip */
+:root[data-theme="carbon"] .chip-row {
+  gap: 0;
+  border: 1px solid var(--c-line, #393939);
+  border-radius: 0;
+  overflow: hidden;
+}
+:root[data-theme="carbon"] .type-chip {
+  border: none;
+  border-right: 1px solid var(--c-line, #393939);
+  border-radius: 0;
+  padding: 0.3rem 0.62rem;
+  letter-spacing: 0.06em;
+}
+:root[data-theme="carbon"] .chip-row .type-chip:last-child {
+  border-right: none;
+}
+
+/* Toolbar buttons + count */
+:root[data-theme="carbon"] .refresh-btn {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  background: var(--c-surface, #262626);
+  padding: 0.3rem 0.7rem;
+}
+:root[data-theme="carbon"] .signal-count {
+  font-family: var(--c-font-mono, monospace);
+  color: var(--c-muted, #8d8d8d);
+}
+
+/* ── Signal / company cards : flat, squared, hairline, 2px left stripe ── */
+:root[data-theme="carbon"] .company-group {
+  border-radius: 0;
+  /* keep the severity color on the left edge (set by .imp-* rules) —
+     square the corners, hairline the other three sides, thin the stripe to 2px */
+  border-top: 1px solid var(--c-line, #393939);
+  border-right: 1px solid var(--c-line, #393939);
+  border-bottom: 1px solid var(--c-line, #393939);
+  border-left-width: 2px;
+  background: var(--c-bg2, #1c1c1c);
+}
+
+:root[data-theme="carbon"] .company-header {
+  padding: 0.7rem 0.9rem;
+  background: var(--c-surface, #262626);
+  border-bottom: 1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .company-header:hover {
+  background: var(--c-surface2, #333333);
+}
+
+/* squared count/chance badges (keep the round unread dot as-is) */
+:root[data-theme="carbon"] .company-count {
+  border-radius: 0;
+  background: var(--c-surface, #262626);
+  border: 1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .ch-chance {
+  border-radius: 0;
+}
+:root[data-theme="carbon"] .ch-top-label {
+  font-family: var(--c-font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* News rows : hairline-separated, gridded */
+:root[data-theme="carbon"] .news-row {
+  padding: 0.6rem 0.9rem 0.7rem;
+  border-top: 1px solid var(--c-linefaint, #2a2a2a);
+}
+
+/* Badges / pills / gauge → squared (dot stays circular) */
+:root[data-theme="carbon"] .sig-badge {
+  border-radius: 0;
+  letter-spacing: 0.06em;
+}
+:root[data-theme="carbon"] .sig-client {
+  border-radius: 0;
+  border-color: var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .rg-seg {
+  border-radius: 0;
+}
+
+/* Action buttons */
+:root[data-theme="carbon"] .card-btn {
+  border-radius: 0;
+}
+:root[data-theme="carbon"] .show-more-row {
+  border-top: 1px solid var(--c-linefaint, #2a2a2a);
+}
+:root[data-theme="carbon"] .load-more-btn {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  background: var(--c-surface, #262626);
+}
+
+/* ── Market-sources editor panel : squared ───────────────────────────── */
+/* border-radius on the panel + textarea is set inline, so override with !important */
+:root[data-theme="carbon"] #mktSourcesModal > div {
+  border-radius: 0 !important;
+  border: 1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] #mktSourcesText {
+  border-radius: 0 !important;
+}
+
+/* carbon relayout: opportunities */
+
+/* ---- content column ---- */
+:root[data-theme="carbon"] .content { padding: 1.5rem; }
+
+/* ---- toolbar (flat header strip) ---- */
+:root[data-theme="carbon"] .toolbar {
+  gap: 16px;
+  padding: 0 16px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--c-line, #393939);
+}
+/* mono uppercase muted eyebrow */
+:root[data-theme="carbon"] .toolbar-title {
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+  letter-spacing: 0.05em;
+}
+:root[data-theme="carbon"] .toolbar-meta {
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+}
+
+/* ---- filter chips: connected squared strip ---- */
+:root[data-theme="carbon"] .scope-tabs { gap: 0; }
+:root[data-theme="carbon"] .scope-tab {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  padding: 0.35rem 0.85rem;
+}
+:root[data-theme="carbon"] .scope-tab + .scope-tab { margin-left: -1px; }
+:root[data-theme="carbon"] .scope-tab.active { position: relative; z-index: 1; }
+
+/* ---- product filter input ---- */
+:root[data-theme="carbon"] .prod-search {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  padding: 0.4rem 0.7rem;
+}
+
+/* ---- summary meta line ---- */
+:root[data-theme="carbon"] .summary-line {
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+  margin-bottom: 1rem;
+}
+
+/* ---- per-product cards: flat squared, hairline border ---- */
+:root[data-theme="carbon"] .opp-card {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  border-left: 1px solid var(--c-line, #393939);
+  box-shadow: none;
+  margin-bottom: 12px;
+}
+:root[data-theme="carbon"] .opp-card.focus {
+  border-left: 2px solid var(--c-accent, #0f62fe);
+}
+:root[data-theme="carbon"] .opp-head {
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--c-line, #393939);
+}
+/* category badge → squared mono uppercase eyebrow */
+:root[data-theme="carbon"] .opp-cat {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  padding: 0.1rem 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+}
+/* mono running total */
+:root[data-theme="carbon"] .opp-total {
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+}
+:root[data-theme="carbon"] .expand-all {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  padding: 0.2rem 0.55rem;
+}
+
+/* ---- collapsible score bands ---- */
+:root[data-theme="carbon"] .opp-bands { padding: 8px 12px 12px; }
+:root[data-theme="carbon"] .opp-band { border-radius: 0; }
+:root[data-theme="carbon"] .opp-band > summary {
+  border-radius: 0;
+  padding: 8px 10px;
+}
+/* mono score & count */
+:root[data-theme="carbon"] .band-score {
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+}
+:root[data-theme="carbon"] .band-count {
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+}
+/* squared, clean product-fit bar */
+:root[data-theme="carbon"] .band-barwrap { border-radius: 0; }
+:root[data-theme="carbon"] .band-bar { border-radius: 0; }
+
+/* ---- company chips: squared, hairline ---- */
+:root[data-theme="carbon"] .band-clients { gap: 6px; padding: 6px 10px 10px 3.6rem; }
+:root[data-theme="carbon"] .cchip {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  padding: 0.1rem 0.5rem;
+}
+
+/* carbon relayout: product */
+/* Layout & shape only for the product DETAIL page (static/product.html).
+   Every selector is scoped to :root[data-theme="carbon"] and targets markup
+   that exists in product.html. Colours/fonts come from theme.css tokens —
+   this file only reflows shape: flat squared panels, hairline borders,
+   mono uppercase eyebrows, squared segmented tone control + chat. */
+
+/* ── Two-column shell: crisp hairline divider between summary + chat ── */
+:root[data-theme="carbon"] .left-panel{
+  border-right:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .left-header{
+  padding:16px 16px 12px;
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .left-body{
+  padding:16px;
+}
+
+/* ── Mono uppercase eyebrows ── */
+:root[data-theme="carbon"] .section-title,
+:root[data-theme="carbon"] .field-label{
+  font-family:var(--c-font-mono,ui-monospace,Menlo,monospace);
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--c-muted,#8d8d8d);
+}
+
+/* ── Editable research-summary fields: squared inputs/tags ── */
+:root[data-theme="carbon"] .field-input,
+:root[data-theme="carbon"] .field-textarea{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  padding:8px 10px;
+}
+:root[data-theme="carbon"] .feat-tag{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+}
+
+/* ── Field-edit action buttons: flat squared ── */
+:root[data-theme="carbon"] .save-btn,
+:root[data-theme="carbon"] .cancel-btn{
+  border-radius:0;
+}
+
+/* ── Header badges + website button: squared, no pills ── */
+:root[data-theme="carbon"] .cat-badge,
+:root[data-theme="carbon"] .depth-badge{
+  border-radius:0;
+}
+:root[data-theme="carbon"] .website-btn{
+  border-radius:0;
+}
+
+/* ── Controls: squared segmented tone/toggle control + status select ──
+   .toggle-btn backs the Favorite/Share toggles AND the Casual/Targeted/
+   General tone segments (#bmMode*), so squaring it flattens all of them. */
+:root[data-theme="carbon"] .toggle-btn{
+  border-radius:0;
+}
+:root[data-theme="carbon"] #bmModeGeneral,
+:root[data-theme="carbon"] #bmModeTargeted,
+:root[data-theme="carbon"] #bmModeCasual{
+  border-radius:0;
+}
+:root[data-theme="carbon"] .status-select{
+  border-radius:0;
+}
+
+/* ── Collapsible Research Report + Match Intelligence: squared ── */
+:root[data-theme="carbon"] .report-toggle{
+  border-radius:0;
+}
+:root[data-theme="carbon"] .match-card{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  padding:16px;
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .fit-badge{
+  border-radius:0;
+}
+
+/* ── Right panel: verification chat, squared throughout ── */
+:root[data-theme="carbon"] .chat-header,
+:root[data-theme="carbon"] .chat-footer{
+  border-color:var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .model-select{
+  border-radius:0;
+}
+
+/* squared chat bubbles (override the asymmetric user/ai corners) */
+:root[data-theme="carbon"] .msg-bubble,
+:root[data-theme="carbon"] .msg.user .msg-bubble,
+:root[data-theme="carbon"] .msg.ai .msg-bubble{
+  border-radius:0;
+}
+
+/* squared composer input + send button */
+:root[data-theme="carbon"] .chat-input{
+  border-radius:0;
+}
+:root[data-theme="carbon"] .send-btn{
+  border-radius:0;
+}
+
+/* ── Shared surfaces: toast + auth overlay squared ── */
+:root[data-theme="carbon"] .toast{
+  border-radius:0;
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .auth-box{
+  border-radius:0;
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .auth-input,
+:root[data-theme="carbon"] .auth-btn{
+  border-radius:0;
+}
+
+/* carbon relayout: products */
+/* Layout & shape only. Every selector is scoped to :root[data-theme="carbon"].
+   Colors/fonts come from theme.css tokens; classic users are untouched.
+   Carbon look: border-radius:0 on cards/panels/buttons/inputs/badges/chips/modals,
+   flat 1px hairline borders (var(--c-line)), top accent keyline on focus/verified,
+   connected squared multi-select strips, mono uppercase eyebrows. Circles stay round. */
+
+/* ============================================================
+   1. Buttons — squared
+   ============================================================ */
+:root[data-theme="carbon"] .btn,
+:root[data-theme="carbon"] .toggle-btn,
+:root[data-theme="carbon"] .auth-btn,
+:root[data-theme="carbon"] .card-action-btn {
+  border-radius: 0;
+}
+
+/* ============================================================
+   2. Inputs / selects / textareas — squared
+   ============================================================ */
+:root[data-theme="carbon"] .form-input,
+:root[data-theme="carbon"] .detail-input,
+:root[data-theme="carbon"] .auth-input {
+  border-radius: 0;
+}
+
+/* ============================================================
+   3. Chips & badges — squared (pill -> square)
+   ============================================================ */
+:root[data-theme="carbon"] .chip,
+:root[data-theme="carbon"] .sfchip,
+:root[data-theme="carbon"] .cat-badge,
+:root[data-theme="carbon"] .spi-cat,
+:root[data-theme="carbon"] .feat-tag,
+:root[data-theme="carbon"] .depth-badge {
+  border-radius: 0;
+}
+
+/* ============================================================
+   4. Product cards — flat squared cards, hairline borders,
+      top accent keyline on focus / verified
+   ============================================================ */
+:root[data-theme="carbon"] .product-card {
+  border-radius: 0;
+  box-shadow: none;
+  padding: 1.1rem;
+}
+:root[data-theme="carbon"] .prod-favicon {
+  border-radius: 0;
+}
+/* Focus: top accent keyline (drop the left rail), keep sides hairline */
+:root[data-theme="carbon"] .product-card.focus-card {
+  border-left: 1px solid var(--c-line, #393939);
+  border-top: 2px solid var(--c-accent, #0f62fe);
+}
+/* Verified: top accent keyline */
+:root[data-theme="carbon"] .product-card.verified-card {
+  border-top: 2px solid var(--c-accent, #0f62fe);
+}
+
+/* ============================================================
+   5. Focus-selection checkbox list — connected squared strip
+   ============================================================ */
+:root[data-theme="carbon"] .product-check-list {
+  border-radius: 0;
+}
+:root[data-theme="carbon"] .product-check-item {
+  border-radius: 0;
+}
+
+/* ============================================================
+   6. Verify callout & auth / toast panels — squared, flat
+   ============================================================ */
+:root[data-theme="carbon"] .verify-box {
+  border-radius: 0;
+  box-shadow: none;
+}
+:root[data-theme="carbon"] .auth-box,
+:root[data-theme="carbon"] .auth-input,
+:root[data-theme="carbon"] .toast {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ============================================================
+   7. Mono uppercase eyebrows (already uppercased in markup)
+   ============================================================ */
+:root[data-theme="carbon"] .detail-label,
+:root[data-theme="carbon"] .sidebar-list-header-label {
+  font-family: var(--c-font-mono, 'IBM Plex Mono', ui-monospace, Menlo, monospace);
+}
+
+/* ============================================================
+   8. Bulk-mail overlay (#multiMailOverlay)
+   The overlay body is built from inline-styled JS template strings, so these
+   rules use `!important` to beat inline border-radius on the elements we CAN
+   still address by id / tag / the .mm-result-card class.
+   ============================================================ */
+
+/* Modal panel — squared flat sheet */
+:root[data-theme="carbon"] #multiMailOverlay > div {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Every control in the modal chrome — selects, inputs, textareas, buttons */
+:root[data-theme="carbon"] #multiMailOverlay select,
+:root[data-theme="carbon"] #multiMailOverlay input,
+:root[data-theme="carbon"] #multiMailOverlay textarea,
+:root[data-theme="carbon"] #multiMailOverlay button {
+  border-radius: 0 !important;
+}
+
+/* Product & client multi-selects -> connected vertical squared "pick" strips.
+   Flip the wrap-of-pills into a full-width column with shared hairline dividers. */
+:root[data-theme="carbon"] #multiMailOverlay #mmProductList,
+:root[data-theme="carbon"] #multiMailOverlay #mmClientList {
+  flex-direction: column !important;
+  flex-wrap: nowrap !important;
+  gap: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+:root[data-theme="carbon"] #multiMailOverlay #mmProductList > label,
+:root[data-theme="carbon"] #multiMailOverlay #mmClientList > label {
+  width: 100% !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--c-line, #393939) !important;
+}
+:root[data-theme="carbon"] #multiMailOverlay #mmProductList > label:last-child,
+:root[data-theme="carbon"] #multiMailOverlay #mmClientList > label:last-child {
+  border-bottom: 0 !important;
+}
+
+/* ============================================================
+   9. Bulk-mail result cards (.mm-result-card) — squared bordered blocks
+   ============================================================ */
+:root[data-theme="carbon"] #mmResults .mm-result-card {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+/* Square every nested box (subject line box, contacts container, textarea,
+   sources <details>, toolbar, buttons) inside a result card */
+:root[data-theme="carbon"] #mmResults .mm-result-card div,
+:root[data-theme="carbon"] #mmResults .mm-result-card textarea,
+:root[data-theme="carbon"] #mmResults .mm-result-card details,
+:root[data-theme="carbon"] #mmResults .mm-result-card button {
+  border-radius: 0 !important;
+}
+/* Hairline divider under the client-name header row (separates it from the
+   subject line / body below), engineered/gridded feel */
+:root[data-theme="carbon"] #mmResults .mm-result-card > div:first-child {
+  border-bottom: 1px solid var(--c-line, #393939) !important;
+  padding-bottom: 0.5rem !important;
+}
+
+/* carbon relayout: ranking */
+/* Layout & shape only — scoped to :root[data-theme="carbon"]. No color/font/nav overrides. */
+
+/* ── Content column: engineered width, flush list ─────────────────── */
+:root[data-theme="carbon"] .content {
+  padding: 0 0 2rem;
+  max-width: 960px;
+}
+
+/* ── Toolbar: flat Carbon header strip ────────────────────────────── */
+:root[data-theme="carbon"] .toolbar {
+  border-radius: 0;
+  border-bottom: 1px solid var(--c-line, #393939);
+  padding: 0.85rem 1.25rem;
+  gap: 0.9rem;
+}
+:root[data-theme="carbon"] .toolbar-title {
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+:root[data-theme="carbon"] .toolbar-meta {
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  color: var(--c-muted, #8d8d8d);
+  letter-spacing: 0.02em;
+}
+
+/* ── Filter chips: connected squared strip (content switcher) ─────── */
+:root[data-theme="carbon"] .scope-tabs {
+  gap: 0;
+}
+:root[data-theme="carbon"] .scope-tab {
+  border-radius: 0;
+  border: 1px solid var(--c-line, #393939);
+  margin-left: -1px;                 /* collapse shared borders */
+  padding: 0.35rem 0.9rem;
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.04em;
+  position: relative;
+}
+:root[data-theme="carbon"] .scope-tab:first-child {
+  margin-left: 0;
+}
+:root[data-theme="carbon"] .scope-tab:hover {
+  z-index: 1;
+}
+:root[data-theme="carbon"] .scope-tab.active {
+  border-color: var(--c-accent, #0f62fe);
+  z-index: 2;                         /* accent border wins over neighbours */
+}
+
+/* ── Ranked rows: flat, squared, hairline dividers ────────────────── */
+:root[data-theme="carbon"] .rank-card {
+  border-radius: 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--c-line, #393939);
+  border-left: 2px solid transparent; /* engineered focus marker slot */
+  margin-bottom: 0;
+  padding: 0.85rem 1.25rem;
+  gap: 1rem;
+}
+:root[data-theme="carbon"] .rank-card:first-child {
+  border-top: 1px solid var(--c-line, #393939);
+}
+:root[data-theme="carbon"] .rank-card.focus {
+  border-left-color: var(--c-accent, #0f62fe);
+}
+
+/* Rank number — mono, tabular, right-aligned ledger figure */
+:root[data-theme="carbon"] .rank-num {
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--c-muted, #8d8d8d);
+  min-width: 2.2rem;
+}
+
+/* Reason chips row — mono eyebrow feel */
+:root[data-theme="carbon"] .rank-reasons {
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.01em;
+}
+
+/* Score block — squared, mono tabular figure + mono uppercase label */
+:root[data-theme="carbon"] .rank-score {
+  border-left: 1px solid var(--c-line, #393939);
+  padding-left: 1rem;
+  min-width: 4.5rem;
+}
+:root[data-theme="carbon"] .rank-score .val {
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+:root[data-theme="carbon"] .rank-score .lbl {
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.1em;
+}
+
+/* ── Empty / loading states: mono, squared ────────────────────────── */
+:root[data-theme="carbon"] .empty-state,
+:root[data-theme="carbon"] .loading-text {
+  font-family: var(--c-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.02em;
+}
+
+/* carbon relayout: research */
+/* Opt-in IBM Carbon LAYOUT & SHAPE for static/research.html.
+   Every rule is gated on :root[data-theme="carbon"]; classic theme untouched.
+   Colours/fonts/#main-nav are owned elsewhere — this file only reshapes:
+   toolbar, tabs (filter chips), stats strip, the findings/OSINT/report rows,
+   the inline content panel, and the auth card. Squared, engineered, hairline. */
+
+/* ── Toolbar: flat header strip, no rounding ── */
+:root[data-theme="carbon"] .toolbar{
+  gap:1.25rem;
+  padding:0 1.5rem;
+  min-height:48px;
+  border-bottom:1px solid var(--c-line,#393939);
+  background:var(--c-bg,#161616);
+}
+
+/* Search field → squared Carbon input with a single active underline */
+:root[data-theme="carbon"] .search-input{
+  border-radius:0;
+  border:none;
+  border-bottom:1px solid var(--c-line3,#525252);
+  background:var(--c-surface,#262626);
+  padding:0.5rem 0.75rem;
+  height:36px;
+}
+:root[data-theme="carbon"] .search-input:focus{
+  border-bottom-color:var(--c-accent,#0f62fe);
+}
+
+/* ── Filter chips → Carbon tabs (All / Research reports / Findings / OSINT) ──
+   Flat, squared, muted; the active tab carries a 2px accent underline. */
+:root[data-theme="carbon"] .filter-chips{
+  gap:0;
+  align-self:stretch;
+  align-items:stretch;
+}
+:root[data-theme="carbon"] .chip{
+  display:flex;
+  align-items:center;
+  border-radius:0;
+  border:none;
+  border-bottom:2px solid transparent;
+  background:transparent;
+  color:var(--c-muted,#8d8d8d);
+  padding:0 1rem;
+  font-size:0.8rem;
+  letter-spacing:0.01em;
+  transition:color .1s, background .1s, border-color .1s;
+}
+:root[data-theme="carbon"] .chip:hover{
+  border-color:var(--c-line3,#525252);
+  background:var(--c-bg2,#1c1c1c);
+  color:var(--c-text2,#c6c6c6);
+}
+:root[data-theme="carbon"] .chip.active{
+  background:transparent;
+  border-bottom-color:var(--c-accent,#0f62fe);
+  color:var(--c-text,#f4f4f4);
+}
+
+/* ── Stats strip → engineered header row: mono/uppercase labels, tabular values ── */
+:root[data-theme="carbon"] .stats-bar{
+  gap:0;
+  padding:0 1.5rem;
+  border-bottom:1px solid var(--c-line,#393939);
+  background:var(--c-bg,#161616);
+}
+:root[data-theme="carbon"] .stat-chip{
+  display:flex;
+  align-items:center;
+  gap:0.4rem;
+  border-radius:0;
+  border:none;
+  border-right:1px solid var(--c-linefaint,#2a2a2a);
+  background:transparent;
+  padding:0.55rem 1.1rem;
+}
+:root[data-theme="carbon"] .stat-val{
+  font-family:var(--c-font-mono);
+  font-variant-numeric:tabular-nums;
+  color:var(--c-text,#f4f4f4);
+  margin-right:0;
+}
+:root[data-theme="carbon"] .stat-label{
+  font-family:var(--c-font-mono);
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  font-size:0.66rem;
+  color:var(--c-muted,#8d8d8d);
+}
+
+/* ── Doc list → flat data rows with hairline separators ── */
+:root[data-theme="carbon"] .doc-row{
+  border-bottom:1px solid var(--c-linefaint,#2a2a2a);
+  border-left:2px solid transparent;   /* selection marker slot (no state shift) */
+}
+:root[data-theme="carbon"] .doc-row:hover .doc-row-header{
+  background:var(--c-bg2,#1c1c1c);
+}
+:root[data-theme="carbon"] .doc-row.open{
+  border-left-color:var(--c-accent,#0f62fe);
+  background:var(--c-bg2,#1c1c1c);
+}
+:root[data-theme="carbon"] .doc-row-header{
+  gap:1rem;
+  padding:0.7rem 1.5rem;
+}
+
+/* Type tag → squared Carbon tag, mono uppercase */
+:root[data-theme="carbon"] .type-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+  font-weight:500;
+  letter-spacing:0.05em;
+  padding:0.15rem 0.5rem;
+}
+
+/* Title + date → tabular date column, squared engineered rhythm */
+:root[data-theme="carbon"] .doc-title{
+  color:var(--c-text2,#c6c6c6);
+}
+:root[data-theme="carbon"] .doc-date{
+  font-family:var(--c-font-mono);
+  font-variant-numeric:tabular-nums;
+  color:var(--c-muted,#8d8d8d);
+  width:100px;
+}
+:root[data-theme="carbon"] .doc-chevron{
+  font-size:0.7rem;
+  color:var(--c-faint,#6f6f6f);
+}
+
+/* ── Inline content panel → flat inset, squared code blocks ── */
+:root[data-theme="carbon"] .doc-content-panel{
+  border-top:1px solid var(--c-linefaint,#2a2a2a);
+  background:var(--c-bg,#161616);
+  padding:1rem 1.5rem 1.25rem 2.5rem;
+}
+:root[data-theme="carbon"] .doc-content-meta{
+  font-family:var(--c-font-mono);
+  font-size:0.68rem;
+  letter-spacing:0.02em;
+  color:var(--c-muted,#8d8d8d);
+  padding-bottom:0.6rem;
+  border-bottom:1px solid var(--c-linefaint,#2a2a2a);
+}
+:root[data-theme="carbon"] .doc-content-body code{
+  border-radius:0;
+}
+:root[data-theme="carbon"] .doc-content-body pre{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+}
+
+/* Empty state → mono uppercase muted */
+:root[data-theme="carbon"] .empty{
+  font-family:var(--c-font-mono);
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  font-size:0.72rem;
+  color:var(--c-muted,#8d8d8d);
+}
+
+/* ── Auth card → squared modal, flat input + button ── */
+:root[data-theme="carbon"] .auth-box{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-surface,#262626);
+}
+:root[data-theme="carbon"] .auth-input{
+  border-radius:0;
+  border:none;
+  border-bottom:1px solid var(--c-line3,#525252);
+  background:var(--c-bg,#161616);
+}
+:root[data-theme="carbon"] .auth-input:focus{
+  border-bottom-color:var(--c-accent,#0f62fe);
+}
+:root[data-theme="carbon"] .auth-btn{
+  border-radius:0;
+}
+
+/* carbon relayout: settings */
+/* Opt-in IBM Carbon LAYOUT/SHAPE for static/settings.html.
+   Every selector is scoped to :root[data-theme="carbon"]. Colors/fonts come
+   from theme.css tokens; this file only reshapes structure (squared corners,
+   hairline borders, Carbon data-table headers, tidy form spacing). */
+
+/* ── Content column: a touch more breathing room, tidy width ── */
+:root[data-theme="carbon"] .content{
+  padding:2rem 2.5rem 3rem;
+  max-width:900px;
+}
+:root[data-theme="carbon"] .section{
+  margin-bottom:3rem;
+}
+
+/* ── Section headings → clear Carbon productive header (sans, hairline rule).
+   Scoped to .section so the auth-box heading keeps its own borderless style. ── */
+:root[data-theme="carbon"] .section h2{
+  font-weight:400;
+  font-size:1.05rem;
+  letter-spacing:0;
+  color:var(--c-text,#f4f4f4);
+  padding-bottom:0.7rem;
+  margin-bottom:1.5rem;
+  border-bottom:1px solid var(--c-line,#393939);
+}
+
+/* ═══ Data tables — Carbon g100 style ═══════════════════════════════════ */
+:root[data-theme="carbon"] table{
+  border-radius:0;
+  border-collapse:collapse;
+  width:100%;
+}
+/* Mono, uppercase, muted column headers with a hairline underline */
+:root[data-theme="carbon"] th{
+  font-family:var(--c-font-mono,ui-monospace,Menlo,monospace);
+  font-weight:500;
+  font-size:0.68rem;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  color:var(--c-muted,#8d8d8d);
+  padding:0.65rem 0.75rem;
+  border-bottom:1px solid var(--c-line,#393939);
+  white-space:nowrap;
+}
+/* Hairline row separators, tidy padding, tabular numerals */
+:root[data-theme="carbon"] td{
+  padding:0.7rem 0.75rem;
+  border-top:1px solid var(--c-line,#393939);
+  border-bottom:none;
+  vertical-align:middle;
+  font-variant-numeric:tabular-nums;
+}
+:root[data-theme="carbon"] tr:hover td{
+  background:var(--c-bg2,#1c1c1c);
+}
+
+/* ═══ Badges / tags — squared, flat ═════════════════════════════════════ */
+:root[data-theme="carbon"] .role-badge,
+:root[data-theme="carbon"] .status-badge,
+:root[data-theme="carbon"] .hb-enabled,
+:root[data-theme="carbon"] .hb-disabled{
+  border-radius:0;
+  letter-spacing:0.05em;
+}
+/* keep the "used" invite tag's outline as a clean hairline */
+:root[data-theme="carbon"] .status-badge.used{
+  border-color:var(--c-line,#393939);
+}
+
+/* ═══ Buttons — squared, flat hairline ══════════════════════════════════ */
+:root[data-theme="carbon"] .btn{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .btn:hover{
+  background:var(--c-surface,#262626);
+}
+:root[data-theme="carbon"] .btn.primary{
+  border-color:var(--c-accent,#0f62fe);
+}
+:root[data-theme="carbon"] .btn.danger{
+  border-color:var(--c-line3,#525252);
+}
+:root[data-theme="carbon"] .auth-btn{
+  border-radius:0;
+}
+
+/* ═══ Inputs / selects / textarea — squared, hairline, Carbon focus ═══════ */
+:root[data-theme="carbon"] .form-input,
+:root[data-theme="carbon"] .form-select,
+:root[data-theme="carbon"] .auth-input{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-bg,#161616);
+}
+:root[data-theme="carbon"] .form-input:focus,
+:root[data-theme="carbon"] .form-select:focus,
+:root[data-theme="carbon"] .auth-input:focus{
+  outline:2px solid var(--c-accent,#0f62fe);
+  outline-offset:-2px;
+  border-color:transparent;
+}
+
+/* ═══ Forms — generous but tidy spacing ═════════════════════════════════ */
+:root[data-theme="carbon"] .gen-form{
+  gap:1.1rem;
+}
+:root[data-theme="carbon"] .form-row{
+  gap:0.4rem;
+}
+:root[data-theme="carbon"] .form-row label{
+  color:var(--c-muted,#8d8d8d);
+}
+
+/* ═══ Key / token display — squared mono panel ══════════════════════════ */
+:root[data-theme="carbon"] .key-text{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  background:var(--c-ink,#0c0c0c);
+}
+
+/* ═══ Panels & modals — squared, flat, no heavy shadow ══════════════════ */
+:root[data-theme="carbon"] .auth-box,
+:root[data-theme="carbon"] .hb-box{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  box-shadow:none;
+}
+:root[data-theme="carbon"] .hb-box h3{
+  font-weight:600;
+}
+
+/* squared checkbox in the job modal, aligned with the Carbon input language */
+:root[data-theme="carbon"] .hb-box input[type="checkbox"]{
+  accent-color:var(--c-accent,#0f62fe);
+}
+
+/* carbon relayout: today */
+/* Opt-in IBM Carbon LAYOUT for the next-best-action queue.
+   Every rule is scoped to :root[data-theme="carbon"]; classic theme untouched.
+   Uses only selectors that exist in static/today.html. Shape only —
+   no color-token / base-font / #main-nav changes. */
+
+/* ── Content column: roomier full-width canvas ── */
+:root[data-theme="carbon"] .content{
+  max-width:1056px;
+  padding:24px 24px 40px;
+}
+
+/* ── Toolbar: flat hairline strip, mono eyebrow title ── */
+:root[data-theme="carbon"] .toolbar{
+  gap:12px;
+  padding:14px 24px;
+  border-bottom:1px solid var(--c-line,#393939);
+}
+:root[data-theme="carbon"] .toolbar-title{
+  font-family:var(--c-font-mono);
+  font-size:.72rem;
+  letter-spacing:.1em;
+}
+:root[data-theme="carbon"] .toolbar-meta,
+:root[data-theme="carbon"] .refresh-status{
+  font-family:var(--c-font-mono);
+  font-size:.68rem;
+}
+:root[data-theme="carbon"] .refresh-btn{
+  border-radius:0;
+  border:1px solid var(--c-line,#393939);
+  padding:6px 14px;
+  font-size:.72rem;
+}
+:root[data-theme="carbon"] .llm-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+  padding:3px 8px;
+  letter-spacing:.06em;
+}
+
+/* ── Action cards: flat squared, 2px left severity stripe, two-column ── */
+:root[data-theme="carbon"] .nba-card{
+  display:grid;
+  grid-template-columns:1fr auto;
+  column-gap:20px;
+  row-gap:8px;
+  align-items:start;
+  background:var(--c-bg2,#1c1c1c);
+  border:1px solid var(--c-line,#393939);
+  border-left:2px solid var(--c-accent,#0f62fe);
+  border-radius:0;
+  padding:16px 18px;
+  margin-bottom:8px;
+  box-shadow:none;
+}
+/* Severity stripe from card state / fact badges (later rules win ties;
+   red > orange > focus/default). */
+:root[data-theme="carbon"] .nba-card.focus{ border-left-color:var(--c-accent,#0f62fe); }
+:root[data-theme="carbon"] .nba-card:has(.fb-outreach_draft){ border-left-color:var(--c-orange,#ff832b); }
+:root[data-theme="carbon"] .nba-card:has(.fb-outreach_followup){ border-left-color:var(--c-red,#fa4d56); }
+
+/* Info rows stay in the left column */
+:root[data-theme="carbon"] .nba-card > .card-top,
+:root[data-theme="carbon"] .nba-card > .nba-reason,
+:root[data-theme="carbon"] .nba-card > .facts-toggle,
+:root[data-theme="carbon"] .nba-card > .facts-list{ grid-column:1; }
+
+/* Actions pinned to a tidy right-hand stack */
+:root[data-theme="carbon"] .card-actions{
+  grid-column:2;
+  grid-row:1 / -1;
+  flex-direction:column;
+  align-items:stretch;
+  gap:8px;
+  margin-top:0;
+  min-width:150px;
+}
+
+/* Rank as a mono marker */
+:root[data-theme="carbon"] .nba-rank{
+  font-family:var(--c-font-mono);
+  font-size:.8rem;
+  color:var(--c-muted,#8d8d8d);
+}
+/* Score chip → squared hairline */
+:root[data-theme="carbon"] .nba-score{
+  border-radius:0;
+  background:transparent;
+  border:1px solid var(--c-line,#393939);
+  font-family:var(--c-font-mono);
+  color:var(--c-muted,#8d8d8d);
+  padding:1px 6px;
+}
+:root[data-theme="carbon"] .reason-src{ font-family:var(--c-font-mono); }
+
+/* Facts: mono eyebrow toggle + squared mono badges, hairline divider */
+:root[data-theme="carbon"] .facts-toggle{
+  font-family:var(--c-font-mono);
+  font-size:.68rem;
+  letter-spacing:.04em;
+}
+:root[data-theme="carbon"] .facts-list{ border-top:1px solid var(--c-line,#393939); }
+:root[data-theme="carbon"] .fact-badge{
+  border-radius:0;
+  font-family:var(--c-font-mono);
+  letter-spacing:.05em;
+}
+
+/* Buttons + select → squared flat controls */
+:root[data-theme="carbon"] .action-btn,
+:root[data-theme="carbon"] .outreach-select{
+  border-radius:0;
+  padding:7px 12px;
+  font-size:.72rem;
+}
+:root[data-theme="carbon"] .action-status{
+  font-family:var(--c-font-mono);
+  font-size:.66rem;
+}
+
+/* Empty / loading states in mono */
+:root[data-theme="carbon"] .empty-state,
+:root[data-theme="carbon"] .loading-text{ font-family:var(--c-font-mono); }
+
+/* ── Narrow screens: fold the action stack below the card body ── */
+@media (max-width:720px){
+  :root[data-theme="carbon"] .nba-card{ grid-template-columns:1fr; }
+  :root[data-theme="carbon"] .card-actions{
+    grid-column:1;
+    grid-row:auto;
+    flex-direction:row;
+    flex-wrap:wrap;
+    align-items:center;
+    min-width:0;
+  }
+}

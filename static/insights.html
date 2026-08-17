@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Insights — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; padding: 1.4rem 1.5rem 3rem; }
+.wrap { max-width: 1140px; margin: 0 auto; }
+.head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+.head h1 { font-size: 1.2rem; color: var(--c-texthi, #e6e6e6); }
+.controls { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.controls select, .controls label { font-size: 0.8rem; color: var(--c-text2, #ccc); }
+.controls select { background: var(--c-bg2, #1a1a1a); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4); border-radius: 5px; padding: 0.3rem 0.5rem; }
+.controls a { color: var(--c-blue, #6a9ec9); font-size: 0.78rem; text-decoration: none; }
+.controls a:hover { color: var(--c-accent, #4ec9b0); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.8rem; margin-bottom: 1.1rem; }
+.kpi { background: var(--c-bg2, #1a1a1a); border: 1px solid var(--c-line, #262626); border-radius: 10px; padding: 0.8rem 1rem; }
+.kpi .v { font-size: 1.5rem; font-weight: 700; color: var(--c-accent, #4ec9b0); }
+.kpi .l { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--c-muted, #888); margin-top: 0.15rem; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; align-items: start; }
+@media (max-width: 880px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--c-bg2, #1a1a1a); border: 1px solid var(--c-line, #262626); border-radius: 10px; padding: 1rem 1.1rem; min-width: 0; }
+.card h2 { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--c-accent, #4ec9b0); font-weight: 700; margin-bottom: 0.8rem; }
+.card.full { grid-column: 1 / -1; }
+/* Chart.js with maintainAspectRatio:false sizes the canvas to its parent — so the
+   parent must have a fixed height, or the canvas grows unbounded (big blank box). */
+.chart-box { position: relative; height: 240px; width: 100%; }
+.chart-box.tall { height: 300px; }
+.chart-box.short { height: 200px; }
+.chart-box canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
+table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--c-linefaint, #232323); white-space: nowrap; }
+th { color: var(--c-muted, #888); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }
+td.num, th.num { text-align: right; }
+.muted { color: var(--c-muted2, #777); }
+.empty { color: var(--c-faint, #555); font-style: italic; padding: 1rem 0; }
+.note { color: var(--c-muted2, #666); font-size: 0.78rem; margin-bottom: 1rem; }
+/* Rep digests */
+.dig-row { padding: 0.5rem 0; border-bottom: 1px solid var(--c-linefaint, #232323); }
+.dig-row:last-child { border-bottom: none; }
+.dig-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; flex-wrap: wrap; }
+.dig-btn { background: none; border: 1px solid var(--c-accentline, #2d5a48); color: var(--c-accent, #4ec9b0); border-radius: 5px; padding: 0.2rem 0.6rem; font-size: 0.74rem; cursor: pointer; }
+.dig-btn:hover { background: var(--c-accenttint, #13241c); }
+.dig-btn:disabled { border-color: var(--c-line2, #333); color: var(--c-faint, #555); cursor: not-allowed; background: none; }
+.dig-body { margin-top: 0.5rem; background: var(--c-bg4, #141414); border: 1px solid var(--c-line, #2a2a2a); border-radius: 6px; padding: 0.6rem 0.9rem; font-size: 0.82rem; color: var(--c-text2, #ccc); max-height: 260px; overflow-y: auto; }
+.dig-body p { margin: 0 0 0.5rem; } .dig-body ul { margin: 0 0 0.5rem 1.1rem; }
+/* Section toggles + export */
+.toggles { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+.toggles .lbl { font-size: 0.7rem; color: var(--c-muted2, #666); text-transform: uppercase; letter-spacing: 0.05em; }
+.tog { background: none; border: 1px solid var(--c-line, #2a2a2a); color: var(--c-muted, #888); border-radius: 14px; padding: 0.15rem 0.65rem; font-size: 0.72rem; cursor: pointer; }
+.tog.on { border-color: var(--c-accentline, #2d5a48); color: var(--c-accent, #4ec9b0); background: var(--c-accenttint, #13241c); }
+.card h2 { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.exp { font-size: 0.66rem; color: var(--c-blue, #6a9ec9); cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.exp:hover { color: var(--c-accent, #4ec9b0); }
+.backlink { display: inline-block; color: var(--c-blue, #6a9ec9); text-decoration: none; font-size: 0.82rem; margin-bottom: 0.8rem; cursor: pointer; }
+.backlink:hover { color: var(--c-accent, #4ec9b0); }
+.row-link { color: var(--c-text, #d4d4d4); text-decoration: none; cursor: pointer; }
+.row-link:hover { color: var(--c-accent, #4ec9b0); }
+/* Per-person timeline */
+.tl-day { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--c-muted2, #666); margin: 0.9rem 0 0.3rem; }
+.tl-row { display: flex; align-items: baseline; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid #1f1f1f; font-size: 0.82rem; }
+.tl-time { color: var(--c-muted2, #666); font-size: 0.72rem; width: 3.4rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.tl-badge { font-size: 0.6rem; font-weight: 700; padding: 0.05rem 0.4rem; border-radius: 8px; text-transform: uppercase; flex-shrink: 0; background: var(--c-bluetint, #0d1a2e); color: var(--c-blue, #569cd6); }
+.tl-text { color: var(--c-text2, #ccc); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+  <div class="content">
+    <div class="wrap">
+      <div class="head">
+        <h1>📊 Insights</h1>
+        <div class="controls">
+          <label>Window
+            <select id="daysSel">
+              <option value="7">7 days</option>
+              <option value="30" selected>30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">1 year</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="qaChk"> include QA accounts</label>
+          <a id="exportLink" href="#">⬇ Raw export (JSON)</a>
+          <a id="exportTimingLink" href="#" title="Every agent run with its duration (research timing)">⬇ Research timing (CSV)</a>
+        </div>
+      </div>
+      <div class="note">Adoption &amp; usage from the activity log. QA accounts (ids 7, 8) are excluded by default so they don't skew the numbers. Click a user to see their action timeline.</div>
+      <div id="toggles" class="toggles"></div>
+      <div id="body"><div class="empty">Loading…</div></div>
+      <div class="card" id="digestCard" style="margin-top:1.1rem;">
+        <h2>📬 Rep digests <span id="digestSmtp" class="muted" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+        <div id="digests"><div class="empty">Loading…</div></div>
+      </div>
+      <div class="card" id="broadcastCard" style="margin-top:1.1rem;">
+        <h2>📣 Message your reps <span id="bcSmtp" class="muted" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+        <div class="note" style="margin-bottom:0.6rem">Send a general update, tip, or nudge to your sales reps by email.</div>
+        <div id="bcPresets" style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.6rem"></div>
+        <div style="display:flex;gap:0.4rem;margin-bottom:0.6rem">
+          <input id="bcTopic" placeholder="Ask the agent to draft… (e.g. remind reps to log their calls)" maxlength="2000"
+                 style="flex:1;min-width:0;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.45rem 0.65rem;font-size:0.82rem">
+          <button class="dig-btn" onclick="draftWithAI(this)" title="Let the agent write or polish the message">✨ Draft with AI</button>
+        </div>
+        <input id="bcSubject" placeholder="Subject" maxlength="200"
+               style="width:100%;box-sizing:border-box;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.45rem 0.65rem;font-size:0.85rem;margin-bottom:0.5rem">
+        <textarea id="bcMessage" placeholder="Write your update or tip…" rows="6" maxlength="6000"
+               style="width:100%;box-sizing:border-box;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.5rem 0.65rem;font-size:0.85rem;font-family:inherit;resize:vertical"></textarea>
+        <div style="margin:0.6rem 0 0.4rem;font-size:0.72rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.05em">Recipients</div>
+        <div id="bcReps" class="empty">Loading…</div>
+        <div style="display:flex;gap:0.6rem;align-items:center;margin-top:0.7rem">
+          <button class="dig-btn" onclick="sendBroadcast(this)">Send to selected</button>
+          <span id="bcStatus" class="muted"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TOKEN = 'wk_token';
+const H = () => { const t = localStorage.getItem(TOKEN); return t ? { 'Authorization': 'Bearer ' + t } : {}; };
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+if (!localStorage.getItem(TOKEN)) { location.href = '/login'; }
+initNavbar({ active: 'insights' });
+
+const TEAL='#4ec9b0', BLUE='#569cd6', ORANGE='#ce9178', GREY='#888';
+let _charts = [];
+function destroyCharts(){ _charts.forEach(c=>{ try{c.destroy();}catch(_){} }); _charts = []; }
+
+function relDate(iso){ if(!iso) return '—'; const d=new Date(iso); if(isNaN(d)) return '—';
+  const days=Math.round((Date.now()-d.getTime())/86400000);
+  if(days<=0) return 'today'; if(days===1) return 'yesterday'; if(days<30) return days+'d ago';
+  return d.toLocaleDateString(undefined,{day:'numeric',month:'short'}); }
+
+async function load(){
+  const days = document.getElementById('daysSel').value;
+  const qa = document.getElementById('qaChk').checked;
+  const body = document.getElementById('body');
+  let r;
+  try { r = await fetch(`/api/eval/stats?days=${days}&include_qa=${qa}`, { headers: H() }); }
+  catch(_) { body.innerHTML = '<div class="empty">Failed to load.</div>'; return; }
+  if (r.status === 403) { body.innerHTML = '<div class="empty">Admin only.</div>'; return; }
+  if (!r.ok) { body.innerHTML = '<div class="empty">Failed to load ('+r.status+').</div>'; return; }
+  const d = await r.json();
+  render(d);
+}
+
+function render(d){
+  destroyCharts();
+  const cl = d.contact_log || {}, ct = d.content || {};
+  const totalLogins = (d.logins_by_day||[]).reduce((a,x)=>a+Number(x.n),0);
+  const totalEvents = (d.events_by_day||[]).reduce((a,x)=>a+Number(x.n),0);
+  const activeVals = (d.active_by_day||[]).map(x=>Number(x.n));
+  const avgDau = activeVals.length ? (activeVals.reduce((a,b)=>a+b,0)/activeVals.length).toFixed(1) : '0';
+  const activeUsers = (d.per_user||[]).filter(u=>Number(u.events)>0).length;
+
+  document.getElementById('body').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="v">${totalLogins}</div><div class="l">Logins</div></div>
+      <div class="kpi"><div class="v">${avgDau}</div><div class="l">Avg daily active</div></div>
+      <div class="kpi"><div class="v">${activeUsers}</div><div class="l">Active users</div></div>
+      <div class="kpi"><div class="v">${totalEvents}</div><div class="l">Total actions</div></div>
+      <div class="kpi"><div class="v">${cl.sent||0}</div><div class="l">Mails sent</div></div>
+      <div class="kpi"><div class="v">${cl.replied||0}</div><div class="l">Replied</div></div>
+    </div>
+    <div class="grid">
+      <div class="card full" data-sec="activity"><h2>Activity over time <span class="exp" onclick="exportChartPng('cTime','activity')">⬇ PNG</span></h2><div class="chart-box"><canvas id="cTime"></canvas></div></div>
+      <div class="card" data-sec="usage"><h2>Feature usage (by surface) <span class="exp" onclick="exportChartPng('cSurface','usage')">⬇ PNG</span></h2><div class="chart-box tall"><canvas id="cSurface"></canvas></div></div>
+      <div class="card" data-sec="funnel"><h2>Outreach funnel <span class="exp" onclick="exportChartPng('cFunnel','funnel')">⬇ PNG</span></h2><div class="chart-box short"><canvas id="cFunnel"></canvas></div></div>
+      <div class="card full" data-sec="users"><h2>Per-user activity <span class="exp" onclick="exportCsv('userTable','per-user-activity')">⬇ CSV</span></h2><div id="userTable"></div></div>
+      <div class="card full" data-sec="agents"><h2>Agent runs <span class="exp" onclick="exportCsv('agentTable','agent-runs')">⬇ CSV</span></h2><div id="agentTable"></div></div>
+    </div>`;
+
+  // Merge daily series on a shared day axis
+  const dayset = new Set();
+  ['logins_by_day','active_by_day','events_by_day'].forEach(k=>(d[k]||[]).forEach(x=>dayset.add(x.day)));
+  const days = [...dayset].sort();
+  const mapOf = arr => Object.fromEntries((arr||[]).map(x=>[x.day, Number(x.n)]));
+  const lg=mapOf(d.logins_by_day), ac=mapOf(d.active_by_day), ev=mapOf(d.events_by_day);
+  _charts.push(new Chart(document.getElementById('cTime'), {
+    type:'line',
+    data:{ labels:days, datasets:[
+      { label:'Actions', data:days.map(x=>ev[x]||0), borderColor:GREY, backgroundColor:'transparent', tension:0.25 },
+      { label:'Logins', data:days.map(x=>lg[x]||0), borderColor:TEAL, backgroundColor:'transparent', tension:0.25 },
+      { label:'Active users', data:days.map(x=>ac[x]||0), borderColor:BLUE, backgroundColor:'transparent', tension:0.25 },
+    ]},
+    options: lineOpts()
+  }));
+
+  const surf = d.usage_by_surface||[];
+  _charts.push(new Chart(document.getElementById('cSurface'), {
+    type:'bar',
+    data:{ labels:surf.map(x=>x.surface), datasets:[{ data:surf.map(x=>Number(x.n)), backgroundColor:TEAL }] },
+    options: barOpts()
+  }));
+
+  const f = [['Generated', (d.outreach||{}).generated||0], ['Sent', cl.sent||0], ['Replied', cl.replied||0], ['Follow-up', cl.follow_up||0]];
+  _charts.push(new Chart(document.getElementById('cFunnel'), {
+    type:'bar',
+    data:{ labels:f.map(x=>x[0]), datasets:[{ data:f.map(x=>x[1]), backgroundColor:[GREY,BLUE,TEAL,ORANGE] }] },
+    options: barOpts()
+  }));
+
+  // Per-user table
+  const users = d.per_user||[];
+  document.getElementById('userTable').innerHTML = users.length ? `
+    <table><thead><tr><th>User</th><th>Role</th><th class="num">Logins</th><th class="num">Actions</th><th>Last active</th></tr></thead>
+    <tbody>${users.map(u=>`<tr>
+      <td><a class="row-link" href="?user=${u.id}" onclick="event.preventDefault();openUser(${u.id})">${esc(u.name)}</a></td><td class="muted">${esc(u.role||'')}</td>
+      <td class="num">${u.logins||0}</td><td class="num">${u.events||0}</td>
+      <td class="muted">${relDate(u.last_active)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No users.</div>';
+
+  applySecs();
+
+  // Agent runs table
+  const ar = d.agent_runs||[];
+  document.getElementById('agentTable').innerHTML = ar.length ? `
+    <table><thead><tr><th>Agent type</th><th class="num">Runs</th><th class="num">Done</th><th class="num">Failed</th><th class="num">Avg secs</th></tr></thead>
+    <tbody>${ar.map(a=>`<tr>
+      <td>${esc(a.agent_type)}</td><td class="num">${a.runs}</td>
+      <td class="num">${a.done||0}</td><td class="num">${a.failed||0}</td>
+      <td class="num">${a.avg_secs==null?'—':a.avg_secs}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No agent runs in window.</div>';
+}
+
+function lineOpts(){ return { responsive:true, maintainAspectRatio:false,
+  plugins:{ legend:{ labels:{ color:'#aaa', boxWidth:12, font:{size:11} } } },
+  scales:{ x:{ ticks:{ color:'#777', font:{size:10}, maxRotation:0, autoSkip:true }, grid:{ color:'#262626' } },
+           y:{ beginAtZero:true, ticks:{ color:'#777', precision:0 }, grid:{ color:'#262626' } } } }; }
+function barOpts(){ return { responsive:true, maintainAspectRatio:false, indexAxis:'y',
+  plugins:{ legend:{ display:false } },
+  scales:{ x:{ beginAtZero:true, ticks:{ color:'#777', precision:0 }, grid:{ color:'#262626' } },
+           y:{ ticks:{ color:'#aaa', font:{size:11} }, grid:{ display:false } } } }; }
+
+// ── Rep digests ─────────────────────────────────────────────────────────────
+let _digests = [];
+async function loadDigests(){
+  const el = document.getElementById('digests');
+  let r;
+  try { r = await fetch('/api/digests?status=pending', { headers: H() }); }
+  catch(_) { el.innerHTML = '<div class="empty">—</div>'; return; }
+  if (r.status === 403) { el.innerHTML = '<div class="empty">Admin only.</div>'; return; }
+  if (!r.ok) { el.innerHTML = '<div class="empty">—</div>'; return; }
+  const d = await r.json(); _digests = d.digests || [];
+  document.getElementById('digestSmtp').textContent = d.smtp_configured ? '· SMTP ready' : '· SMTP not configured — review only (set smtp_* to email)';
+  if (!_digests.length) { el.innerHTML = '<div class="empty">No pending digests. They are generated every 2 days (or run the rep_digest heartbeat).</div>'; return; }
+  const sendable = _digests.filter(x => x.rep_email).length;
+  el.innerHTML =
+    (d.smtp_configured && sendable ? `<div style="margin-bottom:0.6rem"><button class="dig-btn" onclick="sendAllDigests()">Send all (${sendable})</button></div>` : '')
+    + _digests.map(x => `<div class="dig-row" id="dig-${x.id}">
+        <div class="dig-head">
+          <b>${esc(x.rep_name||'—')}</b>
+          <span class="muted">${x.rep_email ? esc(x.rep_email) : '⚠ no email on file'}</span>
+          <span class="muted">· ${x.client_count||0} clients · ${esc(x.generated_date||'')}</span>
+          <span style="margin-left:auto;display:flex;gap:0.4rem">
+            <button class="dig-btn" onclick="toggleDig(${x.id},this)">Preview</button>
+            <button class="dig-btn" ${(d.smtp_configured && x.rep_email) ? '' : 'disabled'} onclick="sendDig(${x.id},this)">Send</button>
+          </span>
+        </div>
+        <div class="dig-body" id="dig-body-${x.id}" style="display:none">${x.content||''}</div>
+      </div>`).join('');
+}
+function toggleDig(id, btn){ const b=document.getElementById('dig-body-'+id); const show=b.style.display==='none'; b.style.display=show?'block':'none'; btn.textContent=show?'Hide':'Preview'; }
+async function sendDig(id, btn){
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    const r = await fetch('/api/digests/'+id+'/send', { method:'POST', headers: H() });
+    if (r.ok) { if(btn) btn.textContent='✓ Sent'; const row=document.getElementById('dig-'+id); if(row) row.style.opacity='0.55'; return true; }
+    const e = await r.json().catch(()=>({})); if(btn){ btn.textContent='Failed'; btn.title=e.detail||''; btn.disabled=false; } return false;
+  } catch(_) { if(btn){ btn.textContent='Failed'; btn.disabled=false; } return false; }
+}
+async function sendAllDigests(){ for (const x of _digests.filter(x=>x.rep_email)) { await sendDig(x.id, null); } loadDigests(); }
+
+// ── Broadcast (tips & updates to reps) ──────────────────────────────────────
+const BC_PRESETS = [
+  { label: '★ Set focus clients',
+    subject: 'Tip: Star your focus clients ★',
+    message: "Quick tip that makes the whole system work harder for you:\n\nOpen Clients, and star (★) the accounts you're actively working. Your focus clients are researched and monitored automatically in the background — fresh news, signals and pain-points land on their page without you lifting a finger — and they show up first on your Home and in your digest.\n\nTakes 30 seconds and pays off every day." },
+  { label: '🎯 Best-chance ranking',
+    subject: 'New: your Best-chance client ranking',
+    message: "There's a new Ranking page in the top nav.\n\nIt ranks your clients by chance to win — buying signals, engagement and product fit — so you can see at a glance where to spend your energy. Give it a look and start at the top." },
+  { label: '📇 Log your outreach',
+    subject: 'Tip: Log your outreach',
+    message: "When you email or call a client, log it (the Follow-up / contact buttons).\n\nTwo payoffs: the system stops nudging you about clients you've just contacted, and it reminds you to follow up when someone hasn't replied. The more you log, the smarter your Today list gets." },
+  { label: '🇩🇪 ★ Fokus-Kunden',
+    subject: 'Tipp: Markiere deine Fokus-Kunden ★',
+    message: "ein kurzer Tipp, der das ganze System für dich stärker arbeiten lässt:\n\nÖffne Clients und markiere (★) die Accounts, an denen du aktiv arbeitest. Deine Fokus-Kunden werden automatisch im Hintergrund recherchiert und überwacht — frische News, Signale und Pain-Points landen auf ihrer Seite, ganz ohne dein Zutun — und sie erscheinen zuerst auf deiner Startseite und im Digest.\n\nDauert 30 Sekunden und zahlt sich täglich aus." },
+  { label: '🇩🇪 🎯 Ranking-Seite',
+    subject: 'Neu: Die Ranking-Seite – deine besten Abschlusschancen auf einen Blick',
+    message: "ab sofort findet ihr in der oberen Navigationsleiste eine neue Seite: Ranking.\n\nSie sortiert eure Kunden nach Abschlusschance — also danach, wo ein Abschluss aktuell am wahrscheinlichsten ist. Grundlage sind echte Kaufsignale (Pain Points, Opportunities), euer Engagement (z. B. Antworten auf eure Mails) und der Produkt-Fit. Kunden, die nur lange nicht kontaktiert wurden, ranken bewusst niedrig — es geht um Chancen, nicht um Rückstände.\n\nOben auf der Seite könnt ihr zwischen Alle, Meine Kunden und Fokus wechseln.\n\nMein Tipp: Fangt einfach oben an. Die Kunden ganz oben sind eure heißesten Chancen — dort lohnt sich eure Energie am meisten.\n\nSchaut gern rein und gebt mir kurz Rückmeldung, wie es für euch funktioniert." },
+];
+function renderPresets(){
+  const el = document.getElementById('bcPresets');
+  el.innerHTML = BC_PRESETS.map((p,i)=>`<button class="dig-btn" onclick="applyPreset(${i})" title="Load this tip">${esc(p.label)}</button>`).join('');
+}
+function applyPreset(i){
+  const p = BC_PRESETS[i]; if(!p) return;
+  document.getElementById('bcSubject').value = p.subject;
+  document.getElementById('bcMessage').value = p.message;
+}
+async function loadReps(){
+  renderPresets();
+  const el = document.getElementById('bcReps');
+  let r; try { r = await fetch('/api/reps', { headers: H() }); } catch(_){ el.innerHTML='<div class="empty">—</div>'; return; }
+  if (r.status === 403) { el.innerHTML = '<div class="empty">Admin only.</div>'; return; }
+  if (!r.ok) { el.innerHTML = '<div class="empty">—</div>'; return; }
+  const d = await r.json();
+  document.getElementById('bcSmtp').textContent = d.smtp_configured ? '· SMTP ready' : '· SMTP not configured — set smtp_* to email';
+  const reps = d.reps || [];
+  if (!reps.length) { el.innerHTML = '<div class="empty">No reps found.</div>'; return; }
+  el.className = '';
+  el.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:0.5rem 1.2rem">' + reps.map(rp => {
+    const hasEmail = !!rp.email;
+    return `<label style="display:flex;align-items:center;gap:0.35rem;font-size:0.8rem;${hasEmail?'':'opacity:0.5'}">
+      <input type="checkbox" class="bc-rep" value="${rp.id}" ${hasEmail?'checked':'disabled'}>
+      ${esc(rp.name||'—')}${hasEmail?'':' <span class="muted">(no email)</span>'}</label>`;
+  }).join('') + '</div>';
+}
+async function draftWithAI(btn){
+  const topic = document.getElementById('bcTopic').value.trim();
+  const message = document.getElementById('bcMessage').value.trim();
+  const status = document.getElementById('bcStatus');
+  if (!topic && !message) { status.style.color='#f14c4c'; status.textContent='Type a topic (or a rough draft) for the agent to work from.'; return; }
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = '✨ Drafting…'; status.style.color='#888'; status.textContent='Agent is writing…';
+  try {
+    const r = await fetch('/api/reps/broadcast/draft', { method:'POST', headers:{'Content-Type':'application/json', ...H()},
+      body: JSON.stringify({ topic, message }) });
+    const d = await r.json().catch(()=>({}));
+    if (r.ok) {
+      if (d.subject) document.getElementById('bcSubject').value = d.subject;
+      if (d.message) document.getElementById('bcMessage').value = d.message;
+      status.style.color='#4ec9b0'; status.textContent='✓ Draft ready — review and edit before sending.';
+    } else { status.style.color='#f14c4c'; status.textContent='Draft failed: ' + (d.detail||r.status); }
+  } catch(e){ status.style.color='#f14c4c'; status.textContent='Draft failed: ' + e.message; }
+  btn.disabled = false; btn.textContent = orig;
+}
+async function sendBroadcast(btn){
+  const subject = document.getElementById('bcSubject').value.trim();
+  const message = document.getElementById('bcMessage').value.trim();
+  const status = document.getElementById('bcStatus');
+  const ids = Array.from(document.querySelectorAll('.bc-rep:checked')).map(c=>parseInt(c.value));
+  if (!subject || !message) { status.textContent = 'Subject and message are required.'; status.style.color='#f14c4c'; return; }
+  if (!ids.length) { status.textContent = 'Select at least one rep with an email.'; status.style.color='#f14c4c'; return; }
+  if (!confirm(`Send "${subject}" to ${ids.length} rep(s)?`)) return;
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Sending…'; status.textContent = ''; status.style.color='#888';
+  try {
+    const r = await fetch('/api/reps/broadcast', { method:'POST', headers:{'Content-Type':'application/json', ...H()},
+      body: JSON.stringify({ subject, message, user_ids: ids }) });
+    const d = await r.json().catch(()=>({}));
+    if (r.ok) {
+      status.style.color = '#4ec9b0';
+      status.textContent = `✓ Sent to ${d.sent}` + (d.skipped_count ? ` · skipped ${d.skipped_count}: ${(d.skipped||[]).join(', ')}` : '');
+    } else { status.style.color='#f14c4c'; status.textContent = 'Failed: ' + (d.detail||r.status); }
+  } catch(e){ status.style.color='#f14c4c'; status.textContent = 'Failed: ' + e.message; }
+  btn.disabled = false; btn.textContent = orig;
+}
+
+// ── Section toggles (persisted) ─────────────────────────────────────────────
+const SECTIONS = [['activity','Activity'],['usage','Usage'],['funnel','Outreach'],['users','Users'],['agents','Agents'],['digests','Digests']];
+let _secOff = new Set((() => { try { return JSON.parse(localStorage.getItem('wk_insights_secs')) || []; } catch(_) { return []; } })());
+function applySecs(){
+  // Only hide the section cards — NOT the .tog toggle buttons (they also carry
+  // data-sec), otherwise toggling a section off hides its own re-enable button.
+  document.querySelectorAll('[data-sec]:not(.tog)').forEach(el => { el.style.display = _secOff.has(el.dataset.sec) ? 'none' : ''; });
+  const dc = document.getElementById('digestCard'); if (dc) dc.style.display = _secOff.has('digests') ? 'none' : '';
+  document.querySelectorAll('.tog[data-sec]').forEach(b => b.classList.toggle('on', !_secOff.has(b.dataset.sec)));
+}
+function toggleSec(sec){
+  if (_secOff.has(sec)) _secOff.delete(sec); else _secOff.add(sec);
+  localStorage.setItem('wk_insights_secs', JSON.stringify([..._secOff]));
+  applySecs();
+}
+function buildToggleBar(){
+  document.getElementById('toggles').innerHTML = '<span class="lbl">Show:</span>'
+    + SECTIONS.map(([k,l]) => `<button class="tog" data-sec="${k}" onclick="toggleSec('${k}')">${l}</button>`).join('');
+  applySecs();
+}
+
+// ── Export helpers ──────────────────────────────────────────────────────────
+function _download(url, name){ const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); }
+function exportChartPng(canvasId, name){
+  const ch = (window.Chart && Chart.getChart) ? Chart.getChart(canvasId) : null;
+  if (!ch) return;
+  _download(ch.toBase64Image('image/png', 1), 'insights-' + name + '.png');
+}
+function _csvFromRows(rows){ return rows.map(r => r.map(c => '"' + String(c==null?'':c).replace(/"/g,'""').trim() + '"').join(',')).join('\n'); }
+function _downloadCsv(csv, name){
+  const url = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  _download(url, name + '.csv'); URL.revokeObjectURL(url);
+}
+function exportCsv(containerId, name){
+  const tbl = document.querySelector('#'+containerId+' table'); if (!tbl) return;
+  const rows = [...tbl.querySelectorAll('tr')].map(tr => [...tr.querySelectorAll('th,td')].map(td => td.textContent));
+  _downloadCsv(_csvFromRows(rows), 'insights-'+name);
+}
+
+// ── Per-person detail (timeline + prompts) ──────────────────────────────────
+function openUser(uid){ const u=new URL(location); u.searchParams.set('user', uid); history.pushState({},'',u); refresh(); }
+function goOverview(){ const u=new URL(location); u.searchParams.delete('user'); history.pushState({},'',u); refresh(); }
+window.addEventListener('popstate', refresh);
+
+async function renderUserDetail(uid){
+  document.getElementById('toggles').style.display = 'none';
+  const dc = document.getElementById('digestCard'); if (dc) dc.style.display = 'none';
+  const body = document.getElementById('body');
+  body.innerHTML = '<div class="empty">Loading…</div>';
+  const days = document.getElementById('daysSel').value;
+  let r;
+  try { r = await fetch(`/api/eval/user/${uid}?days=${days}`, { headers: H() }); }
+  catch(_) { body.innerHTML = '<div class="empty">Failed to load.</div>'; return; }
+  if (r.status === 403) { body.innerHTML = '<div class="empty">Admin only.</div>'; return; }
+  if (!r.ok) { body.innerHTML = '<div class="empty">Failed to load ('+r.status+').</div>'; return; }
+  const d = await r.json(); const u = d.user || {};
+  window._userEvents = d.events || [];
+  const groups = {};
+  (d.events||[]).forEach(e => { const day=(e.created_at||'').slice(0,10); (groups[day]=groups[day]||[]).push(e); });
+  const dayKeys = Object.keys(groups).sort().reverse();
+  const surfChips = (d.by_surface||[]).map(s => `<span class="tl-badge" style="margin-right:0.35rem">${esc((s.surface||'').replace(/_/g,' '))} ${s.n}</span>`).join('');
+  body.innerHTML = `
+    <a class="backlink" onclick="goOverview()">← Back to overview</a>
+    <div class="card">
+      <h2>${esc(u.name||'User')}
+        <span class="exp" onclick="exportUserCsv(${uid})">⬇ CSV</span></h2>
+      <div class="muted" style="margin:-0.4rem 0 0.7rem">${esc(u.role||'')} · ${u.email?esc(u.email):'no email'} · ${d.total_events} actions in ${d.days}d</div>
+      <div style="margin-bottom:0.9rem">${surfChips || '<span class="muted">No activity in this window.</span>'}</div>
+      <div>${renderTimeline(dayKeys, groups)}</div>
+    </div>`;
+}
+function renderTimeline(dayKeys, groups){
+  if (!dayKeys.length) return '<div class="empty">No actions recorded in this window.</div>';
+  return dayKeys.map(day => {
+    const label = new Date(day+'T00:00:00').toLocaleDateString(undefined, {weekday:'short', day:'numeric', month:'short'});
+    const rows = groups[day].map(e => {
+      const t=new Date(e.created_at); const hhmm=isNaN(t)?'':t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      const label2=(e.surface||'').replace(/_/g,' ');
+      return `<div class="tl-row"><span class="tl-time">${hhmm}</span><span class="tl-badge">${esc(label2)}</span><span class="tl-text" title="${esc(e.prompt||'')}">${esc(e.prompt||'')}</span></div>`;
+    }).join('');
+    return `<div class="tl-day">${esc(label)}</div>${rows}`;
+  }).join('');
+}
+function exportUserCsv(uid){
+  const ev = window._userEvents || [];
+  const rows = [['time','surface','prompt']].concat(ev.map(e => [e.created_at||'', e.surface||'', e.prompt||'']));
+  _downloadCsv(_csvFromRows(rows), 'user-'+uid+'-timeline');
+}
+
+// ── Routing ─────────────────────────────────────────────────────────────────
+function refresh(){
+  const uid = new URLSearchParams(location.search).get('user');
+  if (uid) { renderUserDetail(uid); }
+  else { document.getElementById('toggles').style.display=''; load(); loadDigests(); loadReps(); }
+}
+
+document.getElementById('daysSel').addEventListener('change', refresh);
+document.getElementById('qaChk').addEventListener('change', refresh);
+document.getElementById('exportLink').addEventListener('click', async (e) => {
+  e.preventDefault();
+  try {
+    const r = await fetch('/api/eval/export', { headers: H() });
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    _download(url, 'evaluation-export.json'); URL.revokeObjectURL(url);
+  } catch (_) {}
+});
+document.getElementById('exportTimingLink').addEventListener('click', async (e) => {
+  e.preventDefault();
+  try {
+    const r = await fetch('/api/eval/research-timing.csv', { headers: H() });
+    if (!r.ok) { alert('Export failed (admin only).'); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    _download(url, 'research-timing.csv'); URL.revokeObjectURL(url);
+  } catch (_) { alert('Export failed.'); }
+});
+buildToggleBar();
+refresh();
+</script>
+</body>
+</html>

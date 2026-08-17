@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contact — Buzzowl</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.body { display: flex; flex: 1; overflow: hidden; }
+
+/* Sidebar */
+.sidebar { width: 260px; flex-shrink: 0; border-right: 1px solid var(--c-linefaint, #222); overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1.2rem; }
+.sidebar h3 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--c-faint, #555); margin-bottom: 0.5rem; }
+
+.profile-card { background: var(--c-surface, #252526); border-radius: 6px; padding: 1rem; }
+.profile-avatar { width: 52px; height: 52px; border-radius: 50%; background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); font-size: 1.1rem; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-bottom: 0.75rem; }
+.profile-name { font-size: 1rem; font-weight: 700; color: var(--c-text, #d4d4d4); margin-bottom: 0.2rem; }
+.profile-role { font-size: 0.8rem; color: var(--c-muted, #888); margin-bottom: 0.6rem; }
+.profile-company { font-size: 0.78rem; color: var(--c-blue, #569cd6); text-decoration: none; }
+.profile-company:hover { color: var(--c-bluehi, #9cdcfe); }
+
+.linkedin-btn { display: flex; align-items: center; gap: 0.45rem; background: #0a66c2; color: #fff; border: none; border-radius: 5px; padding: 0.45rem 0.85rem; font-size: 0.78rem; font-weight: 600; cursor: pointer; text-decoration: none; width: 100%; justify-content: center; margin-top: 0.6rem; transition: background 0.15s; }
+.linkedin-btn:hover { background: #004182; }
+.linkedin-btn svg { flex-shrink: 0; }
+.linkedin-btn.hidden { display: none; }
+.enrich-btn { display: flex; align-items: center; gap: 0.4rem; background: none; color: var(--c-muted, #888); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 5px; padding: 0.4rem 0.85rem; font-size: 0.76rem; cursor: pointer; width: 100%; justify-content: center; margin-top: 0.6rem; transition: all 0.15s; }
+.enrich-btn:hover:not(:disabled) { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.enrich-btn:disabled { opacity: 0.5; cursor: default; }
+.enrich-btn.hidden { display: none; }
+
+.stat-chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 5px; padding: 0.28rem 0.75rem; font-size: 0.78rem; margin-bottom: 0.3rem; display: block; }
+.stat-val { color: var(--c-bluehi, #9cdcfe); font-weight: 700; margin-right: 0.3rem; }
+.stat-label { color: var(--c-muted2, #666); }
+
+/* Main */
+.main { flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
+
+.section-title { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--c-faint, #555); margin-bottom: 0.75rem; }
+
+/* Facts from findings */
+.facts-card { background: var(--c-surface, #252526); border-radius: 6px; padding: 1rem 1.25rem; }
+.fact-item { display: flex; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--c-line, #2a2a2a); font-size: 0.81rem; }
+.fact-item:last-child { border-bottom: none; }
+.fact-bullet { color: var(--c-accent, #4ec9b0); flex-shrink: 0; margin-top: 0.1rem; }
+.fact-text { color: var(--c-text2, #ccc); line-height: 1.45; }
+
+/* Profile findings grid */
+.findings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.7rem; }
+.finding-card { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 6px; padding: 0.85rem; }
+.finding-title { font-size: 0.81rem; color: var(--c-text, #d4d4d4); font-weight: 500; margin-bottom: 0.4rem; line-height: 1.4; }
+.finding-meta { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.45rem; }
+.finding-date { font-size: 0.68rem; color: var(--c-muted2, #666); }
+.source-chip { font-size: 0.63rem; padding: 0.08rem 0.35rem; border-radius: 3px; background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); text-decoration: none; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
+.source-chip:hover { color: var(--c-bluehi, #9cdcfe); }
+.stype-badge { font-size: 0.6rem; padding: 0.08rem 0.3rem; border-radius: 3px; background: #2e1a3a; color: var(--c-purple, #c586c0); font-weight: 600; }
+.finding-preview { font-size: 0.76rem; color: var(--c-muted, #888); line-height: 1.5; }
+.expand-btn { background: none; border: none; color: var(--c-blue, #569cd6); font-size: 0.72rem; cursor: pointer; padding: 0.2rem 0; display: block; margin-top: 0.3rem; }
+.expand-btn:hover { color: var(--c-bluehi, #9cdcfe); }
+.finding-full { font-size: 0.75rem; color: var(--c-text4, #999); line-height: 1.65; margin-top: 0.4rem; white-space: pre-wrap; border-top: 1px solid var(--c-line, #2a2a2a); padding-top: 0.5rem; display: none; }
+
+.empty-note { color: var(--c-faint, #555); font-style: italic; font-size: 0.82rem; padding: 1rem 0; }
+
+.toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 6px; padding: 0.55rem 1rem; font-size: 0.82rem; z-index: 999; transition: opacity 0.3s; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div id="navbarMount"></div>
+  <div class="body">
+    <aside class="sidebar">
+      <div class="profile-card">
+        <div class="profile-avatar" id="profileAvatar">?</div>
+        <div class="profile-name" id="profileName">Loading…</div>
+        <div class="profile-role" id="profileRole"></div>
+        <a href="#" class="profile-company" id="profileCompany"></a>
+        <a href="#" target="_blank" rel="noopener" class="linkedin-btn hidden" id="linkedinBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+          Open LinkedIn
+        </a>
+        <button class="enrich-btn hidden" id="enrichBtn" onclick="enrichContact()">
+          &#x1F50D; Find LinkedIn
+        </button>
+      </div>
+
+      <div>
+        <h3>Stats</h3>
+        <span class="stat-chip"><span class="stat-val" id="statFindings">—</span><span class="stat-label">profile sources</span></span>
+        <span class="stat-chip"><span class="stat-val" id="statFacts">—</span><span class="stat-label">facts extracted</span></span>
+        <span class="stat-chip"><span class="stat-val" id="statActivity">—</span><span class="stat-label">last activity</span></span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div id="factsSection">
+        <div class="section-title">Key Facts</div>
+        <div class="facts-card" id="factsList"><div class="empty-note">No facts extracted yet</div></div>
+      </div>
+
+      <div id="findingsSection">
+        <div class="section-title">Profile Sources</div>
+        <div class="findings-grid" id="findingsGrid"><div class="empty-note">No profile sources found</div></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+const contactName = decodeURIComponent(location.pathname.replace('/contact/', ''));
+let authToken = localStorage.getItem('wk_token');
+
+initNavbar({ active: 'clients', subtitle: true, actions: [] });
+
+function authHeaders() {
+    return { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' };
+}
+
+function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function safeMeta(m) {
+    if (!m) return {};
+    if (typeof m === 'string') { try { return JSON.parse(m); } catch { return {}; } }
+    return m;
+}
+
+function hostOf(url) {
+    try { return new URL(url).hostname.replace('www.',''); } catch { return url; }
+}
+
+function isLinkedIn(url) {
+    return url && url.includes('linkedin.com/in/');
+}
+
+async function loadContact() {
+    const r = await fetch(`/api/contacts/${encodeURIComponent(contactName)}`, { headers: authHeaders() });
+    if (!r.ok) {
+        document.getElementById('profileName').textContent = contactName;
+        return;
+    }
+    const data = await r.json();
+    const meta = safeMeta(data.metadata);
+    const initials = contactName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+
+    document.getElementById('profileAvatar').textContent = initials;
+    document.getElementById('profileName').textContent = data.name || contactName;
+    document.getElementById('profileRole').textContent = meta.role || '';
+    document.getElementById('statActivity').textContent = data.last_activity || '—';
+
+    if (data.client_name) {
+        const el = document.getElementById('profileCompany');
+        el.textContent = data.client_name;
+        el.href = `/client/${encodeURIComponent(data.client_name)}`;
+    }
+
+    const docs = data.documents || [];
+    const profileDocs = docs.filter(d => {
+        const m = safeMeta(d.metadata);
+        return m.source_type === 'profile' || isLinkedIn(m.source_url);
+    });
+    const allDocs = profileDocs.length ? profileDocs : docs;
+
+    // Surface LinkedIn URL
+    let linkedinUrl = meta.linkedin_url || null;
+    if (!linkedinUrl) {
+        for (const d of allDocs) {
+            const m = safeMeta(d.metadata);
+            if (isLinkedIn(m.source_url)) { linkedinUrl = m.source_url; break; }
+        }
+    }
+    if (linkedinUrl) {
+        const btn = document.getElementById('linkedinBtn');
+        btn.href = linkedinUrl;
+        btn.classList.remove('hidden');
+    } else {
+        document.getElementById('enrichBtn').classList.remove('hidden');
+    }
+
+    // Collect all extracted_facts across profile docs
+    const allFacts = [];
+    for (const d of allDocs) {
+        const m = safeMeta(d.metadata);
+        const facts = Array.isArray(m.extracted_facts) ? m.extracted_facts : [];
+        allFacts.push(...facts);
+    }
+    const uniqueFacts = [...new Set(allFacts)];
+    document.getElementById('statFacts').textContent = uniqueFacts.length;
+
+    const factsList = document.getElementById('factsList');
+    if (uniqueFacts.length) {
+        factsList.innerHTML = uniqueFacts.map(f =>
+            `<div class="fact-item"><span class="fact-bullet">▸</span><span class="fact-text">${esc(f)}</span></div>`
+        ).join('');
+    }
+
+    // Profile source cards
+    document.getElementById('statFindings').textContent = allDocs.length;
+    const grid = document.getElementById('findingsGrid');
+    if (!allDocs.length) {
+        grid.innerHTML = '<div class="empty-note">No profile sources found</div>';
+        return;
+    }
+    grid.innerHTML = allDocs.map((d, i) => {
+        const m = safeMeta(d.metadata);
+        const date = (d.created_at || '').slice(0, 10) || (m.fetched_at || '');
+        const stype = m.source_type || d.type || '';
+        const srcUrl = m.source_url || '';
+        const preview = (d.content || '').slice(0, 160).trim();
+        const full = (d.content || '').slice(160).trim();
+        return `<div class="finding-card">
+            <div class="finding-title">${esc(d.title)}</div>
+            <div class="finding-meta">
+                ${date ? `<span class="finding-date">${esc(date)}</span>` : ''}
+                ${stype ? `<span class="stype-badge">${esc(stype)}</span>` : ''}
+                ${srcUrl ? `<a href="${esc(srcUrl)}" target="_blank" rel="noopener" class="source-chip">${esc(hostOf(srcUrl))}</a>` : ''}
+            </div>
+            ${preview ? `<div class="finding-preview">${esc(preview)}${full ? '…' : ''}</div>` : ''}
+            ${full ? `<button class="expand-btn" onclick="toggleFull(${i})">Show more</button>
+            <div class="finding-full" id="full-${i}">${esc(full)}</div>` : ''}
+        </div>`;
+    }).join('');
+}
+
+function toggleFull(i) {
+    const el = document.getElementById(`full-${i}`);
+    const btn = el.previousElementSibling;
+    if (el.style.display === 'block') {
+        el.style.display = 'none';
+        btn.textContent = 'Show more';
+    } else {
+        el.style.display = 'block';
+        btn.textContent = 'Show less';
+    }
+}
+
+async function enrichContact() {
+    const btn = document.getElementById('enrichBtn');
+    btn.disabled = true;
+    btn.textContent = 'Searching…';
+    try {
+        const r = await fetch(`/api/contacts/${encodeURIComponent(contactName)}/enrich`, {
+            method: 'POST', headers: authHeaders(),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        btn.textContent = '⏳ Running — refresh in a moment';
+        // Poll for completion and reload if LinkedIn appears
+        const data = await r.json();
+        const runId = data.run_id;
+        const poll = setInterval(async () => {
+            try {
+                const sr = await fetch(`/api/agents/tasks/${runId}`, { headers: authHeaders() });
+                if (!sr.ok) return;
+                const run = await sr.json();
+                if (run.status === 'done' || run.status === 'failed') {
+                    clearInterval(poll);
+                    location.reload();
+                }
+            } catch {}
+        }, 4000);
+    } catch(e) {
+        btn.disabled = false;
+        btn.textContent = '🔍 Find LinkedIn';
+        alert(`Enrich failed: ${e.message}`);
+    }
+}
+
+// Redirect to login if no token
+if (!authToken) {
+    location.href = '/knowledge';
+} else {
+    loadContact();
+}
+</script>
+</body>
+</html>

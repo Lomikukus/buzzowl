@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Product — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<script src="/static/components/mailtools.js?v=20260714a"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.body  { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Left panel ── */
+.left-panel { width: 380px; flex-shrink: 0; border-right: 1px solid var(--c-linefaint, #222); overflow-y: auto; display: flex; flex-direction: column; }
+.left-header { padding: 1rem 1rem 0.6rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.product-name { font-size: 1.05rem; font-weight: 700; color: var(--c-text, #d4d4d4); }
+.product-header-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.35rem; }
+.cat-badge { font-size: 0.58rem; padding: 0.1rem 0.45rem; border-radius: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.cat-SaaS        { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.cat-SDK         { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.cat-API         { background: var(--c-orangetint, #2e2a1a); color: var(--c-neutraly, #dcdcaa); }
+.cat-On-premise  { background: #2a1a2a; color: var(--c-purple, #c586c0); }
+.cat-Service     { background: #1a2a2e; color: var(--c-bluehi, #9cdcfe); }
+.cat-Hardware    { background: #2e1a1a; color: var(--c-red, #f14c4c); }
+.cat-default     { background: var(--c-surface, #252526); color: var(--c-muted2, #666); }
+.depth-badge { font-size: 0.6rem; padding: 0.1rem 0.4rem; border-radius: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.depth-verified   { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.depth-researched { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.depth-draft      { background: var(--c-orangetint, #2e2a1a); color: var(--c-muted, #888); }
+.website-btn { font-size: 0.72rem; color: var(--c-blue, #569cd6); text-decoration: none; border: 1px solid var(--c-blueline, #2a3a4a); background: #1a2030; border-radius: 4px; padding: 0.15rem 0.55rem; flex-shrink: 0; transition: border-color 0.15s, color 0.15s; }
+.website-btn:hover { border-color: var(--c-blue, #569cd6); color: #7ab8e8; }
+.website-btn.no-url { color: var(--c-line3, #3a3a3a); border-color: var(--c-line, #2a2a2a); background: none; cursor: pointer; }
+.website-btn.no-url:hover { color: var(--c-muted2, #666); border-color: var(--c-line3, #3a3a3a); }
+
+.left-body { padding: 1rem; display: flex; flex-direction: column; gap: 1.2rem; flex: 1; }
+.section-title { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--c-faint, #555); margin-bottom: 0.5rem; }
+
+/* Editable field rows */
+.field-row { display: flex; flex-direction: column; gap: 0.2rem; }
+.field-label { font-size: 0.68rem; color: var(--c-faint, #555); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.4rem; }
+.field-val { color: var(--c-text3, #bbb); font-size: 0.8rem; line-height: 1.45; }
+.field-val.empty { color: var(--c-faint2, #444); font-style: italic; }
+.field-input, .field-textarea { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-text2, #ccc); border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; width: 100%; font-family: inherit; }
+.field-input:focus, .field-textarea:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.field-textarea { resize: vertical; min-height: 60px; }
+.feat-tag { display: inline-block; background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 3px; font-size: 0.63rem; color: var(--c-muted2, #777); padding: 0.1rem 0.4rem; margin: 0.1rem 0.15rem 0 0; }
+.edit-btn  { background: none; border: none; color: var(--c-faint2, #444); cursor: pointer; font-size: 0.65rem; padding: 0; line-height: 1; transition: color 0.15s; }
+.edit-btn:hover { color: var(--c-bluehi, #9cdcfe); }
+.save-btn  { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border: none; border-radius: 3px; padding: 0.15rem 0.55rem; font-size: 0.7rem; cursor: pointer; font-weight: 600; }
+.save-btn:hover { background: var(--c-accent2, #3ab89e); }
+.cancel-btn { background: none; border: 1px solid var(--c-line2, #333); color: var(--c-muted2, #666); border-radius: 3px; padding: 0.15rem 0.5rem; font-size: 0.7rem; cursor: pointer; }
+.cancel-btn:hover { border-color: var(--c-faint, #555); color: var(--c-text3, #bbb); }
+.edit-row { display: flex; flex-direction: column; gap: 0.35rem; }
+.edit-row-actions { display: flex; gap: 0.35rem; }
+
+/* Controls section */
+.controls-section { border-top: 1px solid var(--c-linefaint, #222); padding-top: 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.priority-wrap { display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; color: var(--c-muted2, #666); }
+.priority-wrap input[type=range] { flex: 1; accent-color: var(--c-accent, #4ec9b0); cursor: pointer; }
+.priority-val { color: var(--c-accent, #4ec9b0); font-weight: 700; min-width: 14px; }
+.toggle-row { display: flex; align-items: center; gap: 0.6rem; }
+.toggle-btn { background: none; border: 1px solid var(--c-line, #2a2a2a); border-radius: 4px; color: var(--c-faint, #555); font-size: 0.72rem; padding: 0.2rem 0.6rem; cursor: pointer; transition: all 0.15s; }
+.toggle-btn.on { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); background: var(--c-accenttint, #1a3a2e); }
+.toggle-btn:hover { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.status-select { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-text3, #bbb); border-radius: 4px; padding: 0.25rem 0.5rem; font-size: 0.75rem; cursor: pointer; }
+.status-select:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+
+/* Research report section */
+.report-section { border-top: 1px solid var(--c-linefaint, #222); padding-top: 1rem; }
+.report-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; cursor: pointer; }
+.report-section-header:hover .section-title { color: var(--c-accent, #4ec9b0); }
+.report-meta { font-size: 0.65rem; color: var(--c-faint2, #444); margin-top: 0.15rem; }
+.report-toggle { background: none; border: 1px solid var(--c-line, #2a2a2a); border-radius: 3px; color: var(--c-faint, #555); font-size: 0.7rem; padding: 0.1rem 0.4rem; cursor: pointer; }
+.report-body { font-size: 0.78rem; color: var(--c-text3, #bbb); line-height: 1.6; }
+.report-body h1 { font-size: 0.95rem; font-weight: 700; color: var(--c-text, #d4d4d4); margin: 0.9rem 0 0.4rem; border-bottom: 1px solid var(--c-linefaint, #222); padding-bottom: 0.25rem; }
+.report-body h2 { font-size: 0.88rem; font-weight: 700; color: var(--c-text, #d4d4d4); margin: 0.8rem 0 0.3rem; }
+.report-body h3 { font-size: 0.8rem; font-weight: 600; color: #c9c9c9; margin: 0.6rem 0 0.2rem; }
+.report-body p { margin: 0.35rem 0; }
+.report-body ul { padding-left: 1.1rem; margin: 0.25rem 0; }
+.report-body li { margin: 0.1rem 0; }
+.report-body strong { color: var(--c-neutraly, #dcdcaa); font-weight: 600; }
+.report-body em { color: var(--c-bluehi, #9cdcfe); font-style: normal; }
+.report-body hr { border: none; border-top: 1px solid var(--c-line, #2a2a2a); margin: 0.6rem 0; }
+.report-body code { background: var(--c-bg, #1e1e1e); border-radius: 3px; padding: 0.05rem 0.3rem; font-family:var(--c-font-mono, monospace); font-size: 0.75rem; color: var(--c-orange, #ce9178); }
+.report-sources { margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--c-bg, #1e1e1e); }
+.source-link { display: block; font-size: 0.68rem; color: var(--c-blue, #569cd6); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0.08rem 0; }
+.source-link:hover { text-decoration: underline; }
+
+/* Match intelligence panel */
+.match-section { border-top: 1px solid var(--c-linefaint, #222); padding-top: 1rem; }
+.match-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; cursor: pointer; }
+.match-section-header:hover .section-title { color: var(--c-accent, #4ec9b0); }
+.match-empty { font-size: 0.75rem; color: var(--c-faint2, #444); font-style: italic; }
+.match-card { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 5px; padding: 0.6rem 0.75rem; margin-bottom: 0.55rem; }
+.match-card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; flex-wrap: wrap; }
+.match-client { font-size: 0.78rem; font-weight: 600; color: var(--c-text, #d4d4d4); }
+.match-date { font-size: 0.63rem; color: var(--c-faint2, #444); margin-left: auto; }
+.fit-badge { font-size: 0.6rem; padding: 0.1rem 0.45rem; border-radius: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.fit-strong   { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.fit-potential { background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); }
+.fit-not_a_fit { background: #2a1a1a; color: var(--c-muted2, #666); }
+.fit-unknown  { background: var(--c-surface, #252526); color: var(--c-faint, #555); }
+.fit-score { font-size: 0.68rem; color: var(--c-faint, #555); }
+.match-body { font-size: 0.77rem; color: var(--c-text3, #bbb); line-height: 1.55; }
+.match-body a { color: var(--c-blue, #569cd6); text-decoration: none; }
+.match-body a:hover { text-decoration: underline; }
+.match-body strong { color: var(--c-neutraly, #dcdcaa); }
+.match-body em { color: var(--c-bluehi, #9cdcfe); font-style: normal; }
+.match-body p { margin: 0.2rem 0; }
+.match-body ul { padding-left: 1rem; margin: 0.2rem 0; }
+.match-body li { margin: 0.08rem 0; }
+
+/* ── Right panel (chat) ── */
+.right-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.chat-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1.2rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; background: var(--c-bg2, #1a1a1a); }
+.chat-title { font-size: 0.82rem; font-weight: 600; color: var(--c-text, #d4d4d4); }
+.chat-subtitle { font-size: 0.72rem; color: var(--c-faint, #555); }
+.model-select { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-text3, #bbb); border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 0.72rem; cursor: pointer; margin-left: auto; }
+.model-select:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+
+.chat-messages { flex: 1; overflow-y: auto; padding: 1rem 1.2rem; display: flex; flex-direction: column; gap: 0.9rem; }
+.chat-empty { color: var(--c-faint2, #444); font-size: 0.82rem; text-align: center; margin-top: 3rem; line-height: 1.6; }
+
+.msg { display: flex; flex-direction: column; gap: 0.15rem; max-width: 90%; }
+.msg.user { align-self: flex-end; }
+.msg.ai   { align-self: flex-start; }
+.msg-bubble { padding: 0.55rem 0.85rem; border-radius: 8px; font-size: 0.82rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.msg.user .msg-bubble { background: var(--c-bluetint, #1a2e4a); color: #cce0f5; border-radius: 8px 8px 2px 8px; }
+.msg.ai   .msg-bubble { background: var(--c-surface, #252526); color: var(--c-text3, #bbb); border-radius: 8px 8px 8px 2px; white-space: normal; }
+.msg.ai .msg-bubble p { margin: 0.2rem 0; }
+.msg.ai .msg-bubble ul, .msg.ai .msg-bubble ol { padding-left: 1.1rem; margin: 0.2rem 0; }
+.msg.ai .msg-bubble li { margin: 0.1rem 0; }
+.msg.ai .msg-bubble strong { color: var(--c-neutraly, #dcdcaa); font-weight: 600; }
+.msg.ai .msg-bubble code { background: var(--c-bg, #1e1e1e); border-radius: 3px; padding: 0.05rem 0.3rem; font-family:var(--c-font-mono, monospace); font-size: 0.75rem; color: var(--c-orange, #ce9178); }
+.msg-time { font-size: 0.62rem; color: var(--c-faint2, #444); padding: 0 0.25rem; }
+.msg.user .msg-time { text-align: right; }
+
+.chat-footer { padding: 0.75rem 1.2rem; border-top: 1px solid var(--c-linefaint, #222); flex-shrink: 0; background: var(--c-bg2, #1a1a1a); }
+.chat-input-row { display: flex; gap: 0.5rem; align-items: flex-end; }
+.chat-input { flex: 1; background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-text, #d4d4d4); border-radius: 6px; padding: 0.55rem 0.8rem; font-size: 0.82rem; font-family: inherit; resize: none; min-height: 40px; max-height: 120px; overflow-y: auto; line-height: 1.4; }
+.chat-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.send-btn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border: none; border-radius: 5px; padding: 0.5rem 1rem; font-size: 0.8rem; font-weight: 600; cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
+.send-btn:hover { background: var(--c-accent2, #3ab89e); }
+.send-btn:disabled { background: var(--c-line, #2a2a2a); color: var(--c-faint, #555); cursor: default; }
+.thinking-dot { display: inline-block; animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Shared utilities */
+.toast { position: fixed; bottom: 1.2rem; right: 1.2rem; background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 5px; padding: 0.55rem 1rem; font-size: 0.78rem; color: var(--c-text3, #bbb); z-index: 9999; display: none; }
+
+/* Auth overlay */
+.auth-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.auth-box { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 8px; padding: 2rem; width: 320px; display: flex; flex-direction: column; gap: 0.85rem; }
+.auth-box h2 { font-size: 1rem; font-weight: 600; color: var(--c-text, #d4d4d4); }
+.auth-input { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.45rem 0.7rem; font-size: 0.82rem; width: 100%; }
+.auth-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.auth-btn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border: none; border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+.auth-btn:hover { background: var(--c-accent2, #3ab89e); }
+.auth-error { color: var(--c-red, #f14c4c); font-size: 0.75rem; display: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <div class="body">
+
+    <!-- ── Left panel ── -->
+    <div class="left-panel" id="leftPanel">
+      <div class="left-header" id="leftHeader">
+        <div class="product-name" id="prodName">Loading…</div>
+        <div class="product-header-row" id="prodHeaderRow"></div>
+      </div>
+
+      <div class="left-body">
+
+        <div>
+          <div class="section-title">Research Summary</div>
+
+          <div class="field-row" style="margin-bottom:0.75rem">
+            <div class="field-label">Description <button class="edit-btn" onclick="startEdit('description')">✎</button></div>
+            <div class="field-val" id="fv-description"></div>
+            <div class="edit-row" id="fe-description" style="display:none">
+              <textarea class="field-textarea" id="fi-description" rows="4"></textarea>
+              <div class="edit-row-actions">
+                <button class="save-btn" onclick="saveField('description')">Save</button>
+                <button class="cancel-btn" onclick="cancelEdit('description')">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row" style="margin-bottom:0.75rem">
+            <div class="field-label">Key Features <button class="edit-btn" onclick="startEdit('key_features')">✎</button></div>
+            <div id="fv-key_features"></div>
+            <div class="edit-row" id="fe-key_features" style="display:none">
+              <input class="field-input" id="fi-key_features" placeholder="Comma-separated features">
+              <div class="edit-row-actions">
+                <button class="save-btn" onclick="saveField('key_features')">Save</button>
+                <button class="cancel-btn" onclick="cancelEdit('key_features')">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row" style="margin-bottom:0.75rem">
+            <div class="field-label">Pricing <button class="edit-btn" onclick="startEdit('pricing_info')">✎</button></div>
+            <div class="field-val" id="fv-pricing_info"></div>
+            <div class="edit-row" id="fe-pricing_info" style="display:none">
+              <input class="field-input" id="fi-pricing_info" placeholder="e.g. Per seat / month, enterprise negotiated">
+              <div class="edit-row-actions">
+                <button class="save-btn" onclick="saveField('pricing_info')">Save</button>
+                <button class="cancel-btn" onclick="cancelEdit('pricing_info')">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row" style="margin-bottom:0.75rem">
+            <div class="field-label">Target Customer <button class="edit-btn" onclick="startEdit('target_customer')">✎</button></div>
+            <div class="field-val" id="fv-target_customer"></div>
+            <div class="edit-row" id="fe-target_customer" style="display:none">
+              <input class="field-input" id="fi-target_customer" placeholder="e.g. Mid-market B2B SaaS companies">
+              <div class="edit-row-actions">
+                <button class="save-btn" onclick="saveField('target_customer')">Save</button>
+                <button class="cancel-btn" onclick="cancelEdit('target_customer')">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row" style="margin-bottom:0.75rem">
+            <div class="field-label">Product Website <button class="edit-btn" onclick="startEdit('website_url')">✎</button></div>
+            <div class="field-val" id="fv-website_url"></div>
+            <div class="edit-row" id="fe-website_url" style="display:none">
+              <input class="field-input" id="fi-website_url" placeholder="https://…">
+              <div class="edit-row-actions">
+                <button class="save-btn" onclick="saveField('website_url')">Save</button>
+                <button class="cancel-btn" onclick="cancelEdit('website_url')">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field-label">Category <button class="edit-btn" onclick="startEdit('category')">✎</button></div>
+            <div class="field-val" id="fv-category"></div>
+            <div class="edit-row" id="fe-category" style="display:none">
+              <input class="field-input" id="fi-category" placeholder="e.g. SaaS, SDK, API, Service">
+              <div class="edit-row-actions">
+                <button class="save-btn" onclick="saveField('category')">Save</button>
+                <button class="cancel-btn" onclick="cancelEdit('category')">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls-section">
+          <div class="section-title">Controls</div>
+          <div class="priority-wrap">
+            <span>Priority</span>
+            <input type="range" min="0" max="5" id="prioritySlider" oninput="document.getElementById('priorityVal').textContent=this.value" onchange="savePriority(this.value)">
+            <span class="priority-val" id="priorityVal">0</span>
+          </div>
+          <div class="toggle-row">
+            <button class="toggle-btn" id="favBtn" onclick="toggleFav()">★ Favorite</button>
+            <button class="toggle-btn" id="shareBtn" onclick="toggleShare()">🔗 Share</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.5rem">
+            <span style="font-size:0.72rem;color:var(--c-faint, #555)">Status</span>
+            <select class="status-select" id="statusSelect" onchange="saveStatus(this.value)">
+              <option value="draft">Draft</option>
+              <option value="verified">Verified</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="report-section" id="reportSection" style="display:none">
+          <div class="report-section-header" onclick="toggleReport()">
+            <div>
+              <div class="section-title">Research Report</div>
+              <div class="report-meta" id="reportMeta"></div>
+            </div>
+            <button class="report-toggle" id="reportToggleBtn">▾</button>
+          </div>
+          <div id="reportBody">
+            <div class="report-body" id="reportContent"></div>
+            <div class="report-sources" id="reportSources" style="display:none"></div>
+          </div>
+        </div>
+
+        <div class="match-section" id="matchSection" style="display:none">
+          <div class="match-section-header" onclick="toggleMatchSection()">
+            <div class="section-title">Match Intelligence</div>
+            <button class="report-toggle" id="matchToggleBtn">▾</button>
+          </div>
+          <div id="matchBody"></div>
+        </div>
+
+      </div><!-- /left-body -->
+    </div><!-- /left-panel -->
+
+    <!-- ── Right panel (chat) ── -->
+    <div class="right-panel">
+      <div class="chat-header">
+        <div>
+          <div class="chat-title">Verification Chat</div>
+          <div class="chat-subtitle">Ask questions or correct the research findings</div>
+        </div>
+        <select class="model-select" id="modelSelect"><option value="">Default model</option></select>
+      </div>
+
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-empty" id="chatEmpty">
+          No messages yet.<br>Ask about this product or start a verification interview.
+        </div>
+      </div>
+
+      <div class="chat-footer">
+        <div class="chat-input-row">
+          <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask about this product…"
+            onkeydown="handleChatKey(event)"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /body -->
+</div><!-- /page -->
+
+<div class="auth-overlay" id="authOverlay" style="display:none">
+  <div class="auth-box">
+    <h2>Sign in to Buzzowl</h2>
+    <input class="auth-input" id="authUser" type="text" placeholder="Username" autocomplete="username">
+    <input class="auth-input" id="authPass" type="password" placeholder="Password" autocomplete="current-password">
+    <div class="auth-error" id="authError">Invalid credentials</div>
+    <button class="auth-btn" onclick="doLogin()">Sign In</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let _token = localStorage.getItem('wk_token') || '';
+let _product = null;
+let _sessionId = null;
+const _productId = parseInt(window.location.pathname.split('/').pop(), 10);
+
+function _hdr() { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${_token}` }; }
+
+function toast(msg, ms = 2800) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, ms);
+}
+
+async function _api(method, path, body) {
+  const opts = { method, headers: _hdr() };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (r.status === 401) { showAuth(); return null; }
+  return r;
+}
+
+function _esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function _catClass(cat) {
+  const safe = (cat || 'default').replace(/[^a-zA-Z-]/g, '') || 'default';
+  return `cat-${safe}`;
+}
+
+function _relTime(iso) {
+  if (!iso) return '';
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+function _depthLabel(p) {
+  if ((p.status || '') === 'verified') return { cls: 'depth-verified', text: '✓ Verified' };
+  if (p.description && (p.key_features || []).length > 0) return { cls: 'depth-researched', text: 'Deep researched' };
+  return { cls: 'depth-draft', text: 'Initial draft' };
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+function showAuth() { document.getElementById('authOverlay').style.display = 'flex'; }
+function hideAuth() { document.getElementById('authOverlay').style.display = 'none'; }
+
+async function doLogin() {
+  const u = document.getElementById('authUser').value.trim();
+  const p = document.getElementById('authPass').value;
+  const r = await fetch('/api/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: u, password: p }),
+  });
+  if (!r.ok) { document.getElementById('authError').style.display = 'block'; return; }
+  const d = await r.json();
+  _token = d.token;
+  localStorage.setItem('wk_token', _token);
+  hideAuth();
+  if (window.navbarRefreshUser) window.navbarRefreshUser();
+  initPage();
+}
+
+// ---------------------------------------------------------------------------
+// Page init
+// ---------------------------------------------------------------------------
+async function initPage() {
+  if (!_productId || isNaN(_productId)) {
+    document.getElementById('prodName').textContent = 'Invalid product ID';
+    return;
+  }
+
+  initNavbar({ active: 'products', subtitle: true, actions: [{ label: '← Products', id: 'backBtn' }] });
+  document.getElementById('backBtn')?.addEventListener('click', () => { window.location.href = '/products'; });
+
+  const [pr, cr] = await Promise.all([
+    _api('GET', `/api/products/${_productId}`),
+    _api('GET', `/api/products/${_productId}/chat`),
+  ]);
+
+  if (!pr) return;
+  if (!pr.ok) { toast('Product not found'); return; }
+  const pd = await pr.json();
+  _product = pd.product;
+
+  if (cr && cr.ok) {
+    const cd = await cr.json();
+    _sessionId = cd.session_id;
+    renderMessages(cd.messages || []);
+  }
+
+  renderProduct();
+  loadModels();
+  loadSources();
+  loadMatchSections();
+}
+
+// ---------------------------------------------------------------------------
+// Product render
+// ---------------------------------------------------------------------------
+function renderProduct() {
+  const p = _product;
+  if (!p) return;
+
+  document.title = `${p.name} — Buzzowl`;
+  document.getElementById('prodName').textContent = p.name;
+
+  const depth = _depthLabel(p);
+  const catHtml = p.category ? `<span class="cat-badge ${_catClass(p.category)}">${_esc(p.category)}</span>` : '';
+  const updHtml = p.updated_at ? `<span style="font-size:0.68rem;color:var(--c-faint, #555)">Updated ${_relTime(p.updated_at)}</span>` : '';
+  const wUrl = p.website_url || '';
+  const btnHtml = wUrl
+    ? `<a id="websiteBtn" class="website-btn" href="${_esc(wUrl)}" target="_blank" rel="noopener" title="${_esc(wUrl)}" style="margin-left:auto">↗ Official page</a>`
+    : `<a id="websiteBtn" class="website-btn no-url" onclick="startEdit('website_url')" title="Add website URL" style="margin-left:auto">↗ Official page</a>`;
+  document.getElementById('prodHeaderRow').innerHTML =
+    `<span class="depth-badge ${depth.cls}">${depth.text}</span>${catHtml}${updHtml}${btnHtml}<button onclick="openBulkMailModal()" style="margin-left:0.5rem;font-size:0.7rem;padding:0.15rem 0.55rem;background:#1a2a3a;border:1px solid #2a5a7a;color:var(--c-bluehi, #9cdcfe);border-radius:3px;cursor:pointer;flex-shrink:0;">✉ Client Emails</button>`;
+
+  // Text fields
+  _renderFieldVal('description', p.description);
+  _renderFieldVal('pricing_info', p.pricing_info);
+  _renderFieldVal('target_customer', p.target_customer);
+  _renderFieldVal('website_url', p.website_url, true);
+  _renderFieldVal('category', p.category);
+
+  // Key features
+  const feats = p.key_features || [];
+  const featEl = document.getElementById('fv-key_features');
+  if (feats.length) {
+    featEl.innerHTML = feats.map(f => `<span class="feat-tag">${_esc(f)}</span>`).join('');
+  } else {
+    featEl.innerHTML = '<span class="field-val empty">Not specified</span>';
+  }
+
+  // Controls
+  const slider = document.getElementById('prioritySlider');
+  slider.value = p.priority || 0;
+  document.getElementById('priorityVal').textContent = p.priority || 0;
+  document.getElementById('favBtn').classList.toggle('on', !!p.is_favorite);
+  document.getElementById('shareBtn').classList.toggle('on', !!p.is_shared);
+  document.getElementById('statusSelect').value = p.status || 'draft';
+
+  const subtitleEl = document.getElementById('navSubtitle');
+  if (subtitleEl) subtitleEl.textContent = p.name;
+}
+
+function _renderFieldVal(field, val, isUrl = false) {
+  const el = document.getElementById(`fv-${field}`);
+  if (!el) return;
+  if (val) {
+    if (isUrl) {
+      el.innerHTML = `<a href="${_esc(val)}" target="_blank" rel="noopener" style="font-size:0.8rem;color:var(--c-blue, #569cd6)">${_esc(val)}</a>`;
+    } else {
+      el.className = 'field-val';
+      el.textContent = val;
+    }
+  } else {
+    el.className = 'field-val empty';
+    el.textContent = 'Not specified';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inline editing
+// ---------------------------------------------------------------------------
+function startEdit(field) {
+  const p = _product;
+  document.getElementById(`fv-${field}`).style.display = 'none';
+  const editEl = document.getElementById(`fe-${field}`);
+  editEl.style.display = 'flex';
+  const input = document.getElementById(`fi-${field}`);
+  if (field === 'key_features') {
+    input.value = (p.key_features || []).join(', ');
+  } else {
+    input.value = p[field] || '';
+  }
+  input.focus();
+}
+
+function cancelEdit(field) {
+  document.getElementById(`fv-${field}`).style.display = '';
+  document.getElementById(`fe-${field}`).style.display = 'none';
+}
+
+async function saveField(field) {
+  const input = document.getElementById(`fi-${field}`);
+  let val = input.value.trim();
+  let patch = {};
+
+  if (field === 'key_features') {
+    patch.key_features = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [];
+  } else {
+    patch[field] = val || null;
+  }
+
+  const r = await _api('PATCH', `/api/products/${_productId}`, patch);
+  if (!r || !r.ok) { toast('Save failed'); return; }
+  const d = await r.json();
+  _product = d.product;
+  cancelEdit(field);
+  renderProduct();
+  toast('Saved');
+}
+
+// ---------------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------------
+const _debounceTimers = {};
+function _debounce(key, fn, ms) { clearTimeout(_debounceTimers[key]); _debounceTimers[key] = setTimeout(fn, ms); }
+
+function savePriority(val) {
+  _debounce('priority', async () => {
+    const r = await _api('PATCH', `/api/products/${_productId}`, { priority: parseInt(val, 10) });
+    if (r && r.ok) { const d = await r.json(); _product = d.product; }
+  }, 500);
+}
+
+async function toggleFav() {
+  const r = await _api('PATCH', `/api/products/${_productId}`, { is_favorite: !_product.is_favorite });
+  if (!r || !r.ok) return;
+  const d = await r.json();
+  _product = d.product;
+  document.getElementById('favBtn').classList.toggle('on', !!_product.is_favorite);
+  toast(_product.is_favorite ? '⭐ Marked as favorite' : 'Removed from favorites');
+}
+
+async function toggleShare() {
+  const r = await _api('POST', `/api/products/${_productId}/share`);
+  if (!r || !r.ok) return;
+  const d = await r.json();
+  _product.is_shared = d.is_shared;
+  document.getElementById('shareBtn').classList.toggle('on', !!_product.is_shared);
+  toast(_product.is_shared ? '🔗 Shared with org' : 'Unshared');
+}
+
+async function saveStatus(val) {
+  const r = await _api('PATCH', `/api/products/${_productId}`, { status: val });
+  if (!r || !r.ok) { toast('Save failed'); return; }
+  const d = await r.json();
+  _product = d.product;
+  renderProduct();
+}
+
+// ---------------------------------------------------------------------------
+// Research report
+// ---------------------------------------------------------------------------
+let _reportCollapsed = false;
+
+function toggleReport() {
+  _reportCollapsed = !_reportCollapsed;
+  document.getElementById('reportBody').style.display = _reportCollapsed ? 'none' : 'block';
+  document.getElementById('reportToggleBtn').textContent = _reportCollapsed ? '▸' : '▾';
+}
+
+function _mdToHtml(md) {
+  if (!md) return '';
+  // Strip ## Sources block — shown separately
+  md = md.replace(/## Sources[\s\S]*$/, '');
+  const lines = md.split('\n');
+  const out = [];
+  let inUl = false;
+  for (const raw of lines) {
+    let line = raw
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    if (/^---+$/.test(raw)) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      out.push('<hr>'); continue;
+    }
+    if (/^# /.test(raw)) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      out.push(`<h1>${line.slice(2).trim()}</h1>`); continue;
+    }
+    if (/^## /.test(raw)) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      out.push(`<h2>${line.slice(3).trim()}</h2>`); continue;
+    }
+    if (/^### /.test(raw)) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      out.push(`<h3>${line.slice(4).trim()}</h3>`); continue;
+    }
+    if (/^- /.test(raw)) {
+      if (!inUl) { out.push('<ul>'); inUl = true; }
+      out.push(`<li>${line.slice(2).trim()}</li>`); continue;
+    }
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (line.trim() === '') { out.push(''); continue; }
+    out.push(`<p>${line}</p>`);
+  }
+  if (inUl) out.push('</ul>');
+  return out.join('\n');
+}
+
+async function loadSources() {
+  if (!(_product || {}).source_doc_id) return;
+  const r = await _api('GET', `/api/products/${_productId}/sources`);
+  if (!r || !r.ok) return;
+  const d = await r.json();
+  const content = d.content || '';
+  if (!content) return;
+
+  // Render full report
+  document.getElementById('reportSection').style.display = 'block';
+  document.getElementById('reportContent').innerHTML = _mdToHtml(content);
+
+  // Meta line (title + date)
+  const parts = [];
+  if (d.title) parts.push(d.title);
+  if (d.created_at) parts.push(new Date(d.created_at).toLocaleDateString());
+  document.getElementById('reportMeta').textContent = parts.join(' · ');
+
+  // Extract source URLs
+  const srcMatch = content.match(/## Sources\n([\s\S]*?)(?:\n##|$)/);
+  if (srcMatch) {
+    const urls = [...srcMatch[1].matchAll(/https?:\/\/[^\s)>\]]+/g)].map(m => m[0]);
+    if (urls.length) {
+      document.getElementById('reportSources').style.display = 'block';
+      document.getElementById('reportSources').innerHTML =
+        '<div style="font-size:0.68rem;color:var(--c-faint, #555);margin-bottom:0.25rem">Sources</div>' +
+        urls.map(u => `<a class="source-link" href="${_esc(u)}" target="_blank" rel="noopener">${_esc(u)}</a>`).join('');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Match Intelligence
+// ---------------------------------------------------------------------------
+let _matchCollapsed = false;
+
+function toggleMatchSection() {
+  _matchCollapsed = !_matchCollapsed;
+  document.getElementById('matchBody').style.display = _matchCollapsed ? 'none' : 'block';
+  document.getElementById('matchToggleBtn').textContent = _matchCollapsed ? '▸' : '▾';
+}
+
+const _fitLabel = { strong: '✓ Strong Fit', potential: '~ Potential Fit', not_a_fit: '✗ Not a Fit', unknown: 'Unknown' };
+
+async function loadMatchSections() {
+  const r = await _api('GET', `/api/products/${_productId}/match_sections`);
+  if (!r || !r.ok) return;
+  const d = await r.json();
+  const sections = d.sections || [];
+
+  const el = document.getElementById('matchSection');
+  const body = document.getElementById('matchBody');
+
+  if (!sections.length) {
+    el.style.display = 'block';
+    body.innerHTML = '<div class="match-empty">No match reports for this product yet.</div>';
+    return;
+  }
+
+  el.style.display = 'block';
+  body.innerHTML = sections.map(s => {
+    const cat = s.fit_category || 'unknown';
+    const label = _fitLabel[cat] || cat;
+    const date = s.created_at ? new Date(s.created_at).toLocaleDateString() : '';
+    const scoreHtml = s.score ? `<span class="fit-score">${s.score}/10</span>` : '';
+    return `
+      <div class="match-card">
+        <div class="match-card-header">
+          <span class="match-client">${_esc(s.client_name || '—')}</span>
+          <span class="fit-badge fit-${_esc(cat)}">${_esc(label)}</span>
+          ${scoreHtml}
+          <span class="match-date">${_esc(date)}</span>
+        </div>
+        <div class="match-body">${_mdToHtml(s.content || '')}</div>
+      </div>`;
+  }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+function renderMessages(msgs) {
+  const el = document.getElementById('chatMessages');
+  const empty = document.getElementById('chatEmpty');
+  if (!msgs || !msgs.length) {
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  const html = msgs.map(m => {
+    const role = m.role === 'user' ? 'user' : 'ai';
+    const time = m.created_at ? _relTime(m.created_at) : '';
+    const body = role === 'ai' ? marked.parse(m.content || '') : _esc(m.content);
+    return `<div class="msg ${role}">
+      <div class="msg-bubble">${body}</div>
+      ${time ? `<div class="msg-time">${time}</div>` : ''}
+    </div>`;
+  }).join('');
+  el.innerHTML = html + (empty.outerHTML.replace('style="display:block"','style="display:none"'));
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendMessage(role, content) {
+  document.getElementById('chatEmpty').style.display = 'none';
+  const el = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.innerHTML = `<div class="msg-bubble">${role === 'ai' ? marked.parse(content || '') : _esc(content)}</div>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  return div;
+}
+
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  const sendBtn = document.getElementById('sendBtn');
+  input.value = '';
+  sendBtn.disabled = true;
+
+  appendMessage('user', msg);
+  const thinking = appendMessage('ai', '…');
+  thinking.querySelector('.msg-bubble').innerHTML = '<span class="thinking-dot">●</span>';
+
+  const model = document.getElementById('modelSelect').value || undefined;
+  const r = await _api('POST', `/api/products/${_productId}/chat`, { message: msg, model });
+
+  thinking.remove();
+  sendBtn.disabled = false;
+
+  if (!r || !r.ok) {
+    appendMessage('ai', '_(Error contacting server)_');
+    return;
+  }
+  const d = await r.json();
+  if (d.session_id && !_sessionId) _sessionId = d.session_id;
+  appendMessage('ai', d.answer || '_(No response)_');
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+async function loadModels() {
+  const r = await fetch('/api/ollama', { headers: _hdr() });
+  if (!r || !r.ok) return;
+  const d = await r.json();
+  const sel = document.getElementById('modelSelect');
+  const models = (d.models || []).filter(m => !m.includes('embed') && !m.includes('nomic'));
+  sel.innerHTML = '<option value="">Default model</option>' +
+    models.map(m => `<option value="${_esc(m)}">${_esc(m)}</option>`).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+document.addEventListener('DOMContentLoaded', () => {
+  if (!_token) { showAuth(); return; }
+  initPage();
+});
+
+// ---------------------------------------------------------------------------
+// Bulk Mail Generator
+// ---------------------------------------------------------------------------
+let _bmClients = [];
+let _bmMailMode = 'general';
+const _BM_CASUAL = () => _bmMailMode === 'casual';
+let _bmContactMap = {};
+
+function setBmMode(mode) {
+  _bmMailMode = mode;
+  document.getElementById('bmModeGeneral').classList.toggle('on', mode === 'general');
+  document.getElementById('bmModeTargeted').classList.toggle('on', mode === 'targeted');
+  document.getElementById('bmModeCasual').classList.toggle('on', mode === 'casual');
+}
+
+async function openBulkMailModal() {
+  document.getElementById('bmResults').innerHTML = '';
+  document.getElementById('bmCustom').value = '';
+  document.getElementById('bmType').value = 'event_invitation';
+  onBmTypeChange();
+  if (!_bmClients.length) {
+    try {
+      const r = await _api('GET', '/api/clients');
+      if (r && r.ok) {
+        const d = await r.json();
+        _bmClients = (d.clients || []).filter(c => c.name && c.name !== 'Unknown');
+      }
+    } catch (_) {}
+  }
+  renderBmClientList();
+  document.getElementById('bulkMailOverlay').style.display = 'flex';
+}
+
+function closeBulkMailModal() {
+  document.getElementById('bulkMailOverlay').style.display = 'none';
+}
+
+function onBmTypeChange() {
+  const t = document.getElementById('bmType').value;
+  document.getElementById('bmEventFields').style.display = (t === 'event_invitation') ? 'flex' : 'none';
+}
+
+function renderBmClientList() {
+  const el = document.getElementById('bmClientList');
+  if (!_bmClients.length) {
+    el.innerHTML = '<span style="font-size:0.75rem;color:var(--c-faint, #555);">No clients found</span>';
+    return;
+  }
+  el.innerHTML = _bmClients.map(c => `
+    <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.75rem;color:var(--c-text3, #bbb);
+                  background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);border-radius:3px;
+                  padding:0.2rem 0.5rem;cursor:pointer;user-select:none;">
+      <input type="checkbox" data-name="${_esc(c.name)}" style="accent-color:var(--c-accent, #4ec9b0);">
+      ${_esc(c.name)}
+    </label>`).join('');
+}
+
+function toggleAllBmClients(checked) {
+  document.querySelectorAll('#bmClientList input[type=checkbox]').forEach(cb => { cb.checked = checked; });
+}
+
+async function generateBulkMail(clientNamesOverride) {
+  const selected = clientNamesOverride && clientNamesOverride.length
+    ? clientNamesOverride
+    : [...document.querySelectorAll('#bmClientList input[type=checkbox]:checked')].map(cb => cb.dataset.name);
+  if (!selected.length) { alert('Select at least one client'); return; }
+
+  const btn = document.getElementById('bmGenBtn');
+  btn.disabled = true;
+  btn.textContent = `Generating for ${selected.length} client(s)…`;
+
+  const payload = { client_names: selected, template_type: document.getElementById('bmType').value, mail_mode: _bmMailMode };
+  const evName = document.getElementById('bmEventName').value.trim();
+  const evDate = document.getElementById('bmEventDate').value;
+  const evLink = document.getElementById('bmEventLink').value.trim();
+  const custom = document.getElementById('bmCustom').value.trim();
+  if (evName) payload.event_name = evName;
+  if (evDate) payload.event_date = evDate;
+  if (evLink) payload.event_link = evLink;
+  if (custom) payload.custom_instructions = custom;
+
+  const resultsEl = document.getElementById('bmResults');
+  resultsEl.innerHTML = '<div style="font-size:0.8rem;color:var(--c-faint, #555);padding:0.5rem 0;">Starting job…</div>';
+
+  // Enqueue the job, then poll — each request stays short (no gateway timeout)
+  // and finished emails appear while the rest are still generating.
+  try {
+    payload.async_mode = true;
+    const r = await _api('POST', `/api/products/${_productId}/bulk-mail`, payload);
+    if (!r || !r.ok) {
+      const err = r ? await r.json().catch(() => ({})) : {};
+      resultsEl.innerHTML = `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Error: ${_esc(err.detail || 'unknown error')}</div>`;
+      return;
+    }
+    const { job_id, total } = await r.json();
+    _bmContactMap = {};
+    let rendered = 0;
+    let finalResults = [];
+    for (let poll = 0; poll < 720; poll++) {
+      await new Promise(res => setTimeout(res, 2500));
+      const pr = await _api('GET', `/api/products/mail-jobs/${job_id}`);
+      if (!pr || !pr.ok) {
+        resultsEl.innerHTML = `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Job lost — please retry.</div>`;
+        break;
+      }
+      const job = await pr.json();
+      if (job.results.length > rendered) {
+        await Promise.all(job.results.slice(rendered).map(async r2 => {
+          try {
+            const cr = await _api('GET', `/api/people?client_name=${encodeURIComponent(r2.client_name)}`);
+            if (cr && cr.ok) {
+              const cd = await cr.json();
+              _bmContactMap[r2.client_name] = (cd.contacts || []);
+            }
+          } catch (_) {}
+        }));
+        rendered = job.results.length;
+        finalResults = job.results;
+        renderBmResults(job.results);
+      }
+      btn.textContent = `Generating ${rendered}/${total}…`;
+      if (job.status === 'done') break;
+      if (job.status === 'failed') {
+        resultsEl.insertAdjacentHTML('beforeend', `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Job failed: ${_esc(job.error || 'unknown error')}</div>`);
+        break;
+      }
+    }
+    // Toolbar: download all as Outlook drafts (.eml) + retry any failed clients.
+    const ok = finalResults.filter(r2 => !r2.error);
+    const failed = finalResults.filter(r2 => r2.error).map(r2 => r2.client_name);
+    let toolbar = '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.6rem;">';
+    if (ok.length) {
+      toolbar += `<button id="bmDownloadEml" title="Editable drafts work in Windows Outlook — on Mac use the 📧 Outlook / Copy buttons" style="background:var(--c-accenttint, #1a3a2e);border:1px solid var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0);border-radius:4px;padding:0.3rem 0.8rem;font-size:0.78rem;cursor:pointer;">⬇ Save all to Outlook drafts (.eml · Windows)</button>`;
+    }
+    if (failed.length) {
+      toolbar += `<button id="bmRetryFailed" style="background:var(--c-orangetint, #3a2a1a);border:1px solid var(--c-orange, #ce9178);color:var(--c-orange, #ce9178);border-radius:4px;padding:0.3rem 0.8rem;font-size:0.78rem;cursor:pointer;">↻ Regenerate ${failed.length} failed</button>`;
+    }
+    toolbar += '</div>';
+    if (ok.length || failed.length) resultsEl.insertAdjacentHTML('afterbegin', toolbar);
+    document.getElementById('bmRetryFailed')?.addEventListener('click', () => generateBulkMail(failed));
+    document.getElementById('bmDownloadEml')?.addEventListener('click', (e) => {
+      const items = [...document.querySelectorAll('#bmResults .bm-result-card')].map(card => ({
+        client_name: card.dataset.client,
+        subject: card.dataset.subject,
+        body: card.querySelector('textarea')?.value || '',
+      })).filter(it => it.client_name && it.body);
+      WKMail.downloadEmlBundle(items, _bmMailMode === 'casual', e.target);
+    });
+  } catch (e) {
+    resultsEl.innerHTML = `<div style="color:var(--c-redhi, #f48771);font-size:0.8rem;">Network error: ${_esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Emails';
+  }
+}
+
+// ── Outreach outcome tracking (thesis evaluation: did the mail convert?) ──
+const _OUTREACH_LABELS = { sent: '📤 Sent', replied: '💬 Replied', meeting: '📅 Meeting' };
+
+function outreachRow(docId) {
+  return `<div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;">
+    <span style="font-size:0.62rem;color:var(--c-faint, #555);text-transform:uppercase;letter-spacing:0.05em;">Outreach</span>
+    ${Object.entries(_OUTREACH_LABELS).map(([s, label]) =>
+      `<button onclick="markOutreach(${docId},'${s}',this)"
+        style="background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-muted2, #777);border-radius:3px;padding:0.1rem 0.45rem;font-size:0.68rem;cursor:pointer;">${label}</button>`).join('')}
+  </div>`;
+}
+
+async function markOutreach(docId, status, btn) {
+  const r = await _api('POST', `/api/outreach/${docId}/status`, { status });
+  if (r && r.ok) {
+    [...btn.parentElement.querySelectorAll('button')].forEach(b => { b.style.borderColor = '#2a2a2a'; b.style.color = '#777'; });
+    btn.style.borderColor = '#4ec9b0';
+    btn.style.color = '#4ec9b0';
+  }
+}
+
+function _renderSources(raw) {
+  if (!raw || !raw.trim()) return '';
+  try { return marked.parse(raw); }
+  catch (_) { return `<pre style="white-space:pre-wrap;font-size:0.74rem;color:var(--c-text2, #ccc);">${_esc(raw)}</pre>`; }
+}
+
+function _renderSourcesList(list, clientName) {
+  if (!list || !list.length) return '';
+  const colors = { pain_point:'#f14c4c', risk:'#ce9178', opportunity:'#4ec9b0', news:'#569cd6', finding:'#569cd6' };
+  const clientUrl = `/client/${encodeURIComponent(clientName)}#findings`;
+  const items = list.map(s => {
+    const color = colors[s.type] || '#888';
+    const badge = `<span style="font-size:0.62rem;padding:0.1rem 0.35rem;border-radius:3px;background:${color}22;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${s.type.replace(/_/g,' ')}</span>`;
+    const title = `<a href="${clientUrl}" target="_blank" rel="noopener" style="color:var(--c-text2, #ccc);text-decoration:none;font-size:0.74rem;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${_esc(s.title)}</a>`;
+    const ext = s.source_url ? ` <a href="${_esc(s.source_url)}" target="_blank" rel="noopener" title="Open source article" style="color:var(--c-blue, #569cd6);font-size:0.68rem;text-decoration:none;">↗</a>` : '';
+    return `<div style="display:flex;align-items:center;gap:0.4rem;padding:0.2rem 0;">${badge} ${title}${ext}</div>`;
+  }).join('');
+  return `<div style="margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--c-line, #2a2a2a);"><div style="font-size:0.65rem;color:var(--c-muted2, #666);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.35rem;">Source Documents</div>${items}</div>`;
+}
+
+function _personalizeBm(template, name, role, firstName) {
+  const greetName = _BM_CASUAL() ? (firstName || name.split(' ')[0] || '[First Name]') : (name || '[Name]');
+  return template
+    .replace(/\[Name\]/g, greetName)
+    .replace(/\[First Name\]/g, firstName || name.split(' ')[0] || '[First Name]')
+    .replace(/\[Role\]/g, role || '[Role]');
+}
+
+function _renderContactRows(clientName, eventName) {
+  const contacts = _bmContactMap[clientName] || [];
+  if (!contacts.length) {
+    return `<div style="font-size:0.72rem;color:var(--c-faint, #555);margin-top:0.45rem;">
+      No contacts found — <a href="/client/${encodeURIComponent(clientName)}" target="_blank"
+        style="color:var(--c-blue, #569cd6);text-decoration:none;">add on client page ↗</a></div>`;
+  }
+  const productName = document.querySelector('.product-name')?.textContent || '';
+  const rows = contacts.map(c => {
+    const m = (typeof c.metadata === 'string') ? JSON.parse(c.metadata || '{}') : (c.metadata || {});
+    const role = m.role || '';
+    const email = m.email || '';
+    const firstName = m.first_name || (c.name || '').split(' ')[0];
+    const emailDisplay = email
+      ? `<span style="color:var(--c-blue, #569cd6);font-size:0.7rem;">${_esc(email)}</span>`
+      : `<span style="color:var(--c-faint2, #444);font-size:0.7rem;font-style:italic;">no email</span>`;
+    const safeName    = _esc(c.name || '');
+    const safeRole    = _esc(role);
+    const safeEmail   = _esc(email);
+    const subjectVal  = _esc(eventName
+      ? `Einladung: ${eventName}`
+      : `${productName} — ${clientName}`.trim().replace(/^—\s*/, ''));
+    return `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;border-bottom:1px solid var(--c-linefaint, #232323);">
+      <span style="font-size:0.75rem;color:var(--c-text2, #ccc);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        title="${safeName}">${safeName}${role ? ` <span style="color:var(--c-muted2, #666)">· ${safeRole}</span>` : ''}</span>
+      ${emailDisplay}
+      <button style="flex-shrink:0;background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-blue, #569cd6);border-radius:3px;
+                     padding:0.1rem 0.45rem;font-size:0.68rem;cursor:pointer;"
+              data-name="${safeName}" data-role="${safeRole}" data-first-name="${_esc(firstName)}" onclick="copyPersonalizedBm(this)">Copy</button>
+      <button style="flex-shrink:0;background:none;border:1px solid var(--c-line, #2a2a2a);color:var(--c-accent, #4ec9b0);border-radius:3px;
+                     padding:0.1rem 0.45rem;font-size:0.68rem;cursor:pointer;"
+              data-name="${safeName}" data-role="${safeRole}" data-email="${safeEmail}" data-subject="${subjectVal}" data-first-name="${_esc(firstName)}"
+              onclick="outlookPersonalizedBm(this)">📧 Outlook</button>
+    </div>`;
+  }).join('');
+  return `<div style="margin-top:0.55rem;background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;padding:0.35rem 0.6rem;">
+    <div style="font-size:0.62rem;color:var(--c-faint, #555);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.25rem;">Contacts</div>
+    ${rows}
+  </div>`;
+}
+
+function copyPersonalizedBm(btn) {
+  const card = btn.closest('.bm-result-card');
+  const ta = card ? card.querySelector('textarea') : null;
+  if (!ta) return;
+  const text = _personalizeBm(ta.value, btn.dataset.name || '', btn.dataset.role || '', btn.dataset.firstName || '');
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+  });
+}
+
+function outlookPersonalizedBm(btn) {
+  const card = btn.closest('.bm-result-card');
+  const ta = card ? card.querySelector('textarea') : null;
+  if (!ta) return;
+  const personalized = _personalizeBm(ta.value, btn.dataset.name || '', btn.dataset.role || '', btn.dataset.firstName || '');
+  // Strip the "Betreff: ..." line from the body — it belongs in the subject field, not the body
+  const body = personalized.replace(/^Betreff:[^\n]*\n+/, '');
+  const email = btn.dataset.email || '';
+  const subject = btn.dataset.subject || '';
+  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function renderBmResults(results) {
+  const el = document.getElementById('bmResults');
+  if (!results.length) { el.innerHTML = '<div style="color:var(--c-faint, #555);font-size:0.8rem;">No results</div>'; return; }
+  const evName = document.getElementById('bmEventName')?.value || '';
+  el.innerHTML = results.map(r => {
+    const sourcesHtml = _renderSources(r.sources_reasoning);
+    const sourcesListHtml = _renderSourcesList(r.sources_list || [], r.client_name);
+    const showSources = sourcesHtml || sourcesListHtml;
+    const rEventName = r.event_name || evName || '';
+    const contactRowsHtml = _renderContactRows(r.client_name, rEventName);
+    const productName = document.querySelector('.product-name')?.textContent || '';
+    const cardSubject = rEventName ? `Einladung: ${rEventName}` : `${productName} — ${r.client_name}`.replace(/^—\s*/, '');
+    return `
+    <div class="bm-result-card" data-client="${_esc(r.client_name)}" data-subject="${_esc(cardSubject)}" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);border-radius:6px;padding:0.9rem 1rem;">
+      <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.5rem;">
+        <span style="font-size:0.82rem;font-weight:600;color:var(--c-text, #d4d4d4);">${_esc(r.client_name)}</span>
+        ${r.error ? `<span style="font-size:0.72rem;color:var(--c-redhi, #f48771);">${_esc(r.error)}</span>` : ''}
+        ${r.doc_id ? `<span style="font-size:0.68rem;color:var(--c-faint, #555);">doc #${r.doc_id}</span>` : ''}
+      </div>
+      ${rEventName ? `<div style="font-size:0.72rem;color:var(--c-muted, #888);margin-bottom:0.35rem;"><span style="color:var(--c-faint, #555);text-transform:uppercase;letter-spacing:0.05em;font-size:0.66rem;">Betreff</span> &nbsp;${_esc('Einladung: ' + rEventName)}</div>` : ''}
+      <textarea rows="8" style="width:100%;background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text3, #bbb);
+                border-radius:4px;padding:0.5rem 0.7rem;font-size:0.75rem;
+                font-family:var(--c-font-mono, 'Menlo','Consolas',monospace);resize:vertical;line-height:1.55;"
+      >${r.error ? _esc(r.error) : _esc(r.email || '')}</textarea>
+      ${contactRowsHtml}
+      ${r.doc_id ? outreachRow(r.doc_id) : ''}
+      ${showSources ? `
+      <details style="margin-top:0.55rem;background:var(--c-bg4, #141414);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;">
+        <summary style="padding:0.35rem 0.65rem;cursor:pointer;font-size:0.7rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.06em;user-select:none;list-style:none;">&#9654; Sources &amp; Reasoning</summary>
+        <div style="padding:0.45rem 0.8rem 0.65rem;font-size:0.75rem;color:var(--c-text2, #ccc);line-height:1.6;border-top:1px solid var(--c-line, #2a2a2a);">${sourcesHtml}${sourcesListHtml}</div>
+      </details>` : ''}
+    </div>`;
+  }).join('');
+}
+
+</script>
+
+<!-- Bulk Mail Modal -->
+<div id="bulkMailOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:800;align-items:center;justify-content:center;">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(820px,96vw);max-height:92vh;display:flex;flex-direction:column;padding:1.25rem;gap:0.9rem;overflow-y:auto;">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-shrink:0;">
+      <span style="font-size:0.92rem;font-weight:700;color:var(--c-text, #d4d4d4);">✉ Generate Client Emails</span>
+      <div style="display:flex;align-items:center;gap:0.4rem;">
+        <span style="font-size:0.68rem;color:var(--c-muted2, #666);text-transform:uppercase;letter-spacing:0.05em;">Mode:</span>
+        <button id="bmModeGeneral" class="toggle-btn on" onclick="setBmMode('general')" title="Cold outreach — do not reference prior meetings">General</button>
+        <button id="bmModeTargeted" class="toggle-btn" onclick="setBmMode('targeted')" title="May reference prior meetings and relationship">Targeted</button>
+        <button id="bmModeCasual" class="toggle-btn" onclick="setBmMode('casual')" title="Casual tone — greet by first name only">Casual</button>
+      </div>
+      <button onclick="closeBulkMailModal()" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:1.1rem;">✕</button>
+    </div>
+
+    <div style="display:flex;gap:0.75rem;align-items:flex-start;flex-wrap:wrap;flex-shrink:0;">
+      <div style="display:flex;flex-direction:column;gap:0.3rem;">
+        <label style="font-size:0.68rem;color:var(--c-muted2, #666);text-transform:uppercase;letter-spacing:0.05em;">Template</label>
+        <select id="bmType" onchange="onBmTypeChange()"
+                style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.5rem;font-size:0.78rem;">
+          <option value="event_invitation">Event Invitation</option>
+          <option value="follow_up">Follow-up</option>
+          <option value="introduction">Introduction</option>
+          <option value="check_in">Check-in</option>
+        </select>
+      </div>
+      <div id="bmEventFields" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+        <input id="bmEventName" placeholder="Event name" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.55rem;font-size:0.78rem;width:175px;">
+        <input id="bmEventDate" type="date" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.55rem;font-size:0.78rem;">
+        <input id="bmEventLink" placeholder="Event link (optional)" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.28rem 0.55rem;font-size:0.78rem;width:195px;">
+      </div>
+    </div>
+
+    <textarea id="bmCustom" rows="2" placeholder="Custom instructions (optional)…"
+              style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.45rem 0.7rem;font-size:0.78rem;font-family:inherit;resize:vertical;flex-shrink:0;"></textarea>
+
+    <div style="flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.4rem;">
+        <span style="font-size:0.7rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.05em;">Select Clients</span>
+        <button onclick="toggleAllBmClients(true)" style="background:none;border:none;color:var(--c-blue, #569cd6);cursor:pointer;font-size:0.72rem;">All</button>
+        <button onclick="toggleAllBmClients(false)" style="background:none;border:none;color:var(--c-blue, #569cd6);cursor:pointer;font-size:0.72rem;">None</button>
+      </div>
+      <div id="bmClientList" style="display:flex;flex-wrap:wrap;gap:0.4rem;max-height:130px;overflow-y:auto;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;padding:0.5rem;"></div>
+    </div>
+
+    <button id="bmGenBtn" onclick="generateBulkMail()"
+            style="flex-shrink:0;align-self:flex-start;background:var(--c-accenttint, #1a3a2e);border:1px solid var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0);border-radius:4px;padding:0.3rem 0.9rem;font-size:0.82rem;cursor:pointer;">
+      Generate Emails
+    </button>
+
+    <div id="bmResults" style="display:flex;flex-direction:column;gap:0.75rem;"></div>
+  </div>
+</div>
+
+</body>
+</html>

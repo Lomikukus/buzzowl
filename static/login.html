@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buzzowl — Login</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+            background: var(--c-bg, #1e1e1e);
+            color: var(--c-text, #d4d4d4);
+            min-height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+            padding: 1rem;
+        }
+
+        button { font-family: inherit; cursor: pointer; transition: background 0.15s; }
+        button:disabled { opacity: 0.35; cursor: default; }
+
+        #loginPanel {
+            background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); border-radius: 10px;
+            padding: 1.8rem; width: 380px; max-width: 95vw;
+            display: flex; flex-direction: column; gap: 0.85rem;
+        }
+        #loginPanel h2 { font-size: 1rem; color: var(--c-bluehi, #9cdcfe); margin-bottom: 0.2rem; }
+        .login-tabs { display: flex; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+        .login-tab {
+            padding: 0.35rem 1rem; font-size: 0.8rem; cursor: pointer;
+            color: var(--c-muted2, #666); background: none; border: none; font-family: inherit;
+            border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .login-tab.active { color: var(--c-bluehi, #9cdcfe); border-bottom-color: var(--c-bluehi, #9cdcfe); }
+        .login-fields { display: flex; flex-direction: column; gap: 0.7rem; }
+        .login-field { display: flex; flex-direction: column; gap: 0.3rem; }
+        .login-field label { font-size: 0.75rem; color: var(--c-muted, #888); }
+        .login-field input {
+            background: var(--c-ink, #111); border: 1px solid var(--c-line2, #333); border-radius: 5px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.83rem; padding: 0.45rem 0.65rem;
+        }
+        .login-field input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #loginSubmitBtn {
+            background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); font-weight: 600; width: 100%;
+            padding: 0.5rem; font-size: 0.85rem; margin-top: 0.2rem; border: none; border-radius: 5px;
+        }
+        #loginSubmitBtn:hover:not(:disabled) { background: var(--c-accent2, #3ab89e); }
+        #loginError { font-size: 0.78rem; color: var(--c-red, #f14c4c); min-height: 1.1rem; }
+    </style>
+</head>
+<body>
+
+    <div id="loginPanel">
+        <h2>Buzzowl</h2>
+        <div class="login-tabs">
+            <button class="login-tab active" data-tab="login">Login</button>
+            <button class="login-tab" data-tab="join">Join</button>
+            <button class="login-tab" data-tab="register">Register</button>
+        </div>
+        <div id="loginFields" class="login-fields">
+            <div class="login-field">
+                <label>Organisation slug</label>
+                <input type="text" id="loginOrg" placeholder="your-org" autocomplete="organization">
+            </div>
+            <div class="login-field">
+                <label>Username</label>
+                <input type="text" id="loginUser" placeholder="username" autocomplete="username">
+            </div>
+            <div class="login-field">
+                <label>Password</label>
+                <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+            </div>
+        </div>
+        <div id="joinFields" class="login-fields" style="display:none">
+            <div class="login-field">
+                <label>Invite key</label>
+                <input type="text" id="joinKey" placeholder="Paste key from your admin" autocomplete="off">
+            </div>
+            <div class="login-field">
+                <label>Username</label>
+                <input type="text" id="joinUser" placeholder="username" autocomplete="username">
+            </div>
+            <div class="login-field">
+                <label>Display name</label>
+                <input type="text" id="joinName" placeholder="Alice Smith" autocomplete="name">
+            </div>
+            <div class="login-field">
+                <label>Password</label>
+                <input type="password" id="joinPass" placeholder="••••••••" autocomplete="new-password">
+            </div>
+        </div>
+        <div id="registerFields" class="login-fields" style="display:none">
+            <div class="login-field">
+                <label>Registration key</label>
+                <input type="text" id="regKey" placeholder="Paste key from your operator" autocomplete="off">
+            </div>
+            <div class="login-field">
+                <label>Organisation name</label>
+                <input type="text" id="regOrgName" placeholder="Acme Corp" autocomplete="organization">
+            </div>
+            <div class="login-field">
+                <label>Username</label>
+                <input type="text" id="regUser" placeholder="username" autocomplete="username">
+            </div>
+            <div class="login-field">
+                <label>Password</label>
+                <input type="password" id="regPass" placeholder="••••••••" autocomplete="new-password">
+            </div>
+        </div>
+        <div id="loginError"></div>
+        <button id="loginSubmitBtn">Login</button>
+    </div>
+
+    <script>
+        const TOKEN_KEY = 'wk_token';
+        const getToken  = () => localStorage.getItem(TOKEN_KEY);
+        const setToken  = t  => localStorage.setItem(TOKEN_KEY, t);
+
+        const loginError     = document.getElementById('loginError');
+        const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+
+        // Already logged in with a valid token? Straight to the dashboard.
+        (async () => {
+            const token = getToken();
+            if (!token) return;
+            try {
+                const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+                if (res.ok) { location.href = '/'; }
+                else { localStorage.removeItem(TOKEN_KEY); }
+            } catch (_) { /* server unreachable — stay on the login page */ }
+        })();
+
+        document.querySelectorAll('.login-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const t = tab.dataset.tab;
+                document.getElementById('loginFields').style.display    = t === 'login'    ? '' : 'none';
+                document.getElementById('joinFields').style.display     = t === 'join'     ? '' : 'none';
+                document.getElementById('registerFields').style.display = t === 'register' ? '' : 'none';
+                loginSubmitBtn.textContent = t === 'login' ? 'Login' : t === 'join' ? 'Join workspace' : 'Create account';
+                loginError.textContent = '';
+            });
+        });
+
+        loginSubmitBtn.addEventListener('click', async () => {
+            const activeTab = document.querySelector('.login-tab.active').dataset.tab;
+            loginError.textContent = '';
+            loginSubmitBtn.disabled = true;
+            try {
+                let res;
+                if (activeTab === 'login') {
+                    res = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            org_slug: document.getElementById('loginOrg').value.trim(),
+                            username: document.getElementById('loginUser').value.trim(),
+                            password: document.getElementById('loginPass').value,
+                        }),
+                    });
+                } else if (activeTab === 'join') {
+                    res = await fetch('/api/auth/accept-invite', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            invite_key:   document.getElementById('joinKey').value.trim(),
+                            username:     document.getElementById('joinUser').value.trim(),
+                            display_name: document.getElementById('joinName').value.trim(),
+                            password:     document.getElementById('joinPass').value,
+                        }),
+                    });
+                } else {
+                    res = await fetch('/api/auth/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            registration_key: document.getElementById('regKey').value.trim(),
+                            org_name:         document.getElementById('regOrgName').value.trim(),
+                            username:         document.getElementById('regUser').value.trim(),
+                            password:         document.getElementById('regPass').value,
+                        }),
+                    });
+                }
+                const d = await res.json();
+                if (!res.ok) {
+                    loginError.textContent = d.detail || 'Authentication failed';
+                } else {
+                    setToken(d.token);
+                    location.href = '/';
+                    return;
+                }
+            } catch (_) { loginError.textContent = 'Could not reach server'; }
+            finally     { loginSubmitBtn.disabled = false; }
+        });
+
+        ['loginOrg','loginUser','loginPass','joinKey','joinUser','joinName','joinPass','regKey','regOrgName','regUser','regPass'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') loginSubmitBtn.click(); });
+        });
+    </script>
+</body>
+</html>

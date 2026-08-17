@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Match — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<script src="/static/components/mailtools.js?v=20260714a"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* Sidebar */
+.sidebar { width: 270px; flex-shrink: 0; border-right: 1px solid var(--c-linefaint, #222); display: flex; flex-direction: column; overflow: hidden; background: var(--c-bg2, #1a1a1a); }
+.sidebar-header { padding: 0.8rem 1rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.sidebar-title { font-size: 0.82rem; font-weight: 700; color: var(--c-muted, #888); text-transform: uppercase; letter-spacing: 0.06em; }
+.search-input { width: 100%; background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.3rem 0.65rem; font-size: 0.82rem; margin-top: 0.5rem; }
+.search-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+
+.client-list { flex: 1; overflow-y: auto; padding: 0.4rem 0; }
+.client-item { padding: 0.55rem 1rem; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; border-left: 3px solid transparent; transition: background 0.12s; }
+.client-item:hover { background: var(--c-surface, #252526); }
+.client-item.active { background: #1a2e2a; border-left-color: var(--c-accent, #4ec9b0); }
+.client-name { font-size: 0.82rem; color: var(--c-text, #d4d4d4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-industry { font-size: 0.68rem; color: var(--c-muted2, #666); }
+
+/* Match status chips */
+.match-chip { font-size: 0.62rem; padding: 0.12rem 0.45rem; border-radius: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0; }
+.chip-done     { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+.chip-stale    { background: #3a2a10; color: var(--c-orange, #ce9178); }
+.chip-running  { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.chip-failed   { background: var(--c-redtint, #3a1a1a); color: var(--c-redhi, #f48771); }
+.chip-none     { background: var(--c-line, #2a2a2a); color: var(--c-faint, #555); }
+
+/* Sidebar footer — batch run */
+.sidebar-footer { padding: 0.65rem 1rem; border-top: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.btn-run-all { width: 100%; background: #1a2e1a; border: 1px solid var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); border-radius: 4px; padding: 0.3rem 0.85rem; font-size: 0.78rem; cursor: pointer; transition: background 0.15s; font-weight: 600; }
+.btn-run-all:hover { background: #1f3a1f; }
+.btn-run-all:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Main panel */
+.panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.panel-header { padding: 1rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; background: var(--c-bg2, #1a1a1a); }
+.client-heading { font-size: 1.05rem; font-weight: 700; color: var(--c-text, #d4d4d4); }
+.client-meta { font-size: 0.75rem; color: var(--c-muted2, #666); margin-top: 0.2rem; }
+
+.panel-controls { padding: 0.85rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; display: flex; gap: 1.2rem; align-items: flex-end; flex-wrap: wrap; }
+.model-group { display: flex; flex-direction: column; gap: 0.3rem; }
+.model-label { font-size: 0.72rem; color: var(--c-muted, #888); text-transform: uppercase; letter-spacing: 0.05em; }
+.model-select { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.28rem 0.6rem; font-size: 0.8rem; cursor: pointer; }
+.model-select:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+
+.btn { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text2, #ccc); border-radius: 4px; padding: 0.3rem 0.85rem; font-size: 0.8rem; cursor: pointer; transition: background 0.15s; }
+.btn:hover { background: var(--c-surface2, #2d2d2d); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-teal { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.btn-teal:hover { background: var(--c-accenttint2, #1f4a38); }
+.btn-red { background: #2e1a1a; border-color: var(--c-redhi, #f48771); color: var(--c-redhi, #f48771); }
+.btn-red:hover { background: #3a2020; }
+
+.panel-body { flex: 1; overflow-y: auto; padding: 1.4rem 1.5rem; }
+
+/* Phase indicator */
+.phase-banner { background: #1a2030; border: 1px solid #2a3a50; border-radius: 6px; padding: 1rem 1.2rem; margin-bottom: 1.2rem; display: flex; align-items: flex-start; gap: 1rem; }
+.phase-icon { font-size: 1.5rem; flex-shrink: 0; }
+.phase-text { flex: 1; }
+.phase-title { font-size: 0.88rem; font-weight: 700; color: var(--c-bluehi, #9cdcfe); }
+.phase-detail { font-size: 0.78rem; color: var(--c-muted, #888); margin-top: 0.2rem; }
+.phase-tool-count { display: inline-block; background: #253040; color: var(--c-blue, #569cd6); border-radius: 10px; padding: 0.08rem 0.5rem; font-size: 0.7rem; font-weight: 700; margin-top: 0.3rem; }
+
+/* Error banner */
+.error-banner { background: #2a1515; border: 1px solid #5a2020; border-radius: 6px; padding: 1rem 1.2rem; margin-bottom: 1.2rem; }
+.error-title { font-size: 0.88rem; font-weight: 700; color: var(--c-redhi, #f48771); margin-bottom: 0.3rem; }
+.error-msg { font-size: 0.78rem; color: #c8a09a; }
+.error-actions { margin-top: 0.75rem; display: flex; gap: 0.6rem; }
+
+/* Empty state */
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--c-faint, #555); gap: 0.5rem; }
+.empty-state .icon { font-size: 2.5rem; }
+.empty-state .msg { font-size: 0.88rem; }
+
+/* Status bar */
+.status-bar { padding: 0.65rem 1.5rem; font-size: 0.75rem; color: var(--c-muted2, #666); border-top: 1px solid var(--c-linefaint, #222); background: var(--c-bg2, #1a1a1a); display: flex; gap: 1rem; align-items: center; flex-shrink: 0; }
+.pulse { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--c-blue, #569cd6); animation: pulse 1.2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+
+/* Markdown report */
+.report-content { line-height: 1.7; }
+.report-content h2 { font-size: 1rem; font-weight: 700; margin: 1.4rem 0 0.6rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+.report-content h2.fit-strong   { color: var(--c-accent, #4ec9b0); border-bottom-color: var(--c-postint, #1a3a2a); }
+.report-content h2.fit-potential { color: var(--c-orange, #ce9178); border-bottom-color: #3a2a10; }
+.report-content h2.fit-nope     { color: var(--c-muted, #888); border-bottom-color: var(--c-line, #2a2a2a); }
+.report-content h3 { font-size: 0.9rem; font-weight: 700; margin: 1rem 0 0.4rem; color: var(--c-bluehi, #9cdcfe); }
+.report-content p { margin: 0.45rem 0; color: #c8c8c8; }
+.report-content ul, .report-content ol { margin: 0.4rem 0 0.4rem 1.4rem; }
+.report-content li { margin: 0.2rem 0; color: #c8c8c8; }
+.report-content a { color: var(--c-blue, #569cd6); }
+.report-content a:hover { color: #79b8ff; }
+.report-content strong { color: var(--c-text, #d4d4d4); }
+.report-content code { background: var(--c-surface, #252526); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.85em; color: var(--c-orange, #ce9178); }
+.report-content hr { border: none; border-top: 1px solid var(--c-line, #2a2a2a); margin: 1rem 0; }
+
+/* Report toolbar */
+.report-toolbar { display: flex; gap: 0.6rem; align-items: center; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+.report-toolbar .report-label { font-size: 0.75rem; color: var(--c-muted2, #666); flex: 1; }
+
+@media print {
+  .sidebar, #main-nav, .panel-controls, .report-toolbar, .status-bar, .sidebar-footer { display: none !important; }
+  .page { display: block; height: auto; }
+  .panel-body { overflow: visible; padding: 0.5rem; }
+  .report-content h2 { color: #000 !important; border-bottom: 1px solid var(--c-text2, #ccc) !important; }
+  body { background: #fff !important; color: #000 !important; }
+  a { color: #000 !important; }
+}
+
+/* Research Evidence section */
+.findings-section { margin-top: 2rem; border-top: 1px solid var(--c-surface2, #2d2d2d); padding-top: 1.2rem; }
+.findings-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem; }
+.findings-title { font-size: 0.82rem; font-weight: 700; color: var(--c-muted, #888); text-transform: uppercase; letter-spacing: 0.06em; }
+.findings-count { font-size: 0.75rem; background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-muted, #888); border-radius: 10px; padding: 0.1rem 0.5rem; }
+.findings-list.hidden { display: none; }
+.finding-card { background: var(--c-bg2, #1a1a1a); border: 1px solid var(--c-surface2, #2d2d2d); border-radius: 6px; padding: 0.9rem 1rem; margin-bottom: 0.7rem; }
+.finding-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
+.finding-card-title { font-size: 0.82rem; font-weight: 600; color: var(--c-text, #d4d4d4); line-height: 1.4; }
+.finding-card-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+.finding-score { font-size: 0.7rem; color: var(--c-accent, #4ec9b0); background: #1a2e2a; border: 1px solid #2d4a44; border-radius: 3px; padding: 0.1rem 0.4rem; }
+.finding-source-link { display: block; font-size: 0.71rem; color: var(--c-blue, #569cd6); text-decoration: none; margin-bottom: 0.55rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.finding-source-link:hover { text-decoration: underline; }
+.finding-text { font-size: 0.79rem; color: #b0b0b0; white-space: pre-wrap; line-height: 1.6; }
+.finding-text.collapsed { max-height: 320px; overflow: hidden; position: relative; }
+.finding-text.collapsed::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(transparent, var(--c-bg2, #1a1a1a)); pointer-events: none; }
+.show-more-btn { margin-top: 0.4rem; background: none; border: none; color: var(--c-blue, #569cd6); cursor: pointer; font-size: 0.75rem; padding: 0; }
+.show-more-btn:hover { text-decoration: underline; }
+.btn-xs { font-size: 0.72rem; padding: 0.15rem 0.5rem; }
+.findings-loading { font-size: 0.8rem; color: var(--c-faint, #555); padding: 0.5rem 0; }
+/* Research briefs + OSINT section */
+.research-docs-section { margin-top: 2rem; border-top: 1px solid var(--c-surface2, #2d2d2d); padding-top: 1.2rem; }
+.research-doc-badge { font-size: 0.68rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.research-doc-badge.research { background: #1a2535; border: 1px solid #2d4a6e; color: var(--c-blue, #569cd6); }
+.research-doc-badge.osint    { background: #251a35; border: 1px solid #4a2d6e; color: var(--c-purple, #c586c0); }
+.research-doc-date { font-size: 0.70rem; color: var(--c-faint, #555); }
+.research-docs-list.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <div class="main">
+    <!-- Sidebar: client list -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <div style="display:flex;align-items:center;gap:0.4rem">
+          <div class="sidebar-title">Clients</div>
+          <select id="mSortSelect" onchange="setMSort(this.value)" title="Sort clients" style="margin-left:auto;background:var(--c-surface, #252526);border:1px solid var(--c-line2, #333);color:var(--c-text3, #aaa);border-radius:4px;padding:0.1rem 0.3rem;font-size:0.68rem;cursor:pointer">
+            <option value="name">A–Z</option><option value="recent">Latest</option>
+          </select>
+        </div>
+        <input class="search-input" id="clientSearch" placeholder="Search clients…" type="text">
+      </div>
+      <div class="client-list" id="clientList">
+        <div style="padding:1rem;color:var(--c-faint, #555);font-size:0.8rem">Loading…</div>
+      </div>
+      <div class="sidebar-footer">
+        <button class="btn-run-all" id="runAllBtn">Run All (no recent report)</button>
+      </div>
+    </div>
+
+    <!-- Main panel -->
+    <div class="panel">
+      <div class="panel-header" id="panelHeader" style="display:none">
+        <div class="client-heading" id="panelClientName">—</div>
+        <a id="panelBackToClient" href="#" style="font-size:0.72rem;color:var(--c-blue, #569cd6);text-decoration:none">← Client page</a>
+        <div class="client-meta" id="panelClientMeta"></div>
+      </div>
+
+      <div class="panel-controls" id="panelControls" style="display:none">
+        <div class="model-group">
+          <span class="model-label">Research model (Hermes)</span>
+          <select class="model-select" id="hermesModelSel"></select>
+        </div>
+        <div class="model-group">
+          <span class="model-label">Synthesis model (Pi)</span>
+          <select class="model-select" id="piModelSel"></select>
+        </div>
+        <button class="btn btn-teal" id="runMatchBtn">Run Match Analysis</button>
+        <button class="btn" id="exportBtn" style="margin-left:auto">Export PDF</button>
+        <button class="btn" id="mailBtn" style="display:none" onclick="window.openMailModal()">✉ Mail</button>
+      </div>
+
+      <div class="panel-body" id="panelBody">
+        <div class="empty-state">
+          <div class="icon">🎯</div>
+          <div class="msg">Select a client to view their match report</div>
+          <div style="font-size:0.75rem;color:var(--c-faint2, #444);margin-top:0.3rem">Reports are generated automatically after Hermes researches a client</div>
+        </div>
+      </div>
+
+      <div class="status-bar" id="statusBar" style="display:none">
+        <span class="pulse" id="statusPulse" style="display:none"></span>
+        <span id="statusText"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(async () => {
+  initNavbar({ active: 'match' });
+
+  const token = localStorage.getItem('wk_token');
+  const H = token
+    ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+    : { 'Content-Type': 'application/json' };
+
+  let allClients = [];
+  let allProducts = [];
+  let selectedClient = null;
+  let pollTimer = null;
+  let cloudModels = [];
+
+  // ── load products (for prompt button matching) ─────────────────────────────
+  async function _loadProducts() {
+    try {
+      const res = await fetch('/api/products', { headers: H });
+      if (res.ok) { const d = await res.json(); allProducts = d.products || []; }
+    } catch (_) {}
+  }
+
+  // ── load cloud models ──────────────────────────────────────────────────────
+  async function loadModels() {
+    try {
+      const res = await fetch('/api/config/models', { headers: H });
+      if (res.ok) {
+        const d = await res.json();
+        cloudModels = d.cloud_models || [];
+      }
+    } catch (_) {}
+
+    const defaults = [
+      { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash (fast)' },
+      { id: 'deepseek/deepseek-v4-pro',   label: 'DeepSeek V4 Pro (best reasoning)' },
+    ];
+    const models = cloudModels.length ? cloudModels : defaults;
+
+    ['hermesModelSel', 'piModelSel'].forEach((id, idx) => {
+      const sel = document.getElementById(id);
+      sel.innerHTML = models.map(m =>
+        `<option value="${m.id}">${m.label || m.id}</option>`
+      ).join('');
+      const defaultId = idx === 0 ? 'deepseek/deepseek-v4-flash' : 'deepseek/deepseek-v4-pro';
+      const opt = [...sel.options].find(o => o.value === defaultId);
+      if (opt) opt.selected = true;
+    });
+  }
+
+  // ── load clients ───────────────────────────────────────────────────────────
+  async function loadClients() {
+    try {
+      const res = await fetch('/api/clients', { headers: H });
+      if (!res.ok) return;
+      const d = await res.json();
+      allClients = d.clients || d || [];
+      renderClientList(allClients);
+    } catch (e) {
+      console.error('loadClients', e);
+    }
+  }
+
+  function matchChip(client) {
+    const status = client.match_status || (client.metadata && client.metadata.match_status);
+    const updatedAt = client.match_updated_at || (client.metadata && client.metadata.match_updated_at);
+
+    if (!status) return `<span class="match-chip chip-none">—</span>`;
+    if (status === 'researching' || status === 'running') return `<span class="match-chip chip-running">⏳</span>`;
+    if (status === 'failed') return `<span class="match-chip chip-failed">!</span>`;
+
+    if (status === 'done' && updatedAt) {
+      const age = Date.now() - new Date(updatedAt).getTime();
+      if (age / 86400000 > 7) return `<span class="match-chip chip-stale">stale</span>`;
+      return `<span class="match-chip chip-done">✓</span>`;
+    }
+    if (status === 'done') return `<span class="match-chip chip-done">✓</span>`;
+    return `<span class="match-chip chip-none">—</span>`;
+  }
+
+  let _mSort = localStorage.getItem('wk_clients_sort') || 'name';
+  window.setMSort = function(mode) { _mSort = mode; try { localStorage.setItem('wk_clients_sort', mode); } catch (_) {} renderClientList(allClients); };
+  function _mSortClients(arr) {
+    const copy = arr.slice();
+    if (_mSort === 'recent') copy.sort((a, b) => (Date.parse(b.last_activity || '') || 0) - (Date.parse(a.last_activity || '') || 0));
+    else copy.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+    return copy;
+  }
+
+  function renderClientList(clients) {
+    const ul = document.getElementById('clientList');
+    const sel = document.getElementById('mSortSelect'); if (sel) sel.value = _mSort;
+    if (!clients.length) {
+      ul.innerHTML = '<div style="padding:1rem;color:var(--c-faint, #555);font-size:0.8rem">No clients found</div>';
+      return;
+    }
+    ul.innerHTML = _mSortClients(clients).map(c => `
+      <div class="client-item${selectedClient && selectedClient.name === c.name ? ' active' : ''}"
+           data-name="${escHtml(c.name)}">
+        <div>
+          <div class="client-name">${escHtml(c.name)}</div>
+          ${c.industry ? `<div class="client-industry">${escHtml(c.industry)}</div>` : ''}
+        </div>
+        ${matchChip(c)}
+      </div>
+    `).join('');
+
+    ul.querySelectorAll('.client-item').forEach(el => {
+      el.addEventListener('click', () => selectClient(el.dataset.name));
+    });
+  }
+
+  // ── search ─────────────────────────────────────────────────────────────────
+  document.getElementById('clientSearch').addEventListener('input', e => {
+    const q = e.target.value.toLowerCase();
+    renderClientList(allClients.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      (c.industry || '').toLowerCase().includes(q)
+    ));
+  });
+
+  // ── select client ──────────────────────────────────────────────────────────
+  async function selectClient(name) {
+    selectedClient = allClients.find(c => c.name === name) || { name };
+    clearPoll();
+    renderClientList(allClients);
+
+    document.getElementById('panelHeader').style.display = '';
+    document.getElementById('panelControls').style.display = '';
+    document.getElementById('mailBtn').style.display = '';
+    document.getElementById('panelClientName').textContent = name;
+    document.getElementById('panelBackToClient').href = `/client/${encodeURIComponent(name)}`;
+    document.getElementById('panelClientMeta').textContent =
+      [selectedClient.industry, selectedClient.country].filter(Boolean).join(' · ') || '';
+    try { localStorage.setItem('wk_last_client', name); } catch (_) {}
+
+    await Promise.all([loadMatchState(name), _loadProducts()]);
+  }
+
+  // ── load match state via debug endpoint ────────────────────────────────────
+  async function loadMatchState(clientName) {
+    showStatus('Loading…', false);
+    try {
+      const res = await fetch(`/api/match/debug/${encodeURIComponent(clientName)}`, { headers: H });
+      if (!res.ok) throw new Error(res.statusText);
+      const d = await res.json();
+      handleDebugState(d, clientName);
+    } catch (e) {
+      showStatus('', false);
+      renderNoReport(clientName);
+    }
+  }
+
+  function handleDebugState(state, clientName) {
+    const status = state.match_status;
+
+    // Update sidebar chip from live debug data
+    const c = allClients.find(x => x.name === clientName);
+    if (c) {
+      if (!c.metadata) c.metadata = {};
+      c.metadata.match_status = status;
+      c.match_status = status;
+      renderClientList(allClients);
+    }
+
+    if (status === 'researching' || status === 'running') {
+      showStatus('Match analysis in progress…', true);
+      renderRunning(state);
+      // Only start the interval if one isn't already running — prevents exponential growth
+      // where each poll callback would create another interval on top of the existing one.
+      if (!pollTimer) {
+        pollTimer = setInterval(() => loadMatchState(clientName), 5000);
+      }
+      return;
+    }
+
+    // Terminal state — always stop polling
+    clearPoll();
+
+    if (status === 'failed') {
+      showStatus('', false);
+      renderFailed(state.match_error, clientName);
+      return;
+    }
+
+    if (status === 'done') {
+      showStatus(`Report ready`, false);
+      loadReport(clientName);
+      return;
+    }
+
+    showStatus('', false);
+    renderNoReport(clientName);
+  }
+
+  // ── render states ──────────────────────────────────────────────────────────
+  function renderRunning(state) {
+    const runs = state.agent_runs || [];
+    const hermes = state.hermes_live;
+
+    // Determine current phase
+    const pprRun = runs.find(r => r.agent_type === 'pain_point_research' && r.status === 'running');
+    const msRun  = runs.find(r => r.agent_type === 'match_synthesis'     && r.status === 'running');
+
+    let phaseTitle, phaseDetail, toolBadge = '';
+
+    if (msRun) {
+      phaseTitle = 'Pi is synthesizing…';
+      phaseDetail = 'Building product-fit report from Hermes research findings.';
+    } else if (pprRun) {
+      phaseTitle = 'Hermes is researching…';
+      const liveCount = hermes && hermes.reachable ? hermes.tool_calls_count : null;
+      const dbCount   = pprRun.tool_calls_count;
+      const count     = liveCount ?? dbCount;
+      phaseDetail = hermes && !hermes.reachable
+        ? 'Hermes unreachable — watchdog monitoring for timeout.'
+        : 'Researching pain points, buying signals, and strategic initiatives.';
+      if (count != null) {
+        toolBadge = `<span class="phase-tool-count">${count} tool calls made</span>`;
+      }
+    } else {
+      phaseTitle = 'Starting…';
+      phaseDetail = 'Sending task to Hermes research agent.';
+    }
+
+    document.getElementById('panelBody').innerHTML = `
+      <div class="phase-banner">
+        <div class="phase-icon">⚙️</div>
+        <div class="phase-text">
+          <div class="phase-title">${escHtml(phaseTitle)}</div>
+          <div class="phase-detail">${escHtml(phaseDetail)}</div>
+          ${toolBadge}
+        </div>
+      </div>
+      <div style="color:var(--c-faint, #555);font-size:0.78rem">
+        Polling every 5 seconds. The page will update automatically when the report is ready.
+      </div>
+    `;
+  }
+
+  function renderFailed(errorMsg, clientName) {
+    const msg = errorMsg || 'The match run failed or timed out.';
+    document.getElementById('panelBody').innerHTML = `
+      <div class="error-banner">
+        <div class="error-title">Match run failed</div>
+        <div class="error-msg">${escHtml(msg)}</div>
+        <div class="error-actions">
+          <button class="btn btn-teal" id="retryBtn">Retry</button>
+          <button class="btn" id="debugBtn">View Debug Info</button>
+        </div>
+      </div>
+      <div class="empty-state" style="height:auto;padding-top:2rem">
+        <div class="msg">Click <strong>Retry</strong> to start a fresh match run.</div>
+      </div>
+    `;
+    document.getElementById('retryBtn').addEventListener('click', () => resetAndRetry(clientName));
+    document.getElementById('debugBtn').addEventListener('click', () => openDebug(clientName));
+  }
+
+  function renderNoReport(clientName) {
+    document.getElementById('panelBody').innerHTML = `
+      <div class="empty-state">
+        <div class="icon">📋</div>
+        <div class="msg">No match report yet for <strong>${escHtml(clientName)}</strong></div>
+        <div style="font-size:0.75rem;color:var(--c-faint2, #444);margin-top:0.4rem">
+          Run a match analysis, or it will start automatically after Hermes researches this client.
+        </div>
+      </div>
+    `;
+  }
+
+  async function loadReport(clientName) {
+    try {
+      const res = await fetch(`/api/match/reports/${encodeURIComponent(clientName)}`, { headers: H });
+      if (!res.ok) { renderNoReport(clientName); return; }
+      const d = await res.json();
+      renderReport(d, clientName);
+    } catch (e) {
+      renderNoReport(clientName);
+    }
+  }
+
+  function renderReport(data, clientName) {
+    const html = marked.parse(data.content || '*(empty report)*');
+    const colorised = html
+      .replace(/<h2>([^<]*Strong Fit[^<]*)<\/h2>/gi,   '<h2 class="fit-strong">$1</h2>')
+      .replace(/<h2>([^<]*Potential Fit[^<]*)<\/h2>/gi, '<h2 class="fit-potential">$1</h2>')
+      .replace(/<h2>([^<]*Not a Fit[^<]*)<\/h2>/gi,    '<h2 class="fit-nope">$1</h2>');
+
+    const created = data.created_at ? `Generated ${formatDate(data.created_at)}` : '';
+
+    document.getElementById('panelBody').innerHTML = `
+      <div class="report-toolbar">
+        <span class="report-label">${escHtml(created)}</span>
+        <button class="btn" id="debugBtn2">Debug</button>
+        <button class="btn btn-teal" id="reRunBtn">Re-run Match</button>
+      </div>
+      <div class="report-content">${colorised}</div>
+    `;
+
+    document.getElementById('reRunBtn').addEventListener('click', () => triggerMatch(clientName));
+    document.getElementById('debugBtn2').addEventListener('click', () => openDebug(clientName));
+
+    _injectMatchRatings(data.doc_id, data.match_feedback || {});
+
+    const re = document.createElement('div');
+    re.id = 'researchDocsSection';
+    document.getElementById('panelBody').appendChild(re);
+
+    const fe = document.createElement('div');
+    fe.id = 'findingsSection';
+    document.getElementById('panelBody').appendChild(fe);
+
+    const se = document.createElement('div');
+    se.id = 'savedPromptsSection';
+    document.getElementById('panelBody').appendChild(se);
+
+    loadResearchDocs(clientName);
+    loadFindings(clientName);
+    _injectPromptButtons(clientName);
+    _loadSavedPrompts(clientName);
+  }
+
+  // ── thesis evaluation: per-product votes + traceability rating ─────────────
+  function _injectMatchRatings(docId, feedback) {
+    if (!docId) return;
+    document.querySelectorAll('.report-content h2').forEach(h2 => {
+      if (!/fit/i.test(h2.textContent)) return;   // only the per-product fit sections
+      const section = h2.textContent.trim().slice(0, 120);
+      const prev = (feedback || {})[section];
+      const wrap = document.createElement('span');
+      wrap.style.cssText = 'float:right;display:inline-flex;gap:0.3rem;';
+      ['up', 'down'].forEach(v => {
+        const b = document.createElement('button');
+        b.textContent = v === 'up' ? '👍' : '👎';
+        b.title = 'Was this recommendation useful? (thesis evaluation)';
+        b.style.cssText = `background:none;border:1px solid var(--c-line, #2a2a2a);border-radius:4px;cursor:pointer;
+                           padding:0.05rem 0.3rem;font-size:0.8rem;opacity:${prev && prev.vote === v ? '1' : '0.4'};`;
+        b.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const r = await fetch(`/api/match/reports/${docId}/feedback`, {
+            method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ section, vote: v }),
+          });
+          if (r.ok) { [...wrap.children].forEach(c => c.style.opacity = '0.4'); b.style.opacity = '1'; }
+        });
+        wrap.appendChild(b);
+      });
+      h2.appendChild(wrap);
+    });
+
+    const tr = document.createElement('div');
+    tr.style.cssText = 'margin-top:1.2rem;padding:0.7rem 0.9rem;background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);border-radius:6px;display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap;';
+    tr.innerHTML = '<span style="font-size:0.78rem;color:var(--c-muted, #888);">How clear is the reasoning behind these recommendations?</span>';
+    for (let n = 1; n <= 5; n++) {
+      const b = document.createElement('button');
+      b.textContent = n;
+      b.style.cssText = 'background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-muted, #888);border-radius:4px;width:1.8rem;height:1.8rem;cursor:pointer;font-size:0.8rem;';
+      b.addEventListener('click', async () => {
+        const r = await fetch(`/api/match/reports/${docId}/feedback`, {
+          method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ traceability: n }),
+        });
+        if (r.ok) tr.innerHTML = '<span style="font-size:0.78rem;color:var(--c-accent, #4ec9b0);">✓ Traceability rating recorded — thank you.</span>';
+      });
+      tr.appendChild(b);
+    }
+    document.querySelector('.report-content').appendChild(tr);
+  }
+
+  // ── run match ──────────────────────────────────────────────────────────────
+  document.getElementById('runMatchBtn').addEventListener('click', () => {
+    if (selectedClient) triggerMatch(selectedClient.name);
+  });
+
+  async function triggerMatch(clientName) {
+    const hermes_model = document.getElementById('hermesModelSel').value;
+    const pi_model     = document.getElementById('piModelSel').value;
+    const btn = document.getElementById('runMatchBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    clearPoll();
+
+    try {
+      const res = await fetch('/api/match/run', {
+        method: 'POST',
+        headers: H,
+        body: JSON.stringify({
+          client_name:  clientName,
+          hermes_brain: 'openrouter',
+          hermes_model,
+          pi_brain:     'openrouter',
+          pi_model,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.detail || 'Failed to start match analysis');
+        if (btn) { btn.disabled = false; btn.textContent = 'Run Match Analysis'; }
+        return;
+      }
+      showStatus('Match analysis started…', true);
+      // Optimistic state — render running immediately
+      renderRunning({ agent_runs: [], hermes_live: null });
+      const c = allClients.find(x => x.name === clientName);
+      if (c) {
+        if (!c.metadata) c.metadata = {};
+        c.metadata.match_status = 'researching';
+        c.match_status = 'researching';
+        renderClientList(allClients);
+      }
+      pollTimer = setInterval(() => loadMatchState(clientName), 5000);
+    } catch (e) {
+      alert('Network error: ' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = 'Run Match Analysis'; }
+    }
+  }
+
+  // ── reset + retry ──────────────────────────────────────────────────────────
+  async function resetAndRetry(clientName) {
+    try {
+      await fetch(`/api/match/reset/${encodeURIComponent(clientName)}`, { method: 'POST', headers: H });
+    } catch (_) {}
+    // Update local state
+    const c = allClients.find(x => x.name === clientName);
+    if (c) {
+      if (c.metadata) { delete c.metadata.match_status; delete c.metadata.match_error; }
+      delete c.match_status;
+      renderClientList(allClients);
+    }
+    await triggerMatch(clientName);
+  }
+
+  // ── debug ──────────────────────────────────────────────────────────────────
+  async function openDebug(clientName) {
+    try {
+      const res = await fetch(`/api/match/debug/${encodeURIComponent(clientName)}`, { headers: H });
+      const d = await res.json();
+      const txt = JSON.stringify(d, null, 2);
+      const win = window.open('', '_blank', 'width=700,height=500');
+      win.document.write(`<pre style="background:var(--c-bg, #1e1e1e);color:var(--c-text, #d4d4d4);padding:1rem;font-family:var(--c-font-mono, monospace);font-size:12px">${txt}</pre>`);
+    } catch (e) {
+      alert('Debug fetch failed: ' + e.message);
+    }
+  }
+
+  // ── run all ────────────────────────────────────────────────────────────────
+  document.getElementById('runAllBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('runAllBtn');
+    btn.disabled = true;
+
+    const hermes_model = document.getElementById('hermesModelSel')?.value || 'deepseek/deepseek-v4-flash';
+    const pi_model     = document.getElementById('piModelSel')?.value     || 'deepseek/deepseek-v4-pro';
+
+    // Clients without a recent report (no done status or stale)
+    const targets = allClients.filter(c => {
+      const status = c.match_status || (c.metadata && c.metadata.match_status);
+      if (status === 'researching' || status === 'running') return false; // already running
+      if (status === 'done') {
+        const updatedAt = c.match_updated_at || (c.metadata && c.metadata.match_updated_at);
+        if (updatedAt && (Date.now() - new Date(updatedAt).getTime()) < 7 * 86400000) return false;
+      }
+      return true;
+    });
+
+    if (!targets.length) {
+      alert('All clients already have recent reports or are currently running.');
+      btn.disabled = false;
+      return;
+    }
+
+    btn.textContent = `Running ${targets.length} clients…`;
+
+    // Fire all in parallel (independent)
+    await Promise.allSettled(targets.map(async (c) => {
+      try {
+        await fetch('/api/match/run', {
+          method: 'POST',
+          headers: H,
+          body: JSON.stringify({
+            client_name:  c.name,
+            hermes_brain: 'openrouter',
+            hermes_model,
+            pi_brain:     'openrouter',
+            pi_model,
+          }),
+        });
+        if (!c.metadata) c.metadata = {};
+        c.metadata.match_status = 'researching';
+        c.match_status = 'researching';
+      } catch (_) {}
+    }));
+
+    renderClientList(allClients);
+    btn.textContent = `${targets.length} runs started`;
+    setTimeout(() => { btn.textContent = 'Run All (no recent report)'; btn.disabled = false; }, 3000);
+
+    // If a client is selected and was in targets, start polling
+    if (selectedClient && targets.find(c => c.name === selectedClient.name)) {
+      clearPoll();
+      renderRunning({ agent_runs: [], hermes_live: null });
+      showStatus('Match analysis started…', true);
+      pollTimer = setInterval(() => loadMatchState(selectedClient.name), 5000);
+    }
+  });
+
+  // ── export ─────────────────────────────────────────────────────────────────
+  document.getElementById('exportBtn').addEventListener('click', () => window.print());
+
+  // ── helpers ────────────────────────────────────────────────────────────────
+  function clearPoll() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function showStatus(msg, pulse) {
+    const bar = document.getElementById('statusBar');
+    document.getElementById('statusText').textContent = msg;
+    document.getElementById('statusPulse').style.display = pulse ? '' : 'none';
+    bar.style.display = msg ? '' : 'none';
+    const btn = document.getElementById('runMatchBtn');
+    if (btn && !pulse) { btn.disabled = false; btn.textContent = 'Run Match Analysis'; }
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function escHtml(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ── global onclick handlers (must be on window — IIFE scope is invisible to onclick) ──
+  window.toggleFinding = function(btn) {
+    const textEl = btn.previousElementSibling;
+    const nowCollapsed = textEl.classList.toggle('collapsed');
+    btn.textContent = nowCollapsed ? 'Show more' : 'Show less';
+  };
+
+  window.toggleFindingsSection = function(btn) {
+    const list = document.getElementById('findingsList');
+    const nowHidden = list.classList.toggle('hidden');
+    btn.textContent = nowHidden ? 'Expand' : 'Collapse';
+  };
+
+  window.toggleResearchDocsSection = function(btn) {
+    const list = document.getElementById('researchDocsList');
+    const nowHidden = list.classList.toggle('hidden');
+    btn.textContent = nowHidden ? 'Expand' : 'Collapse';
+  };
+
+  // ── presentation prompt modal (window-scoped — referenced from inline HTML) ─
+  let _ppProduct = null;
+  let _ppClientName = null;
+
+  window.openPromptModal = function(product, clientName) {
+    _ppProduct = product;
+    _ppClientName = clientName;
+    document.getElementById('ppTitle').textContent = `Presentation prompt — ${product.name} × ${clientName}`;
+    document.getElementById('ppContent').value = '';
+    document.getElementById('ppMeta').textContent = '';
+    document.getElementById('ppCopyBtn').style.display = 'none';
+    document.getElementById('ppGenerateBtn').disabled = false;
+    document.getElementById('ppGenerateBtn').textContent = 'Generate';
+    document.getElementById('ppOverlay').style.display = 'flex';
+    // Pre-load existing prompt if available
+    fetch(`/api/clients/${encodeURIComponent(clientName)}/presentation-prompts`, { headers: H })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        const existing = (d.prompts || []).find(p => p.product_id === product.id);
+        if (existing) {
+          document.getElementById('ppContent').value = existing.content;
+          document.getElementById('ppMeta').textContent = `Last generated: ${existing.generated_at.slice(0,10)}`;
+          document.getElementById('ppCopyBtn').style.display = '';
+          document.getElementById('ppGenerateBtn').textContent = 'Regenerate';
+        }
+      }).catch(() => {});
+  };
+
+  window._viewSavedPrompt = function(btn) {
+    const pid = parseInt(btn.dataset.pid, 10);
+    const pname = btn.dataset.pname;
+    const content = btn.dataset.content;
+    const product = allProducts.find(p => p.id === pid) || { id: pid, name: pname };
+    window.openPromptModal(product, selectedClient ? selectedClient.name : '');
+    // Immediately fill in the saved content (bypass async load)
+    setTimeout(() => {
+      document.getElementById('ppContent').value = content;
+      document.getElementById('ppCopyBtn').style.display = '';
+    }, 50);
+  };
+
+  window.closePpModal = function() {
+    document.getElementById('ppOverlay').style.display = 'none';
+    _ppProduct = null; _ppClientName = null;
+  };
+
+  window.generatePpPrompt = async function() {
+    if (!_ppProduct || !_ppClientName) return;
+    const btn = document.getElementById('ppGenerateBtn');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    document.getElementById('ppMeta').textContent = 'Assembling context and synthesizing fit rationale…';
+    document.getElementById('ppCopyBtn').style.display = 'none';
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(_ppClientName)}/presentation-prompt`, {
+        method: 'POST',
+        headers: { ...H, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: _ppProduct.id }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || 'Generation failed');
+      document.getElementById('ppContent').value = d.prompt;
+      document.getElementById('ppMeta').textContent = `Generated ${d.generated_at} — ${d.product_name}`;
+      document.getElementById('ppCopyBtn').style.display = '';
+      // Refresh saved prompts section
+      _loadSavedPrompts(_ppClientName);
+    } catch (e) {
+      document.getElementById('ppMeta').textContent = `Error: ${e.message}`;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Regenerate';
+    }
+  };
+
+  window.copyPpPrompt = function() {
+    const text = document.getElementById('ppContent').value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('ppCopyBtn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy to Clipboard'; }, 2000);
+    });
+  };
+
+  window.downloadFinding = async function(docId, title) {
+    try {
+      const res = await fetch(`/api/documents/${encodeURIComponent(docId)}/download`, { headers: H });
+      if (!res.ok) { alert('Download failed'); return; }
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 80) + '.md';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Download error: ' + e.message);
+    }
+  };
+
+  const COLLAPSE_THRESHOLD = 800;
+
+  // ── research briefs + OSINT ───────────────────────────────────────────────
+  async function loadResearchDocs(clientName) {
+    const section = document.getElementById('researchDocsSection');
+    if (!section) return;
+    section.innerHTML = '<div class="findings-loading">Loading research documents…</div>';
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientName)}/research-docs`, { headers: H });
+      if (!res.ok) { section.innerHTML = ''; return; }
+      const data = await res.json();
+      if (!data.docs || !data.docs.length) { section.innerHTML = ''; return; }
+      renderResearchDocs(data.docs, section);
+    } catch (e) {
+      section.innerHTML = '';
+    }
+  }
+
+  function renderResearchDocs(docs, section) {
+    const cards = docs.map(d => {
+      const long = (d.content || '').length > COLLAPSE_THRESHOLD;
+      const date = d.created_at ? formatDate(d.created_at) : '';
+      return `
+        <div class="finding-card">
+          <div class="finding-card-header">
+            <div class="finding-card-title">${escHtml(d.title)}</div>
+            <div class="finding-card-actions">
+              <span class="research-doc-badge ${escHtml(d.type)}">${escHtml(d.type)}</span>
+              ${date ? `<span class="research-doc-date">${escHtml(date)}</span>` : ''}
+              <button class="btn btn-xs" data-doc-id="${escHtml(d.doc_id)}" data-title="${escHtml(d.title)}" onclick="downloadFinding(this.dataset.docId, this.dataset.title)">&#8595; .md</button>
+            </div>
+          </div>
+          <div>
+            <div class="finding-text${long ? ' collapsed' : ''}">${escHtml(d.content || '')}</div>
+            ${long ? `<button class="show-more-btn" onclick="toggleFinding(this)">Show more</button>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    section.innerHTML = `
+      <div class="research-docs-section">
+        <div class="findings-header">
+          <span class="findings-title">Research Briefs &amp; OSINT</span>
+          <span class="findings-count">${docs.length} document${docs.length !== 1 ? 's' : ''}</span>
+          <button class="btn btn-xs" onclick="toggleResearchDocsSection(this)">Collapse</button>
+        </div>
+        <div class="research-docs-list" id="researchDocsList">${cards}</div>
+      </div>`;
+  }
+
+  // ── research evidence (findings) ──────────────────────────────────────────
+  async function loadFindings(clientName) {
+    const section = document.getElementById('findingsSection');
+    if (!section) return;
+    section.innerHTML = '<div class="findings-loading">Loading research evidence…</div>';
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientName)}/findings`, { headers: H });
+      if (!res.ok) { section.innerHTML = ''; return; }
+      const data = await res.json();
+      if (!data.findings || !data.findings.length) { section.innerHTML = ''; return; }
+      renderFindings(data.findings, section);
+    } catch (e) {
+      section.innerHTML = '';
+    }
+  }
+
+  function renderFindings(findings, section) {
+    const cards = findings.map(f => {
+      const url   = (f.metadata || {}).source_url || '';
+      const score = (f.metadata || {}).relevance_score;
+      const long  = (f.content || '').length > COLLAPSE_THRESHOLD;
+      return `
+        <div class="finding-card">
+          <div class="finding-card-header">
+            <div class="finding-card-title">${escHtml(f.title)}</div>
+            <div class="finding-card-actions">
+              ${score != null ? `<span class="finding-score">${score}/5</span>` : ''}
+              <button class="btn btn-xs" data-doc-id="${escHtml(f.doc_id)}" data-title="${escHtml(f.title)}" onclick="downloadFinding(this.dataset.docId, this.dataset.title)">&#8595; .md</button>
+            </div>
+          </div>
+          ${url ? `<a class="finding-source-link" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${escHtml(url)}</a>` : ''}
+          <div>
+            <div class="finding-text${long ? ' collapsed' : ''}">${escHtml(f.content || '')}</div>
+            ${long ? `<button class="show-more-btn" onclick="toggleFinding(this)">Show more</button>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    section.innerHTML = `
+      <div class="findings-section">
+        <div class="findings-header">
+          <span class="findings-title">Research Evidence</span>
+          <span class="findings-count">${findings.length} finding${findings.length !== 1 ? 's' : ''}</span>
+          <button class="btn btn-xs" onclick="toggleFindingsSection(this)">Collapse</button>
+        </div>
+        <div class="findings-list" id="findingsList">${cards}</div>
+      </div>`;
+  }
+
+  // ── presentation prompt: inject buttons into rendered match report ─────────
+  function _injectPromptButtons(clientName) {
+    if (!allProducts.length) return;
+    const reportEl = document.querySelector('.report-content');
+    if (!reportEl) return;
+    reportEl.querySelectorAll('h2.fit-strong, h2.fit-potential').forEach(h2 => {
+      const rawText = h2.textContent.trim();
+      // Heading format: "✓ Strong Fit [9/10]: Product Name"
+      // Product name is everything after "]: " — if no "]: " it's a category header, skip.
+      const scoreColonIdx = rawText.indexOf(']: ');
+      if (scoreColonIdx < 0) return;
+      const productName = rawText.slice(scoreColonIdx + 3).trim();
+      if (!productName) return;
+      const nameLow = productName.toLowerCase();
+      const product = allProducts.find(p => p.name.toLowerCase() === nameLow)
+                   || allProducts.find(p => nameLow.includes(p.name.toLowerCase()))
+                   || allProducts.find(p => p.name.toLowerCase().includes(nameLow));
+      if (!product) return;
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-xs';
+      btn.textContent = 'Generate prompt';
+      btn.style.cssText = 'margin-left:0.65rem;font-size:0.63rem;padding:0.1rem 0.45rem;vertical-align:middle;opacity:0.8';
+      btn.addEventListener('click', () => window.openPromptModal(product, clientName));
+      h2.appendChild(btn);
+    });
+  }
+
+  // ── presentation prompt: load saved prompts for this client ────────────────
+  async function _loadSavedPrompts(clientName) {
+    const section = document.getElementById('savedPromptsSection');
+    if (!section) return;
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientName)}/presentation-prompts`, { headers: H });
+      if (!res.ok) return;
+      const d = await res.json();
+      if (!d.prompts || !d.prompts.length) return;
+      const rows = d.prompts.map(p => `
+        <div style="display:flex;align-items:center;gap:0.6rem;padding:0.45rem 0;border-bottom:1px solid var(--c-linefaint, #222)">
+          <span style="font-size:0.8rem;color:var(--c-text3, #bbb);flex:1">${escHtml(p.product_name)}</span>
+          <span style="font-size:0.7rem;color:var(--c-faint, #555)">${escHtml(p.generated_at.slice(0,10))}</span>
+          <button class="btn btn-xs" data-pid="${escHtml(String(p.product_id))}" data-pname="${escHtml(p.product_name)}" data-content="${escHtml(p.content)}" onclick="window._viewSavedPrompt(this)">View</button>
+          <button class="btn btn-xs" data-content="${escHtml(p.content)}" onclick="navigator.clipboard.writeText(this.dataset.content).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button>
+        </div>`).join('');
+      section.innerHTML = `
+        <div style="margin-top:2rem;border-top:1px solid var(--c-surface2, #2d2d2d);padding-top:1.2rem">
+          <div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.09em;color:var(--c-faint, #555);margin-bottom:0.6rem">Saved Presentation Prompts</div>
+          ${rows}
+        </div>`;
+    } catch (_) {}
+  }
+
+  // ── source list renderer (mail sources section) ───────────────────────────
+  function _renderSourcesList(list, clientName) {
+    if (!list || !list.length) return '';
+    const colors = { pain_point:'#f14c4c', risk:'#ce9178', opportunity:'#4ec9b0', news:'#569cd6', finding:'#569cd6' };
+    const clientUrl = `/client/${encodeURIComponent(clientName)}#findings`;
+    const items = list.map(s => {
+      const color = colors[s.type] || '#888';
+      const badge = `<span style="font-size:0.62rem;padding:0.1rem 0.35rem;border-radius:3px;background:${color}22;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${s.type.replace(/_/g,' ')}</span>`;
+      const title = `<a href="${clientUrl}" target="_blank" rel="noopener" style="color:var(--c-text2, #ccc);text-decoration:none;font-size:0.74rem;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${s.title}</a>`;
+      const ext = s.source_url ? ` <a href="${s.source_url}" target="_blank" rel="noopener" title="Open source article" style="color:var(--c-blue, #569cd6);font-size:0.68rem;text-decoration:none;">↗</a>` : '';
+      return `<div style="display:flex;align-items:center;gap:0.4rem;padding:0.2rem 0;">${badge} ${title}${ext}</div>`;
+    }).join('');
+    return `<div style="margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--c-line, #2a2a2a);"><div style="font-size:0.65rem;color:var(--c-muted2, #666);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.35rem;">Source Documents</div>${items}</div>`;
+  }
+
+  // ── mail template modal ────────────────────────────────────────────────────
+  window.openMailModal = function() {
+    if (!selectedClient) return;
+    window._mailGeneral = false;  // default: product-linked (deep-link sets true after)
+    document.getElementById('mailResult').value = '';
+    document.getElementById('mailMeta').textContent = '';
+    document.getElementById('mailContacts').innerHTML = '';
+    document.getElementById('mailCopyBtn').style.display = 'none';
+    document.getElementById('mailEmlBtn').style.display = 'none';
+    document.getElementById('mailSources').style.display = 'none';
+    document.getElementById('mailSourcesContent').innerHTML = '';
+    document.getElementById('mailGenBtn').textContent = 'Generate';
+    document.getElementById('mailGenBtn').disabled = false;
+    document.getElementById('mailType').value = 'event_invitation';
+    window.onMailTypeChange();
+    document.getElementById('mailOverlay').style.display = 'flex';
+  };
+
+  window.closeMailModal = function() {
+    document.getElementById('mailOverlay').style.display = 'none';
+  };
+
+  window.onMailTypeChange = function() {
+    const t = document.getElementById('mailType').value;
+    document.getElementById('mailEventFields').style.display = (t === 'event_invitation') ? 'flex' : 'none';
+  };
+
+  window.generateMail = async function() {
+    if (!selectedClient) return;
+    const btn = document.getElementById('mailGenBtn');
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    document.getElementById('mailMeta').textContent = 'Assembling client context and calling LLM…';
+    document.getElementById('mailCopyBtn').style.display = 'none';
+
+    const templateType = document.getElementById('mailType').value;
+    const payload = { template_type: templateType };
+    const evName = document.getElementById('mailEventName').value.trim();
+    const evDate = document.getElementById('mailEventDate').value;
+    const evLink = document.getElementById('mailEventLink').value.trim();
+    const custom = document.getElementById('mailCustom').value.trim();
+    if (evName) payload.event_name = evName;
+    if (evDate) payload.event_date = evDate;
+    if (evLink) payload.event_link = evLink;
+    if (custom) payload.custom_instructions = custom;
+    // Attach first focus/favorite product — UNLESS this is a general (non-product)
+    // intro email, where the rep wants a product-agnostic message.
+    const focusProd = allProducts.find(p => p.is_favorite || p.priority > 0);
+    if (focusProd && !window._mailGeneral) payload.product_id = focusProd.id;
+
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(selectedClient.name)}/mail-template`, {
+        method: 'POST',
+        headers: { ...H, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || 'Generation failed');
+      document.getElementById('mailResult').value = d.email;
+      document.getElementById('mailMeta').textContent = `Generated ${d.generated_at} — saved as doc #${d.doc_id}`;
+      document.getElementById('mailCopyBtn').style.display = '';
+      // Per-contact fill-in + Outlook export (reuses the bulk-mail flow)
+      const evSubject = evName ? `Einladung: ${evName}` : ((focusProd && !window._mailGeneral) ? `${focusProd.name} — ${selectedClient.name}` : selectedClient.name);
+      window._lastMailSubject = evSubject;
+      const emlBtn = document.getElementById('mailEmlBtn');
+      if (emlBtn) emlBtn.style.display = '';
+      WKMail.attach(document.getElementById('mailContacts'), selectedClient.name, {
+        subject: evSubject,
+        getTemplate: () => document.getElementById('mailResult').value,
+        getCasual: () => false,
+      });
+      const srEl = document.getElementById('mailSources');
+      const srContent = document.getElementById('mailSourcesContent');
+      const hasReasoning = d.sources_reasoning && d.sources_reasoning.trim();
+      const hasList = d.sources_list && d.sources_list.length;
+      if (hasReasoning || hasList) {
+        let html = '';
+        if (hasReasoning) {
+          try { html += marked.parse(d.sources_reasoning); }
+          catch (_) { html += `<pre style="white-space:pre-wrap;font-size:0.74rem;color:var(--c-text2, #ccc);">${d.sources_reasoning}</pre>`; }
+        }
+        if (hasList) html += _renderSourcesList(d.sources_list, d.client_name);
+        srContent.innerHTML = html;
+        srEl.style.display = '';
+        srEl.removeAttribute('open');
+      } else {
+        srEl.style.display = 'none';
+        srContent.innerHTML = '';
+      }
+    } catch (e) {
+      document.getElementById('mailMeta').textContent = `Error: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Regenerate';
+    }
+  };
+
+  window.downloadMailEml = function(btn) {
+    const body = document.getElementById('mailResult').value;
+    if (!body || !selectedClient) return;
+    WKMail.downloadEmlBundle(
+      [{ client_name: selectedClient.name, subject: window._lastMailSubject || selectedClient.name, body }],
+      false, btn);
+  };
+
+  window.copyMail = function() {
+    const text = document.getElementById('mailResult').value;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('mailCopyBtn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy to Clipboard'; }, 2000);
+    });
+  };
+
+  // ── init ───────────────────────────────────────────────────────────────────
+  await Promise.all([loadModels(), loadClients()]);
+
+  const params = new URLSearchParams(location.search);
+  const preselect = params.get('client');
+  if (preselect) selectClient(preselect);
+
+  // Deep-link from the client page: ?mail=general opens the mail modal straight
+  // away in general (non-product) introduction mode.
+  const mailParam = params.get('mail');
+  if (preselect && mailParam) {
+    window._mailGeneral = (mailParam === 'general');
+    window.openMailModal();
+    if (window._mailGeneral) document.getElementById('mailType').value = 'introduction';
+  }
+})();
+</script>
+
+<!-- Presentation Prompt Modal -->
+<div id="ppOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:500;align-items:center;justify-content:center">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(780px,94vw);max-height:90vh;display:flex;flex-direction:column;padding:1.25rem;gap:0.9rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem">
+      <span id="ppTitle" style="font-size:0.92rem;font-weight:700;color:var(--c-text, #d4d4d4)">Presentation Prompt</span>
+      <button onclick="window.closePpModal()" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:1.1rem;line-height:1;flex-shrink:0">✕</button>
+    </div>
+    <div id="ppMeta" style="font-size:0.74rem;color:var(--c-muted2, #666);min-height:1.2em"></div>
+    <textarea id="ppContent" readonly style="flex:1;min-height:340px;background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.75rem 0.9rem;font-size:0.76rem;font-family:var(--c-font-mono, 'Menlo','Consolas',monospace);resize:vertical;line-height:1.6;overflow-y:auto"></textarea>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <button id="ppGenerateBtn" class="btn btn-teal" onclick="window.generatePpPrompt()">Generate</button>
+      <button id="ppCopyBtn" class="btn" onclick="window.copyPpPrompt()" style="display:none">Copy to Clipboard</button>
+      <button class="btn" onclick="window.closePpModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mail Template Modal -->
+<div id="mailOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:600;align-items:center;justify-content:center;">
+  <div style="background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;width:min(700px,94vw);max-height:90vh;display:flex;flex-direction:column;padding:1.25rem;gap:0.9rem;overflow-y:auto;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-shrink:0;">
+      <span style="font-size:0.92rem;font-weight:700;color:var(--c-text, #d4d4d4);">✉ Generate Mail Template</span>
+      <button onclick="window.closeMailModal()" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:1.1rem;line-height:1;">✕</button>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:0.3rem;flex-shrink:0;">
+      <label style="font-size:0.7rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.05em;">Template Type</label>
+      <select id="mailType" class="model-select" style="width:auto;" onchange="window.onMailTypeChange()">
+        <option value="event_invitation">Event Invitation</option>
+        <option value="follow_up">Follow-up</option>
+        <option value="introduction">Introduction</option>
+        <option value="check_in">Check-in</option>
+      </select>
+    </div>
+
+    <div id="mailEventFields" style="display:flex;flex-direction:column;gap:0.45rem;flex-shrink:0;">
+      <input id="mailEventName" placeholder="Event name" style="background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.32rem 0.65rem;font-size:0.82rem;">
+      <input id="mailEventDate" type="date" style="background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.32rem 0.65rem;font-size:0.82rem;">
+      <input id="mailEventLink" placeholder="Event registration link (optional)" style="background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.32rem 0.65rem;font-size:0.82rem;">
+    </div>
+
+    <textarea id="mailCustom" rows="2" placeholder="Custom instructions (optional)…" style="background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.45rem 0.65rem;font-size:0.82rem;font-family:inherit;resize:vertical;flex-shrink:0;"></textarea>
+
+    <textarea id="mailResult" rows="12" readonly placeholder="Generated email will appear here…" style="background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);color:var(--c-text2, #ccc);border-radius:4px;padding:0.75rem 0.9rem;font-size:0.76rem;font-family:var(--c-font-mono, 'Menlo','Consolas',monospace);resize:vertical;line-height:1.6;"></textarea>
+    <div id="mailContacts" style="flex-shrink:0;"></div>
+    <details id="mailSources" style="display:none;background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);border-radius:4px;flex-shrink:0;">
+      <summary style="padding:0.45rem 0.75rem;cursor:pointer;font-size:0.72rem;color:var(--c-muted, #888);text-transform:uppercase;letter-spacing:0.06em;user-select:none;list-style:none;">&#9654; Sources &amp; Reasoning</summary>
+      <div id="mailSourcesContent" style="padding:0.5rem 0.9rem 0.75rem;font-size:0.76rem;color:var(--c-text2, #ccc);line-height:1.6;border-top:1px solid var(--c-line, #2a2a2a);"></div>
+    </details>
+
+    <div id="mailMeta" style="font-size:0.74rem;color:var(--c-muted2, #666);min-height:1.1em;flex-shrink:0;"></div>
+
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;flex-shrink:0;">
+      <button id="mailGenBtn" class="btn btn-teal" onclick="window.generateMail()">Generate</button>
+      <button id="mailCopyBtn" class="btn" onclick="window.copyMail()" style="display:none;">Copy to Clipboard</button>
+      <button id="mailEmlBtn" class="btn" onclick="window.downloadMailEml(this)" title="Editable drafts work in Windows Outlook — on Mac use the 📧 Outlook / Copy buttons" style="display:none;">⬇ Outlook drafts (.eml · Windows)</button>
+      <button class="btn" onclick="window.closeMailModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

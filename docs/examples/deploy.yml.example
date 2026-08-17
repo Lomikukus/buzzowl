@@ -1,0 +1,33 @@
+# Example continuous-deployment workflow (GitHub Actions, self-hosted runner).
+#
+# This is NOT an active workflow — it is a template. To use it:
+#   1. Install a GitHub Actions self-hosted runner on your server
+#      (GitHub repo -> Settings -> Actions -> Runners -> New self-hosted runner).
+#   2. Clone this repository on the server, e.g. to /opt/buzzowl,
+#      and adjust the path below to match.
+#   3. Copy this file to .github/workflows/deploy.yml and commit it.
+#
+# On every push to main it runs the CI test suite first, then pulls the latest
+# code on the server and rebuilds all containers.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    runs-on: self-hosted   # your own runner, installed on the target server
+    steps:
+      - name: Pull latest code
+        run: git -C /opt/buzzowl pull origin main   # adjust path to your checkout
+
+      - name: Rebuild and restart all containers
+        run: |
+          cd /opt/buzzowl
+          docker compose --profile research up -d --build

@@ -1,0 +1,1738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Client — Buzzowl</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.body { display: flex; flex: 1; overflow: hidden; }
+
+/* Sidebar */
+.sidebar { width: 260px; flex-shrink: 0; border-right: 1px solid var(--c-linefaint, #222); overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1.2rem; }
+.sidebar h3 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--c-faint, #555); margin-bottom: 0.5rem; }
+.profile-card { background: var(--c-surface, #252526); border-radius: 6px; padding: 0.85rem; }
+.profile-name { font-size: 1rem; font-weight: 700; color: var(--c-text, #d4d4d4); margin-bottom: 0.6rem; }
+.profile-row { font-size: 0.78rem; color: var(--c-muted, #888); margin-bottom: 0.28rem; display: flex; align-items: baseline; gap: 0.3rem; flex-wrap: wrap; }
+.profile-row span { color: var(--c-text3, #bbb); }
+.profile-row a { color: var(--c-blue, #569cd6); }
+.edit-btn { background: none; border: none; color: var(--c-faint, #555); cursor: pointer; font-size: 0.7rem; padding: 0 0.15rem; line-height: 1; transition: color 0.15s; }
+.edit-btn:hover { color: var(--c-bluehi, #9cdcfe); }
+.inline-edit { display: flex; gap: 0.3rem; align-items: center; margin-top: 0.1rem; width: 100%; }
+.inline-edit input, .inline-edit select { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.2rem 0.4rem; font-size: 0.76rem; flex: 1; min-width: 0; }
+.inline-edit input:focus, .inline-edit select:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.inline-edit textarea { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.25rem 0.4rem; font-size: 0.76rem; width: 100%; resize: vertical; }
+.inline-edit textarea:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.save-btn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border: none; border-radius: 3px; padding: 0.15rem 0.5rem; font-size: 0.7rem; cursor: pointer; font-weight: 600; flex-shrink: 0; }
+.save-btn:hover { background: var(--c-accent2, #3ab89e); }
+.status-badge { display: inline-block; font-size: 0.62rem; padding: 0.12rem 0.45rem; border-radius: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.3rem; }
+.badge-active   { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+.badge-prospect { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.badge-inactive { background: var(--c-line, #2a2a2a); color: var(--c-muted2, #666); }
+
+.contact-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+.contact-row:last-child { border-bottom: none; }
+.contact-avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); font-size: 0.65rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.contact-name { font-size: 0.8rem; color: var(--c-text3, #bbb); }
+.contact-role { font-size: 0.69rem; color: var(--c-muted2, #666); }
+.enrich-icon { background: none; border: none; color: var(--c-line3, #3a3a3a); font-size: 0.72rem; cursor: pointer; padding: 0.1rem 0.2rem; margin-left: auto; flex-shrink: 0; transition: color 0.15s; line-height: 1; }
+.enrich-icon:hover { color: var(--c-accent, #4ec9b0); }
+.enrich-icon:disabled { opacity: 0.4; cursor: default; }
+
+/* Main */
+.main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-width: 0; }
+.stats-bar { display: flex; gap: 0.5rem; padding: 0.65rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; background: var(--c-bg2, #1a1a1a); flex-wrap: wrap; }
+.stat-chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 5px; padding: 0.28rem 0.75rem; font-size: 0.78rem; }
+.stat-val { color: var(--c-bluehi, #9cdcfe); font-weight: 700; margin-right: 0.3rem; }
+.stat-label { color: var(--c-muted2, #666); }
+
+.tab-nav { display: flex; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; padding: 0 1.5rem; background: var(--c-bg2, #1a1a1a); }
+.tab-btn { background: none; border: none; border-bottom: 2px solid transparent; color: var(--c-muted2, #666); font-size: 0.82rem; padding: 0.5rem 1rem; cursor: pointer; transition: color 0.15s, border-color 0.15s; margin-bottom: -1px; }
+.tab-btn:hover { color: var(--c-text3, #bbb); }
+.tab-btn.active { color: var(--c-text, #d4d4d4); border-bottom-color: var(--c-accent, #4ec9b0); }
+
+.tab-panel { display: none; flex: 1; overflow-y: auto; padding: 1.4rem 1.5rem; }
+.tab-panel.active { display: block; }
+
+/* Signals */
+.signals-section { margin-bottom: 1.4rem; }
+.signals-row { display: flex; gap: 0.65rem; flex-wrap: wrap; }
+.signal-card { background: var(--c-surface, #252526); border-radius: 6px; padding: 0.65rem 0.85rem; min-width: 190px; max-width: 270px; border-left: 3px solid var(--c-line2, #333); }
+.signal-card.pain_point { border-color: var(--c-red, #f14c4c); }
+.signal-card.opportunity { border-color: var(--c-accent, #4ec9b0); }
+.signal-card.risk        { border-color: var(--c-orange, #ce9178); }
+.signal-card.news        { border-color: var(--c-blue, #569cd6); }
+.signal-type { font-size: 0.6rem; text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; margin-bottom: 0.25rem; }
+.signal-card.pain_point .signal-type { color: var(--c-red, #f14c4c); }
+.signal-card.opportunity .signal-type { color: var(--c-accent, #4ec9b0); }
+.signal-card.risk        .signal-type { color: var(--c-orange, #ce9178); }
+.signal-card.news        .signal-type { color: var(--c-blue, #569cd6); }
+.signal-headline { font-size: 0.78rem; color: var(--c-text2, #ccc); line-height: 1.35; margin-bottom: 0.25rem; }
+.signal-evidence { font-size: 0.7rem; color: var(--c-muted2, #777); }
+
+/* Brief */
+.brief-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.brief-meta { font-size: 0.74rem; color: var(--c-muted2, #666); }
+.brief-body { background: var(--c-surface, #252526); border-radius: 6px; padding: 1.4rem 1.8rem; }
+.brief-body.empty { color: var(--c-faint, #555); font-style: italic; text-align: center; padding: 2.5rem; }
+.brief-body h1, .brief-body h2 { color: var(--c-text, #d4d4d4); margin-top: 1.2rem; margin-bottom: 0.4rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--c-line2, #333); font-size: 1rem; }
+.brief-body h3 { color: var(--c-text3, #bbb); font-size: 0.9rem; margin-top: 0.8rem; margin-bottom: 0.25rem; }
+.brief-body p  { color: var(--c-text3, #bbb); margin-bottom: 0.55rem; }
+.brief-body ul, .brief-body ol { padding-left: 1.4rem; margin-bottom: 0.55rem; }
+.brief-body li { color: var(--c-text3, #bbb); margin-bottom: 0.2rem; }
+.brief-body a  { color: var(--c-blue, #569cd6); }
+.brief-body strong { color: var(--c-text, #d4d4d4); }
+.brief-body code { background: var(--c-surface2, #2d2d2d); padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.85em; }
+.cite-link { color: var(--c-bluehi, #9cdcfe); font-size: 0.72em; vertical-align: super; text-decoration: none; }
+.cite-link:hover { text-decoration: underline; }
+.ref-entry { scroll-margin-top: 1rem; }
+.generating-msg { color: var(--c-blue, #569cd6); font-size: 0.82rem; display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+.spinner { width: 14px; height: 14px; border: 2px solid var(--c-line2, #333); border-top-color: var(--c-blue, #569cd6); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Findings */
+.findings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0.7rem; }
+.finding-card { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 6px; padding: 0.85rem; }
+.finding-card-header { display: flex; align-items: flex-start; gap: 0.55rem; margin-bottom: 0.45rem; }
+.rel-badge { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 700; }
+.rel-1, .rel-2 { background: var(--c-redtint, #3a1a1a); color: var(--c-red, #f14c4c); }
+.rel-3         { background: #2e2212; color: var(--c-orange, #ce9178); }
+.rel-4         { background: #2a2812; color: var(--c-neutraly, #dcdcaa); }
+.rel-5         { background: #0d2a14; color: var(--c-accent, #4ec9b0); }
+.finding-title { font-size: 0.81rem; color: var(--c-text, #d4d4d4); line-height: 1.4; font-weight: 500; }
+.finding-meta  { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.45rem; }
+.finding-date  { font-size: 0.68rem; color: var(--c-muted2, #666); }
+.source-chip { font-size: 0.63rem; padding: 0.08rem 0.35rem; border-radius: 3px; background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); text-decoration: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
+.source-chip:hover { color: var(--c-bluehi, #9cdcfe); }
+.stype-badge { font-size: 0.6rem; padding: 0.08rem 0.3rem; border-radius: 3px; background: #2e1a3a; color: var(--c-purple, #c586c0); font-weight: 600; }
+.finding-preview { font-size: 0.76rem; color: var(--c-muted, #888); line-height: 1.5; }
+.expand-btn { background: none; border: none; color: var(--c-blue, #569cd6); font-size: 0.72rem; cursor: pointer; padding: 0.2rem 0; display: block; margin-top: 0.3rem; }
+.expand-btn:hover { color: var(--c-bluehi, #9cdcfe); }
+.finding-full { font-size: 0.75rem; color: var(--c-text4, #999); line-height: 1.65; margin-top: 0.4rem; white-space: pre-wrap; border-top: 1px solid var(--c-line, #2a2a2a); padding-top: 0.5rem; display: none; }
+.dl-btn { background: none; border: 1px solid var(--c-line3, #3a3a3a); border-radius: 3px; color: var(--c-muted2, #777); font-size: 0.67rem; cursor: pointer; padding: 0.1rem 0.4rem; white-space: nowrap; }
+.dl-btn:hover { border-color: var(--c-blue, #569cd6); color: var(--c-bluehi, #9cdcfe); }
+
+/* Documents tab */
+.filter-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+.filter-chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 12px; padding: 0.18rem 0.6rem; font-size: 0.72rem; color: var(--c-muted, #888); cursor: pointer; transition: all 0.12s; user-select: none; }
+.filter-chip:hover { border-color: var(--c-faint2, #444); color: var(--c-text3, #bbb); }
+.filter-chip.active { background: var(--c-postint, #1a3a2a); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.doc-row { display: flex; align-items: flex-start; gap: 0.55rem; padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--c-linefaint, #222); cursor: pointer; border-radius: 4px; transition: background 0.1s; }
+.doc-row:hover { background: var(--c-linefaint, #222); }
+.doc-row.expanded { background: var(--c-bg, #1e1e1e); border-bottom-color: transparent; border-radius: 4px 4px 0 0; }
+.doc-type-badge { font-size: 0.6rem; padding: 0.08rem 0.28rem; border-radius: 3px; font-weight: 600; flex-shrink: 0; margin-top: 0.18rem; }
+.dt-meeting  { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+.dt-research { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.dt-osint    { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.dt-finding  { background: #2e1a3a; color: var(--c-purple, #c586c0); }
+.dt-signal   { background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); }
+.dt-note     { background: var(--c-line, #2a2a2a); color: var(--c-muted, #888); }
+.doc-row-info { flex: 1; min-width: 0; }
+.doc-row-title { font-size: 0.8rem; color: var(--c-text2, #ccc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-row-sub { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.1rem; }
+.doc-row-date { font-size: 0.68rem; color: var(--c-muted2, #666); }
+.doc-chevron { font-size: 0.68rem; color: var(--c-faint, #555); flex-shrink: 0; margin-top: 0.15rem; transition: transform 0.15s; }
+.doc-row.expanded .doc-chevron { transform: rotate(90deg); }
+.doc-panel { display: none; background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line, #2a2a2a); border-top: none; border-radius: 0 0 4px 4px; padding: 1rem 1.2rem; margin-bottom: 0.2rem; }
+.doc-panel.open { display: block; }
+.doc-body { font-size: 0.79rem; color: var(--c-text3, #bbb); line-height: 1.7; }
+.doc-body h1, .doc-body h2 { color: var(--c-text, #d4d4d4); font-size: 0.92rem; margin: 0.8rem 0 0.3rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+.doc-body h3 { color: var(--c-text3, #bbb); font-size: 0.83rem; margin: 0.6rem 0 0.2rem; }
+.doc-body p { margin-bottom: 0.45rem; }
+.doc-body ul, .doc-body ol { padding-left: 1.2rem; margin-bottom: 0.45rem; }
+.doc-body a { color: var(--c-blue, #569cd6); }
+.doc-body code { background: var(--c-surface2, #2d2d2d); padding: 0.05rem 0.25rem; border-radius: 3px; font-size: 0.83em; }
+.doc-loading { color: var(--c-faint, #555); font-size: 0.78rem; font-style: italic; }
+
+/* Buttons */
+.btn { padding: 0.32rem 0.8rem; border-radius: 5px; border: 1px solid var(--c-line, #2a2a2a); background: var(--c-surface, #252526); color: var(--c-text3, #bbb); font-size: 0.78rem; cursor: pointer; font-weight: 500; transition: all 0.15s; }
+.btn:hover { border-color: var(--c-blue, #569cd6); color: var(--c-bluehi, #9cdcfe); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-teal { background: var(--c-postint, #1a3a2a); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); font-weight: 600; }
+.btn-teal:hover { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); }
+
+/* Toast */
+.toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-left: 3px solid var(--c-accent, #4ec9b0); border-radius: 6px; padding: 0.65rem 1rem; font-size: 0.8rem; color: var(--c-text, #d4d4d4); z-index: 300; max-width: 320px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); animation: fadeIn 0.2s ease; }
+.toast a { color: var(--c-accent, #4ec9b0); text-decoration: none; }
+.toast a:hover { text-decoration: underline; }
+@keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+.empty-state { color: var(--c-faint, #555); font-size: 0.8rem; font-style: italic; padding: 2.5rem; text-align: center; }
+.section-label { font-size:0.68rem; text-transform:uppercase; letter-spacing:0.09em; color:var(--c-faint, #555); margin-bottom:0.55rem; }
+.lr-card { background:var(--c-surface, #252526); border:1px solid var(--c-line, #2a2a2a); border-left:3px solid var(--c-blue, #569cd6); border-radius:6px; padding:0.85rem 1rem; }
+.lr-header { display:flex; align-items:center; gap:0.7rem; margin-bottom:0.35rem; }
+.lr-badge { font-size:0.6rem; padding:0.08rem 0.4rem; border-radius:3px; font-weight:600; }
+.lr-research { background:var(--c-bluetint, #1a2e4a); color:var(--c-blue, #569cd6); }
+.lr-osint { background:#2a1f3a; color:var(--c-purple, #c586c0); }
+.lr-title { font-size:0.83rem; color:var(--c-text2, #ccc); flex:1; }
+.lr-date { font-size:0.7rem; color:var(--c-muted2, #666); }
+.lr-preview { font-size:0.78rem; color:var(--c-muted, #888); line-height:1.55; margin-bottom:0.45rem; }
+.lr-full { font-size:0.78rem; color:var(--c-text4, #999); line-height:1.65; display:none; margin-top:0.5rem; border-top:1px solid var(--c-line, #2a2a2a); padding-top:0.5rem; white-space:pre-wrap; }
+.lr-expand-btn { background:none; border:none; color:var(--c-blue, #569cd6); font-size:0.72rem; cursor:pointer; padding:0.2rem 0; display:block; margin-top:0.3rem; }
+.lr-expand-btn:hover { color:var(--c-bluehi, #9cdcfe); }
+
+/* Login */
+.login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.87); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.login-box { background: var(--c-surface, #252526); border-radius: 8px; padding: 2rem; width: 320px; display: flex; flex-direction: column; gap: 0.8rem; }
+.login-box h2 { color: var(--c-text, #d4d4d4); font-size: 1.05rem; }
+.login-box input { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 5px; padding: 0.5rem 0.7rem; font-size: 0.85rem; width: 100%; }
+.login-box input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.login-err { color: var(--c-red, #f14c4c); font-size: 0.78rem; display: none; }
+.mp-overlay { position:fixed;inset:0;background:rgba(0,0,0,0.82);z-index:400;overflow-y:auto;padding:2rem 1rem; }
+.mp-box { background:var(--c-surface, #252526);border:1px solid var(--c-line2, #333);border-radius:8px;padding:1.5rem;width:100%;max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:1rem; }
+.mp-header { display:flex;align-items:center;justify-content:space-between; }
+.mp-title { font-size:0.95rem;font-weight:700;color:var(--c-text, #d4d4d4); }
+.mp-close { background:none;border:none;color:var(--c-faint, #555);font-size:1.1rem;cursor:pointer; }
+.mp-close:hover { color:var(--c-text2, #ccc); }
+.mp-meta { font-size:0.74rem;color:var(--c-muted2, #666); }
+.mp-rendered { background:var(--c-bg, #1e1e1e);border-radius:6px;padding:1.2rem 1.5rem;font-size:0.82rem;line-height:1.7;color:var(--c-text3, #bbb);max-height:50vh;overflow-y:auto; }
+.mp-rendered h2 { color:var(--c-text, #d4d4d4);font-size:0.9rem;margin-top:1rem;border-bottom:1px solid var(--c-line, #2a2a2a);padding-bottom:0.2rem; }
+.mp-rendered ul,.mp-rendered ol { padding-left:1.3rem; }
+.mp-rendered strong { color:var(--c-text, #d4d4d4); }
+.mp-chat-section { border-top:1px solid var(--c-line, #2a2a2a);padding-top:0.85rem;display:flex;flex-direction:column;gap:0.6rem; }
+.mp-chat-label { font-size:0.72rem;color:var(--c-muted2, #666);font-weight:500; }
+.mp-chat-history { display:flex;flex-direction:column;gap:0.6rem;max-height:240px;overflow-y:auto; }
+.mp-chat-q { font-size:0.8rem;color:var(--c-bluehi, #9cdcfe);font-style:italic; }
+.mp-chat-a { font-size:0.8rem;color:var(--c-text3, #bbb);background:var(--c-bg, #1e1e1e);border-radius:4px;padding:0.5rem 0.75rem;line-height:1.6; }
+.mp-chat-input-row { display:flex;gap:0.4rem; }
+.mp-chat-input { flex:1;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.4rem 0.65rem;font-size:0.82rem;font-family:inherit; }
+.mp-chat-input:focus { outline:none;border-color:var(--c-blue, #569cd6); }
+</style>
+</head>
+<body>
+
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>Sign in</h2>
+    <input id="loginOrg"  type="text"     placeholder="Organisation slug" autocomplete="off">
+    <input id="loginUser" type="text"     placeholder="Username" autocomplete="off">
+    <input id="loginPass" type="password" placeholder="Password">
+    <div class="login-err" id="loginErr">Invalid credentials</div>
+    <button class="btn btn-teal" id="loginBtn">Sign in</button>
+  </div>
+</div>
+
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div>
+        <h3>Profile</h3>
+        <div class="profile-card">
+          <div class="profile-name" id="profileName">—</div>
+          <div id="profileMeta"></div>
+        </div>
+        <div style="display:flex;gap:0.4rem;margin-top:0.55rem">
+          <button onclick="emailClient()" title="Write a general outreach email to this client"
+                  style="flex:1;background:var(--c-accenttint, #1a3a2e);border:1px solid var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0);border-radius:5px;padding:0.4rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer">✉ Email</button>
+          <button onclick="location.href='/match?client='+encodeURIComponent(clientName)" title="See which products fit this client"
+                  style="flex:1;background:var(--c-surface, #252526);border:1px solid var(--c-line3, #3a3a3a);color:var(--c-text2, #ccc);border-radius:5px;padding:0.4rem 0.5rem;font-size:0.8rem;cursor:pointer">Match →</button>
+        </div>
+        <button id="meetingPrepBtn" onclick="openMeetingPrep()" title="Generate a meeting prep brief for this client"
+                style="width:100%;margin-top:0.4rem;background:var(--c-surface, #252526);border:1px solid var(--c-blue, #569cd6);color:var(--c-bluehi, #9cc7f0);border-radius:5px;padding:0.4rem 0.5rem;font-size:0.8rem;font-weight:600;cursor:pointer">📅 Prepare for Meeting</button>
+        <button id="coOwnBtn" onclick="coOwnClient()" title="Add this client to your own list (shared owner)"
+                style="display:none;width:100%;margin-top:0.4rem;background:none;border:1px dashed var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0);border-radius:5px;padding:0.35rem 0.5rem;font-size:0.78rem;cursor:pointer">+ Add to my clients</button>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
+          <h3 style="margin-bottom:0">Monitored sources</h3>
+          <div style="display:flex;gap:0.35rem;align-items:center">
+            <button onclick="discoverSources(this)" title="Find newsroom/press pages automatically (no AI cost)" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.68rem;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='#4ec9b0';this.style.color='#4ec9b0'" onmouseout="this.style.borderColor='#3a3a3a';this.style.color='#888'">&#x1F50D; Discover</button>
+            <button onclick="checkSources(this)" title="Check all monitored pages for changes now" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.68rem;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='#4ec9b0';this.style.color='#4ec9b0'" onmouseout="this.style.borderColor='#3a3a3a';this.style.color='#888'">Check now</button>
+          </div>
+        </div>
+        <div id="sourcesList"><span class="empty-state" style="padding:0.4rem 0;text-align:left">No sources monitored — click Discover</span></div>
+        <div style="display:flex;gap:0.35rem;margin-top:0.45rem">
+          <input id="newSourceUrl" type="url" placeholder="https://… (news/press page)"
+                 style="flex:1;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.28rem 0.5rem;font-size:0.72rem;min-width:0">
+          <button onclick="addSource()" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.5rem;font-size:0.7rem;cursor:pointer">+ Add</button>
+        </div>
+        <div id="sourcesStatus" style="font-size:0.68rem;color:var(--c-muted2, #666);margin-top:0.3rem"></div>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
+          <h3 style="margin-bottom:0">Contacts</h3>
+          <div style="display:flex;gap:0.35rem;align-items:center">
+            <button onclick="openAddContact()" title="Add contact manually" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.68rem;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='#4ec9b0';this.style.color='#4ec9b0'" onmouseout="this.style.borderColor='#3a3a3a';this.style.color='#888'">+ Add</button>
+            <button onclick="openCsvImport()" title="Import contacts from CSV" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.68rem;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='#4ec9b0';this.style.color='#4ec9b0'" onmouseout="this.style.borderColor='#3a3a3a';this.style.color='#888'">&#x1F4C2; CSV</button>
+            <button id="findPeopleBtn" onclick="openFindPeople()" title="Search for people at this company" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.45rem;font-size:0.68rem;cursor:pointer;display:flex;align-items:center;gap:0.25rem;transition:all 0.15s" onmouseover="this.style.borderColor='#4ec9b0';this.style.color='#4ec9b0'" onmouseout="this.style.borderColor='#3a3a3a';this.style.color='#888'">
+              <span>&#x1F50D;</span> Find People
+            </button>
+          </div>
+        </div>
+        <div id="contactsList"><span class="empty-state" style="padding:0.4rem 0;text-align:left">No contacts</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="stats-bar">
+        <div class="stat-chip"><span class="stat-val" id="statMeetings">—</span><span class="stat-label">Meetings</span></div>
+        <div class="stat-chip"><span class="stat-val" id="statFindings">—</span><span class="stat-label">Findings</span></div>
+        <div class="stat-chip"><span class="stat-val" id="statSignals">—</span><span class="stat-label">Signals</span></div>
+        <div class="stat-chip"><span class="stat-val" id="statContacts">—</span><span class="stat-label">Contacts</span></div>
+      </div>
+
+      <div class="tab-nav">
+        <button class="tab-btn active" data-tab="overview"   onclick="switchTab('overview')">Overview</button>
+        <button class="tab-btn"        data-tab="findings"   onclick="switchTab('findings')">Findings</button>
+        <button class="tab-btn"        data-tab="documents"  onclick="switchTab('documents')">Documents</button>
+      </div>
+
+      <!-- Overview -->
+      <div class="tab-panel active" id="tab-overview">
+        <div id="matchSummarySection" style="display:none;margin-bottom:1.4rem">
+          <h3 class="section-label" style="display:flex;align-items:center;gap:0.6rem">Product fit
+            <a href="#" id="matchSummaryLink" style="color:var(--c-blue, #569cd6);font-size:0.72rem;text-decoration:none;font-weight:400">View full match →</a>
+          </h3>
+          <div id="matchSummaryCards"></div>
+        </div>
+        <div id="jobsSection" style="margin-bottom:1.4rem">
+          <h3 class="section-label" style="display:flex;align-items:center;gap:0.6rem">
+            Open positions
+            <a id="jobsCareersLink" href="#" target="_blank" rel="noopener" style="display:none;color:var(--c-blue, #569cd6);font-size:0.72rem;text-decoration:none;font-weight:400">careers page →</a>
+            <button id="setCareersBtn" onclick="setCareersUrl()" title="Set the exact careers/open-positions URL (e.g. for ATS pages auto-discovery can't read)"
+                    style="margin-left:auto;background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.45rem;font-size:0.68rem;cursor:pointer">✎ URL</button>
+            <button id="scanJobsBtn" onclick="scanJobs()" title="Fetch this client's careers page and infer their needs"
+                    style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.5rem;font-size:0.68rem;cursor:pointer">Scan jobs</button>
+          </h3>
+          <div id="jobsBody"><span class="empty-state" style="padding:0.4rem 0;text-align:left">Not scanned yet — click Scan jobs.</span></div>
+        </div>
+        <div class="signals-section" id="signalsSection" style="display:none">
+          <h3 style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;color:var(--c-faint, #555);margin-bottom:0.55rem">Active Signals</h3>
+          <div class="signals-row" id="signalsRow"></div>
+        </div>
+        <div id="latestResearchSection" style="display:none;margin-bottom:1.4rem">
+          <h3 class="section-label">Latest Research</h3>
+          <div id="latestResearchCard" class="lr-card"></div>
+        </div>
+        <div>
+          <div class="brief-header">
+            <div>
+              <h2 style="font-size:0.9rem;color:var(--c-text, #d4d4d4);margin-bottom:0.15rem">Account Intelligence Brief</h2>
+              <div class="brief-meta" id="briefMeta">No brief generated yet</div>
+            </div>
+            <div style="display:flex;gap:0.5rem">
+              <button class="btn btn-teal" id="generateBtn" onclick="generateBrief()">Generate Brief</button>
+            </div>
+          </div>
+          <div id="briefContainer">
+            <div class="brief-body empty" id="briefEmpty">No brief yet. Click <strong>Generate Brief</strong> to create an AI-synthesised account intelligence report.</div>
+            <div class="brief-body" id="briefContent" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Findings -->
+      <div class="tab-panel" id="tab-findings">
+        <div id="findingsContent"><div class="empty-state">Loading…</div></div>
+      </div>
+
+      <!-- Documents -->
+      <div class="tab-panel" id="tab-documents">
+        <div class="filter-chips">
+          <span class="filter-chip active" data-type="all"      onclick="setDocFilter('all',this)">All</span>
+          <span class="filter-chip"        data-type="meeting"  onclick="setDocFilter('meeting',this)">Meeting</span>
+          <span class="filter-chip"        data-type="research" onclick="setDocFilter('research',this)">Research</span>
+          <span class="filter-chip"        data-type="osint"    onclick="setDocFilter('osint',this)">OSINT</span>
+          <span class="filter-chip"        data-type="finding"  onclick="setDocFilter('finding',this)">Finding</span>
+          <span class="filter-chip"        data-type="signal"   onclick="setDocFilter('signal',this)">Signal</span>
+          <span class="filter-chip"        data-type="note"     onclick="setDocFilter('note',this)">Note</span>
+          <span class="filter-chip"        data-type="interview" onclick="setDocFilter('interview',this)">Interview</span>
+          <button class="filter-chip" style="margin-left:auto;border-color:var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0)" onclick="toggleAddDoc()">+ Add document</button>
+        </div>
+        <div id="addDocForm" style="display:none;background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);border-radius:6px;padding:0.8rem;margin-bottom:0.7rem;">
+          <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
+            <input id="addDocTitle" type="text" placeholder="Title" style="flex:1;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.35rem 0.6rem;font-size:0.8rem;">
+            <select id="addDocType" style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.35rem;font-size:0.8rem;">
+              <option value="interview">Interview</option>
+              <option value="note">Note</option>
+              <option value="meeting">Meeting</option>
+            </select>
+          </div>
+          <textarea id="addDocContent" rows="6" placeholder="Content — e.g. insights from a seller interview (ground truth for validating agent-found pain points)"
+                    style="width:100%;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.45rem 0.6rem;font-size:0.78rem;font-family:inherit;resize:vertical;"></textarea>
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+            <button class="btn btn-teal" style="font-size:0.75rem" onclick="saveNewDoc()">Save</button>
+            <button class="btn" style="font-size:0.75rem" onclick="toggleAddDoc()">Cancel</button>
+          </div>
+        </div>
+        <div id="documentsContent"><div class="empty-state">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const clientName = decodeURIComponent(location.pathname.replace('/client/', ''));
+let authToken = localStorage.getItem('wk_token');
+
+// State
+let _allDocs    = [];
+let _docFilter  = 'all';
+let _findingsLoaded = false;
+let _docsLoaded     = false;
+let _meetingsCount  = 0;
+let _findingsCount  = 0;
+let _signalsCount   = 0;
+let _contactsCount  = 0;
+
+// ── Navbar ────────────────────────────────────────────────────────────────
+initNavbar({ active: 'clients', subtitle: true, actions: [
+    { label: 'Open in Chat', id: 'openChatBtn' },
+    { label: '↻ Refresh Research', id: 'researchBtn', teal: true },
+]});
+document.getElementById('openChatBtn')?.addEventListener('click', () => openInChat());
+document.getElementById('researchBtn')?.addEventListener('click', () => triggerResearch());
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+function authHeaders() {
+    return { 'Authorization': 'Bearer ' + authToken, 'Content-Type': 'application/json' };
+}
+let _isAdmin = false, _me = null;
+async function checkAuth() {
+    if (!authToken) { showLogin(); return false; }
+    const r = await fetch('/api/auth/me', { headers: authHeaders() });
+    if (!r.ok) { showLogin(); return false; }
+    try { _me = (await r.clone().json()).user; _isAdmin = _me?.role === 'admin'; } catch (_) {}
+    document.getElementById('loginOverlay').style.display = 'none';
+    return true;
+}
+// Industry values are stored as snake_case categories — show them human-readably.
+function humanizeIndustry(s) {
+    return String(s || '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+        .replace(/\b\w/g, c => c.toUpperCase())
+        .replace(/\b(It|Ev|Ai|Bi|Hr|Erp|Crm|Saas|Iot|Sap)\b/g, m => m.toUpperCase());
+}
+function showLogin() { document.getElementById('loginOverlay').style.display = 'flex'; }
+
+document.getElementById('loginBtn').addEventListener('click', async () => {
+    const org  = document.getElementById('loginOrg').value.trim();
+    const user = document.getElementById('loginUser').value.trim();
+    const pass = document.getElementById('loginPass').value;
+    const r = await fetch('/api/auth/login', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ org_slug: org, username: user, password: pass }),
+    });
+    if (!r.ok) { document.getElementById('loginErr').style.display = 'block'; return; }
+    const d = await r.json();
+    authToken = d.token;
+    localStorage.setItem('wk_token', authToken);
+    document.getElementById('loginErr').style.display = 'none';
+    await init();
+    window.navbarRefreshUser?.();
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function esc(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function safeMeta(v) {
+    if (!v) return {};
+    if (typeof v === 'string') { try { return JSON.parse(v); } catch { return {}; } }
+    return v;
+}
+function docTypeClass(t) {
+    return { meeting:'dt-meeting', research:'dt-research', osint:'dt-osint', finding:'dt-finding', signal:'dt-signal' }[t] || 'dt-note';
+}
+function fmtDate(ts) { return ts ? String(ts).slice(0,10) : ''; }
+function relClass(s) {
+    const n = parseInt(s)||0;
+    return n <= 2 ? 'rel-1' : n === 3 ? 'rel-3' : n === 4 ? 'rel-4' : 'rel-5';
+}
+function updateStats() {
+    document.getElementById('statMeetings').textContent = _meetingsCount;
+    document.getElementById('statFindings').textContent = _findingsCount;
+    document.getElementById('statSignals').textContent  = _signalsCount;
+    document.getElementById('statContacts').textContent = _contactsCount;
+}
+function showToast(html, ms=4500) {
+    const t = document.createElement('div');
+    t.className = 'toast'; t.innerHTML = html;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), ms);
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-'+tab));
+    if (tab === 'findings' && !_findingsLoaded)  loadFindings();
+    if (tab === 'documents' && !_docsLoaded)     loadDocumentsTab();
+    // Remember the tab per client so returning to this client lands here again.
+    try { localStorage.setItem('wk_last_tab_' + clientName, tab); } catch (_) {}
+}
+
+// ── Profile ───────────────────────────────────────────────────────────────
+async function loadClient() {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}`, { headers: authHeaders() });
+    if (!r.ok) { document.getElementById('profileName').textContent = clientName; return; }
+    const client = await r.json();
+    const meta = safeMeta(client.metadata);
+
+    document.title = `${client.name} — Buzzowl`;
+    const subtitleEl = document.getElementById('navSubtitle');
+    if (subtitleEl) subtitleEl.textContent = client.name;
+    document.getElementById('profileName').textContent  = client.name;
+
+    // One-click self-claim: show "+ Add to my clients" when the rep isn't an owner.
+    const owners = (meta.owner_ids || []).map(Number);
+    const amOwner = _me && (client.created_by === _me.id || owners.includes(_me.id));
+    const coBtn = document.getElementById('coOwnBtn');
+    if (coBtn) coBtn.style.display = (_me && !amOwner) ? '' : 'none';
+
+    _meetingsCount = (client.documents||[]).filter(d => d.type === 'meeting').length;
+    _findingsCount = (client.documents||[]).filter(d => d.type === 'finding').length;
+    updateStats();
+
+    renderProfile(client, meta);
+}
+
+function renderProfile(client, meta) {
+    const rows = [];
+    if (meta.news_pending) {
+        const reason = (meta.news_pending_reason || []).slice(0, 3).join(', ');
+        rows.push(`<div style="background:var(--c-accenttint, #1a3a2e);border:1px solid var(--c-accent, #4ec9b0);border-radius:5px;padding:0.45rem 0.6rem;margin-bottom:0.4rem">
+            <div style="color:var(--c-accent, #4ec9b0);font-size:0.74rem;font-weight:600">● New info detected</div>
+            ${reason ? `<div style="color:var(--c-muted, #888);font-size:0.68rem;margin-top:0.15rem">${esc(reason)}</div>` : ''}
+            <button onclick="runResearchNow(this)" style="margin-top:0.4rem;width:100%;background:var(--c-accent, #4ec9b0);border:none;color:var(--c-bg, #1e1e1e);border-radius:4px;padding:0.25rem 0.5rem;font-size:0.72rem;font-weight:600;cursor:pointer">Run research</button>
+        </div>`);
+    }
+    if (meta.industry)   rows.push(`<div class="profile-row">Industry <span>${esc(humanizeIndustry(meta.industry))}</span></div>`);
+    if (meta.website)    rows.push(`<div class="profile-row">Website <span><a href="${esc(meta.website)}" target="_blank" rel="noopener">${esc(meta.website)}</a></span></div>`);
+
+    rows.push(editableRow('deal_stage', 'Deal stage', meta.deal_stage||'', 'text'));
+    rows.push(editableRow('status',     'Status',     meta.status||'',     'select'));
+
+    rows.push(`<div class="profile-row">Sessions <span>${client.session_count||0}</span></div>`);
+    if (client.last_activity) rows.push(`<div class="profile-row">Last active <span>${fmtDate(client.last_activity)}</span></div>`);
+
+    rows.push(`<div class="profile-row" style="flex-direction:column;align-items:flex-start;gap:0.15rem">
+        <span style="display:flex;align-items:center;gap:0.3rem">Notes
+            <button class="edit-btn" onclick="startEdit('notes','${esc(meta.notes||'')}','textarea')" title="Edit">✎</button>
+        </span>
+        <span id="val-notes" style="color:var(--c-text3, #bbb);font-size:0.76rem;white-space:pre-wrap">${esc(meta.notes||'—')}</span>
+        <div id="edit-notes" style="display:none;width:100%"></div>
+    </div>`);
+
+    if (meta.status) {
+        const cls = {active:'badge-active',prospect:'badge-prospect'}[meta.status.toLowerCase()] || 'badge-inactive';
+        rows.push(`<div><span class="status-badge ${cls}">${esc(meta.status)}</span></div>`);
+    }
+    // Focus is per-rep: is_focus_mine = this seller starred it; is_focus = team union.
+    const focusActive = !!meta.is_focus_mine;
+    const teamFocus   = !!meta.is_focus && !focusActive;
+    rows.push(`<div style="margin-top:0.6rem">
+        <button id="focus-btn" onclick="toggleClientFocus()"
+                title="${teamFocus ? 'A teammate has this as a focus client — click to add it to yours too' : 'Your personal focus clients are monitored automatically'}"
+                style="background:none;border:1px solid ${focusActive ? '#f5c518' : '#333'};
+                       border-radius:4px;padding:0.2rem 0.55rem;font-size:0.72rem;cursor:pointer;
+                       color:${focusActive ? '#f5c518' : '#555'};width:100%">
+          ${focusActive ? '★ My focus client' : (teamFocus ? '☆ Add to my focus (team focus)' : '☆ Mark as focus')}
+        </button>
+    </div>`);
+    if (_isAdmin) rows.push(`<div style="margin-top:0.35rem">
+        <button id="eval-timer-btn" onclick="toggleEvalTimer()"
+                style="background:none;border:1px solid var(--c-line2, #333);border-radius:4px;padding:0.2rem 0.55rem;
+                       font-size:0.72rem;cursor:pointer;color:var(--c-faint, #555);width:100%"
+                title="Time a manual research session for the agent-vs-manual comparison (thesis evaluation)">
+          ⏱ Manual research
+        </button>
+    </div>`);
+    document.getElementById('profileMeta').innerHTML = rows.join('');
+    _sources = meta.monitored_sources || [];
+    renderSources();
+    renderEvalTimer();
+}
+
+// ---- Manual research timer (thesis evaluation) ----
+const EVAL_TIMER_KEY = 'wk_eval_timer';
+let _evalTimerInterval = null;
+
+function _evalTimerState() {
+    try { return JSON.parse(localStorage.getItem(EVAL_TIMER_KEY) || 'null'); }
+    catch (_) { return null; }
+}
+
+function renderEvalTimer() {
+    const btn = document.getElementById('eval-timer-btn');
+    if (!btn) return;
+    const st = _evalTimerState();
+    clearInterval(_evalTimerInterval);
+    if (st && st.client === clientName) {
+        const tick = () => {
+            const secs = Math.floor((Date.now() - st.started) / 1000);
+            const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+            const ss = String(secs % 60).padStart(2, '0');
+            btn.textContent = `⏹ Stop manual research (${mm}:${ss})`;
+        };
+        btn.style.borderColor = '#f48771';
+        btn.style.color = '#f48771';
+        tick();
+        _evalTimerInterval = setInterval(tick, 1000);
+    } else {
+        btn.textContent = st ? `⏱ Timer running on ${st.client}` : '⏱ Manual research';
+        btn.style.borderColor = '#333';
+        btn.style.color = '#555';
+    }
+}
+
+async function toggleEvalTimer() {
+    const st = _evalTimerState();
+    if (st && st.client === clientName) {
+        const sources = prompt('How many sources did you check? (optional)', '');
+        const body = {};
+        if (sources && !isNaN(parseInt(sources))) body.sources_checked = parseInt(sources);
+        const r = await fetch(`/api/eval/research-sessions/${st.id}/stop`, {
+            method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        localStorage.removeItem(EVAL_TIMER_KEY);
+        if (r.ok) {
+            const d = await r.json();
+            const mins = Math.round(d.duration_secs / 60 * 10) / 10;
+            alert(`Manual research recorded: ${mins} min for ${d.client_name}`);
+        }
+    } else if (st) {
+        alert(`A timer is already running on "${st.client}" — stop it there first.`);
+        return;
+    } else {
+        const r = await fetch('/api/eval/research-sessions/start', {
+            method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_name: clientName }),
+        });
+        if (!r.ok) { alert('Could not start timer'); return; }
+        const d = await r.json();
+        localStorage.setItem(EVAL_TIMER_KEY, JSON.stringify({ id: d.id, client: clientName, started: Date.now() }));
+    }
+    renderEvalTimer();
+}
+
+// ---- Monitored sources ----
+let _sources = [];
+
+function renderSources() {
+    const el = document.getElementById('sourcesList');
+    if (!el) return;
+    if (!_sources.length) {
+        el.innerHTML = '<span class="empty-state" style="padding:0.4rem 0;text-align:left">No sources monitored — click Discover</span>';
+        return;
+    }
+    el.innerHTML = _sources.map((s, i) => {
+        let host = s.url; try { host = new URL(s.url).hostname.replace(/^www\./, ''); } catch (_) {}
+        const changed = s.last_changed_at ? `changed ${String(s.last_changed_at).slice(0, 10)}` :
+                        (s.last_checked_at ? `checked ${String(s.last_checked_at).slice(0, 10)}` : 'not checked yet');
+        return `<div style="display:flex;align-items:center;gap:0.4rem;padding:0.25rem 0;border-bottom:1px solid var(--c-linefaint, #232323)">
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.url)}">
+              <a href="${esc(s.url)}" target="_blank" rel="noopener" style="color:var(--c-bluehi, #9cdcfe);font-size:0.74rem;text-decoration:none">${esc(s.label || host)}</a>
+            </span>
+            <span style="color:${s.last_changed_at ? '#4ec9b0' : '#555'};font-size:0.64rem;flex-shrink:0">${changed}</span>
+            <button data-idx="${i}" onclick="removeSource(this)" title="Stop monitoring" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:0.72rem;padding:0 0.15rem">✕</button>
+        </div>`;
+    }).join('');
+}
+
+async function saveSources() {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/sources`, {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sources: _sources.map(s => ({ url: s.url, label: s.label })) }),
+    });
+    if (r.ok) { _sources = (await r.json()).sources || []; renderSources(); }
+    else {
+        const err = await r.json().catch(() => ({}));
+        document.getElementById('sourcesStatus').textContent = err.detail || 'Save failed';
+    }
+}
+
+function addSource() {
+    const input = document.getElementById('newSourceUrl');
+    const url = (input.value || '').trim();
+    if (!url.startsWith('http')) { document.getElementById('sourcesStatus').textContent = 'Enter a full URL (https://…)'; return; }
+    if (_sources.length >= 6) { document.getElementById('sourcesStatus').textContent = 'Maximum 6 sources per client'; return; }
+    _sources.push({ url });
+    input.value = '';
+    document.getElementById('sourcesStatus').textContent = '';
+    saveSources();
+}
+
+function removeSource(btn) {
+    _sources.splice(parseInt(btn.dataset.idx, 10), 1);
+    saveSources();
+}
+
+async function discoverSources(btn) {
+    btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Searching…';
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/sources/discover`, {
+            method: 'POST', headers: authHeaders(),
+        });
+        if (r.ok) {
+            _sources = (await r.json()).sources || [];
+            renderSources();
+            document.getElementById('sourcesStatus').textContent = _sources.length ? '' : 'Nothing found — add a URL manually';
+        }
+    } finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+async function checkSources(btn) {
+    btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Checking…';
+    const statusEl = document.getElementById('sourcesStatus');
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/sources/check`, {
+            method: 'POST', headers: authHeaders(),
+        });
+        if (r.ok) {
+            const d = await r.json();
+            if (d.changed && d.changed.length) {
+                statusEl.textContent = `Changes: ${d.changed.join(', ')}` +
+                    (d.researched ? ' — research queued' : '') +
+                    (d.escalated ? ' + match re-analysis' : '') +
+                    (d.flagged ? ' — marked for manual research' : '');
+            } else {
+                statusEl.textContent = 'No changes since last check';
+            }
+            loadClient();   // refresh sources state + badge
+        }
+    } finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+// Open the match page scoped to this client with the mail modal pre-opened in
+// general (non-product) mode — the quickest path to a general outreach email.
+function emailClient() {
+    location.href = `/match?client=${encodeURIComponent(clientName)}&mail=general`;
+}
+
+async function runResearchNow(btn) {
+    btn.disabled = true; btn.textContent = 'Starting…';
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/trigger-research`, {
+        method: 'POST', headers: authHeaders(),
+    });
+    if (r.ok) { btn.textContent = 'Research queued ✓'; setTimeout(loadClient, 1500); }
+    else { btn.disabled = false; btn.textContent = 'Run research'; }
+}
+
+function editableRow(field, label, val, inputType) {
+    return `<div class="profile-row" id="prow-${field}">
+        ${label} <span id="val-${field}">${esc(val||'—')}</span>
+        <button class="edit-btn" onclick="startEdit('${field}','${esc(val)}','${inputType}')" title="Edit">✎</button>
+        <div id="edit-${field}" style="display:none;width:100%;margin-top:0.1rem"></div>
+    </div>`;
+}
+
+function startEdit(field, currentVal, inputType) {
+    const editDiv = document.getElementById('edit-'+field);
+    const valEl   = document.getElementById('val-'+field);
+    if (!editDiv) return;
+
+    let inputHtml;
+    if (inputType === 'select') {
+        const opts = ['active','prospect','inactive','churned'].map(o =>
+            `<option value="${o}"${o===currentVal?' selected':''}>${o}</option>`
+        ).join('');
+        inputHtml = `<select id="input-${field}">${opts}</select>`;
+    } else if (inputType === 'textarea') {
+        inputHtml = `<textarea id="input-${field}" rows="3" style="width:100%;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line3, #3a3a3a);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.25rem 0.4rem;font-size:0.76rem;resize:vertical">${esc(currentVal)}</textarea>`;
+    } else {
+        inputHtml = `<input id="input-${field}" type="text" value="${esc(currentVal)}">`;
+    }
+
+    editDiv.innerHTML = `<div class="inline-edit">
+        ${inputHtml}
+        <button class="save-btn" onclick="saveField('${field}')">Save</button>
+        <button class="edit-btn" style="font-size:0.8rem" onclick="cancelEdit('${field}')">✕</button>
+    </div>`;
+    editDiv.style.display = 'block';
+    if (valEl) valEl.style.display = 'none';
+    document.getElementById('input-'+field)?.focus();
+}
+
+function cancelEdit(field) {
+    const editDiv = document.getElementById('edit-'+field);
+    const valEl   = document.getElementById('val-'+field);
+    if (editDiv) editDiv.style.display = 'none';
+    if (valEl)   valEl.style.display = '';
+}
+
+async function coOwnClient() {
+    if (!_me) return;
+    const btn = document.getElementById('coOwnBtn');
+    btn.disabled = true; btn.textContent = 'Adding…';
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/owner`, {
+            method: 'POST', headers: authHeaders(),
+            body: JSON.stringify({ action: 'add_co_owner', user_id: _me.id }),
+        });
+        if (r.ok) { showToast(`✓ Added ${clientName} to your clients`); btn.style.display = 'none'; }
+        else { showToast('Could not add'); btn.disabled = false; btn.textContent = '+ Add to my clients'; }
+    } catch (_) { showToast('Could not add'); btn.disabled = false; btn.textContent = '+ Add to my clients'; }
+}
+
+async function toggleClientFocus() {
+    const btn = document.getElementById('focus-btn');
+    if (!btn) return;
+    const isActive = btn.textContent.includes('★');
+    const newVal = !isActive;
+    btn.textContent = newVal ? '★ My focus client' : '☆ Mark as focus';
+    btn.style.color = newVal ? '#f5c518' : '#555';
+    btn.style.borderColor = newVal ? '#f5c518' : '#333';
+    await fetch(`/api/clients/${encodeURIComponent(clientName)}`, {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ is_focus: newVal }),
+    });
+    showToast(newVal ? '★ Added to your focus clients' : 'Removed from your focus');
+}
+
+async function saveField(field) {
+    const input = document.getElementById('input-'+field);
+    if (!input) return;
+    const value = input.value;
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}`, {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ metadata: { [field]: value } }),
+    });
+    if (!r.ok) { showToast(`<span style="color:var(--c-red, #f14c4c)">Save failed</span>`); return; }
+    showToast(`✓ ${field.replace('_',' ')} saved`);
+    await loadClient();
+}
+
+// ── Contacts ──────────────────────────────────────────────────────────────
+async function loadContacts() {
+    const r = await fetch(`/api/people?client_name=${encodeURIComponent(clientName)}`, { headers: authHeaders() });
+    if (!r.ok) return;
+    const data = await r.json();
+    const contacts = data.contacts || [];
+    _contactsCount = contacts.length;
+    updateStats();
+    const el = document.getElementById('contactsList');
+    if (!contacts.length) { el.innerHTML = '<span style="color:var(--c-faint, #555);font-size:0.78rem;font-style:italic">No contacts</span>'; return; }
+    el.innerHTML = contacts.map(c => {
+        const m = safeMeta(c.metadata);
+        const initials = c.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+        const hasLinkedIn = !!(m.linkedin_url);
+        const enrichBtn = hasLinkedIn ? '' : `<button class="enrich-icon" title="Find LinkedIn" onclick="enrichOne(event,'${esc(c.name)}',this)">&#x1F50D;</button>`;
+        const liUrl = m.linkedin_url
+          || `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(c.name + ' ' + clientName)}`;
+        const liBtn = `<button class="enrich-icon" title="${hasLinkedIn ? 'Open LinkedIn profile' : 'Search on LinkedIn'}" onclick="event.preventDefault();event.stopPropagation();window.open('${esc(liUrl)}','_blank','noopener')">&#x1F517;</button>`;
+        return `<a href="/contact/${encodeURIComponent(c.name)}" class="contact-row" style="text-decoration:none">
+            <div class="contact-avatar">${initials}</div>
+            <div style="flex:1;min-width:0"><div class="contact-name">${esc(c.name)}</div><div class="contact-role">${esc(m.role||'')}</div></div>
+            ${liBtn}${enrichBtn}
+        </a>`;
+    }).join('');
+}
+
+// ── Add Contact manually ──────────────────────────────────────────────────
+function openAddContact() {
+    document.getElementById('acFirstName').value = '';
+    document.getElementById('acLastName').value = '';
+    document.getElementById('acRole').value = '';
+    document.getElementById('acEmail').value = '';
+    document.getElementById('acError').style.display = 'none';
+    document.getElementById('addContactOverlay').style.display = 'block';
+    setTimeout(() => document.getElementById('acFirstName').focus(), 50);
+}
+function closeAddContact() {
+    document.getElementById('addContactOverlay').style.display = 'none';
+}
+async function submitAddContact() {
+    const firstName = document.getElementById('acFirstName').value.trim();
+    const lastName  = document.getElementById('acLastName').value.trim();
+    const role      = document.getElementById('acRole').value.trim();
+    const email     = document.getElementById('acEmail').value.trim();
+    const errEl     = document.getElementById('acError');
+    if (!firstName) { errEl.textContent = 'First name is required.'; errEl.style.display = 'block'; return; }
+    const name = `${firstName} ${lastName}`.trim();
+    const btn = document.getElementById('acSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+        const metadata = {};
+        if (role)  metadata.role  = role;
+        if (email) metadata.email = email;
+        const r = await fetch('/api/contacts', {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, first_name: firstName, last_name: lastName, metadata, client: clientName }),
+        });
+        if (!r.ok) { const d = await r.json().catch(()=>{}); throw new Error(d?.detail || r.statusText); }
+        closeAddContact();
+        await loadContacts();
+        showToast(`Contact <strong>${esc(name)}</strong> added.`);
+    } catch(e) {
+        errEl.textContent = e.message || 'Failed to add contact.';
+        errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false; btn.textContent = 'Add Contact';
+    }
+}
+
+// ── CSV Contact Import ─────────────────────────────────────────────────────
+function openCsvImport() {
+    document.getElementById('csvFileInput').value = '';
+    document.getElementById('csvPreview').style.display = 'none';
+    document.getElementById('csvResult').style.display = 'none';
+    document.getElementById('csvImportBtn').disabled = true;
+    document.getElementById('csvImportOverlay').style.display = 'block';
+}
+function closeCsvImport() {
+    document.getElementById('csvImportOverlay').style.display = 'none';
+}
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('csvFileInput').addEventListener('change', function() {
+        const file = this.files[0];
+        const previewEl = document.getElementById('csvPreview');
+        const importBtn = document.getElementById('csvImportBtn');
+        if (!file) { previewEl.style.display = 'none'; importBtn.disabled = true; return; }
+        const reader = new FileReader();
+        reader.onload = e => {
+            const lines = e.target.result.split('\n').filter(l => l.trim());
+            const count = Math.max(0, lines.length - 1);
+            const header = lines[0] || '';
+            previewEl.innerHTML = `<strong style="color:var(--c-text3, #bbb)">${count} row${count!==1?'s':''} detected</strong><br><span style="color:var(--c-faint, #555)">Headers: ${esc(header)}</span>`;
+            previewEl.style.display = 'block';
+            importBtn.disabled = count === 0;
+        };
+        reader.readAsText(file);
+    });
+});
+async function submitCsvImport() {
+    const fileInput = document.getElementById('csvFileInput');
+    const file = fileInput.files[0];
+    if (!file) return;
+    const btn = document.getElementById('csvImportBtn');
+    const resultEl = document.getElementById('csvResult');
+    btn.disabled = true; btn.textContent = 'Importing…';
+    resultEl.style.display = 'none';
+    try {
+        const form = new FormData();
+        form.append('file', file);
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/contacts/import`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + authToken },
+            body: form,
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            const detail = d?.detail;
+            throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail) || r.statusText);
+        }
+        let html = `<span style="color:var(--c-accent, #4ec9b0)">&#x2714; ${d.imported} contact${d.imported!==1?'s':''} imported.</span>`;
+        if (d.errors && d.errors.length) {
+            html += `<div style="margin-top:0.4rem;color:var(--c-orange, #ce9178)">${d.errors.map(e=>esc(e)).join('<br>')}</div>`;
+        }
+        resultEl.innerHTML = html;
+        resultEl.style.display = 'block';
+        await loadContacts();
+        if (!d.errors || !d.errors.length) setTimeout(closeCsvImport, 1800);
+    } catch(e) {
+        resultEl.innerHTML = `<span style="color:var(--c-red, #f14c4c)">${esc(e.message || 'Import failed')}</span>`;
+        resultEl.style.display = 'block';
+    } finally {
+        btn.disabled = false; btn.textContent = 'Import';
+    }
+}
+
+// ── Signals ───────────────────────────────────────────────────────────────
+async function loadSignals() {
+    const r = await fetch(`/api/signals?client_name=${encodeURIComponent(clientName)}&days=60`, { headers: authHeaders() });
+    if (!r.ok) return;
+    const signals = (await r.json()).signals || [];
+    _signalsCount = signals.length;
+    updateStats();
+    if (!signals.length) return;
+    document.getElementById('signalsSection').style.display = 'block';
+    document.getElementById('signalsRow').innerHTML = signals.map(s => {
+        const meta = safeMeta(s.metadata);
+        const stype = meta.signal_type || 'news';
+        const url = meta.source_url || '';
+        const href = url || `/news?client=${encodeURIComponent(clientName)}`;
+        const target = url ? ' target="_blank" rel="noopener"' : '';
+        return `<a href="${esc(href)}"${target} class="signal-card ${esc(stype)}" style="text-decoration:none;display:block;cursor:pointer"
+                   title="${url ? 'Open source article ↗' : 'View in news'}">
+            <div class="signal-type">${esc(stype.replace('_',' '))}${url ? ' ↗' : ''}</div>
+            <div class="signal-headline">${esc(s.title||'')}</div>
+            ${meta.evidence ? `<div class="signal-evidence">${esc(String(meta.evidence).slice(0,120))}</div>` : ''}
+        </a>`;
+    }).join('');
+}
+
+// ── Brief ─────────────────────────────────────────────────────────────────
+async function loadBrief() {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/brief`, { headers: authHeaders() });
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.brief) {
+        showBrief(data.brief, data.generated_at);
+        document.getElementById('generateBtn').textContent = 'Regenerate Brief';
+    } else {
+        document.getElementById('briefMeta').textContent = 'Brief will be generated automatically after research completes';
+    }
+}
+
+async function _autoGenerateBrief() {
+    const btn = document.getElementById('generateBtn');
+    btn.textContent = 'Generating…'; btn.disabled = true;
+    document.getElementById('briefMeta').textContent = 'Generating…';
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/brief`, { method: 'POST', headers: authHeaders() });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        showBrief(data.brief, data.generated_at);
+        btn.textContent = 'Regenerate Brief';
+    } catch(e) {
+        document.getElementById('briefMeta').textContent = 'Generation failed';
+    } finally { btn.disabled = false; }
+}
+
+function processRenderedBrief(container) {
+    container.querySelectorAll('a').forEach(a => { a.setAttribute('target','_blank'); a.setAttribute('rel','noopener'); });
+    let inRefs = false;
+    for (const el of container.querySelectorAll('h2,h3,p,li')) {
+        if (el.tagName==='H2') { inRefs = el.textContent.trim().toLowerCase().includes('references'); continue; }
+        if (inRefs && (el.tagName==='P'||el.tagName==='LI')) {
+            const m = el.textContent.trim().match(/^\[(\d+)\]/);
+            if (m) { el.id=`ref-${m[1]}`; el.classList.add('ref-entry'); }
+        }
+    }
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    const toReplace = [];
+    let node;
+    while ((node=walker.nextNode())) {
+        if (!/\[\d+\]/.test(node.textContent)) continue;
+        const p = node.parentElement;
+        if (p && (p.tagName==='A' || p.id?.startsWith('ref-'))) continue;
+        toReplace.push(node);
+    }
+    for (const tn of toReplace) {
+        const frag = document.createDocumentFragment();
+        tn.textContent.split(/(\[\d+\])/).forEach(part => {
+            const m = part.match(/^\[(\d+)\]$/);
+            if (m) { const a=document.createElement('a'); a.href=`#ref-${m[1]}`; a.className='cite-link'; a.textContent=part; frag.appendChild(a); }
+            else frag.appendChild(document.createTextNode(part));
+        });
+        tn.parentElement.replaceChild(frag, tn);
+    }
+}
+
+function showBrief(content, generatedAt) {
+    document.getElementById('briefEmpty').style.display = 'none';
+    const el = document.getElementById('briefContent');
+    el.style.display = 'block';
+    el.innerHTML = marked.parse(content);
+    processRenderedBrief(el);
+    if (generatedAt) document.getElementById('briefMeta').textContent = `Generated ${String(generatedAt).slice(0,10)}`;
+}
+
+function generateBrief() { _autoGenerateBrief(); }
+
+// ── Findings (lazy) ───────────────────────────────────────────────────────
+async function loadFindings() {
+    _findingsLoaded = true;
+    const el = document.getElementById('findingsContent');
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/findings`, { headers: authHeaders() });
+    if (!r.ok) { el.innerHTML='<div class="empty-state">Could not load findings.</div>'; return; }
+    const findings = (await r.json()).findings || [];
+    _findingsCount = findings.length;
+    updateStats();
+    if (!findings.length) {
+        el.innerHTML='<div class="empty-state">No research findings yet.<br>Click <strong>Trigger Research</strong> to start gathering intelligence.</div>';
+        return;
+    }
+    el.innerHTML = `<div class="findings-grid">${findings.map(f => {
+        const meta = safeMeta(f.metadata);
+        const score = meta.relevance_score ?? meta.relevance ?? '?';
+        const srcUrl  = meta.source_url || '';
+        const srcType = meta.source_type || '';
+        const date    = fmtDate(meta.fetched_at||meta.date||f.created_at);
+        const preview = (f.content||'').slice(0,260);
+        const rest    = (f.content||'').length > 260;
+        const fid     = esc(f.doc_id||f.id);
+        return `<div class="finding-card">
+            <div class="finding-card-header">
+                <div class="rel-badge ${relClass(score)}">${score}</div>
+                <div class="finding-title">${esc(f.title||'')}</div>
+                <button class="dl-btn" style="margin-left:auto" data-doc-id="${esc(fid)}" data-title="${esc(f.title||'')}" onclick="event.stopPropagation();downloadDoc(this.dataset.docId,this.dataset.title)">&#8595; .md</button>
+            </div>
+            <div class="finding-meta">
+                ${date ? `<span class="finding-date">${date}</span>` : ''}
+                ${srcType ? `<span class="stype-badge">${esc(srcType)}</span>` : ''}
+                ${srcUrl  ? `<a class="source-chip" href="${esc(srcUrl)}" target="_blank" rel="noopener" title="${esc(srcUrl)}">${esc(srcUrl.replace(/^https?:\/\//,'').split('/')[0])}</a>` : ''}
+            </div>
+            ${preview ? `<div class="finding-preview">${esc(preview)}${rest?'…':''}</div>` : ''}
+            ${rest ? `<button class="expand-btn" id="ebtn-${fid}" onclick="toggleFinding('${fid}')">Show more</button>
+                      <div class="finding-full" id="ff-${fid}">${esc(f.content||'')}</div>` : ''}
+            <div style="margin-top:0.45rem;display:flex;gap:0.12rem;align-items:center;" title="Rate the quality of this finding (thesis evaluation)">
+                <span style="font-size:0.62rem;color:var(--c-faint, #555);margin-right:0.3rem;text-transform:uppercase;letter-spacing:0.05em;">Quality</span>
+                ${[1,2,3,4,5].map(n => `<span onclick="event.stopPropagation();rateFinding('${fid}',${n},this)"
+                    style="cursor:pointer;font-size:0.95rem;line-height:1;color:${n <= ((meta.feedback||{}).rating||0) ? '#f5c518' : '#3a3a3a'};">★</span>`).join('')}
+            </div>
+        </div>`;
+    }).join('')}</div>`;
+}
+
+async function rateFinding(docId, rating, el) {
+    try {
+        const r = await fetch(`/api/research/findings/${encodeURIComponent(docId)}/feedback`, {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rating }),
+        });
+        if (!r.ok) return;
+        const stars = [...el.parentElement.querySelectorAll('span')].slice(1);
+        stars.forEach((s, i) => { s.style.color = i < rating ? '#f5c518' : '#3a3a3a'; });
+    } catch (_) {}
+}
+
+function toggleFinding(fid) {
+    const panel = document.getElementById('ff-'+fid);
+    const btn   = document.getElementById('ebtn-'+fid);
+    if (!panel) return;
+    const open = panel.style.display === 'block';
+    panel.style.display = open ? 'none' : 'block';
+    if (btn) btn.textContent = open ? 'Show more' : 'Show less';
+}
+
+async function downloadDoc(docId, title) {
+    try {
+        const r = await fetch(`/api/documents/${encodeURIComponent(docId)}/download`, { headers: authHeaders() });
+        if (!r.ok) { alert('Download failed'); return; }
+        const blob = await r.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 80) + '.md';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Download error: ' + e.message);
+    }
+}
+
+// ── Documents tab (lazy) ──────────────────────────────────────────────────
+async function loadDocumentsTab() {
+    _docsLoaded = true;
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/docs`, { headers: authHeaders() });
+    if (!r.ok) { document.getElementById('documentsContent').innerHTML='<div class="empty-state">Could not load documents.</div>'; return; }
+    _allDocs = ((await r.json()).documents||[]).filter(d => d.type !== 'client_brief');
+    renderDocuments();
+}
+
+function setDocFilter(type, el) {
+    _docFilter = type;
+    document.querySelectorAll('.filter-chip').forEach(c => c.classList.toggle('active', c.dataset.type===type));
+    renderDocuments();
+}
+
+async function setOutreachStatus(docId, status, el) {
+    const r = await fetch(`/api/outreach/${docId}/status`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+    });
+    if (r.ok && el) el.style.color = status === 'generated' ? '#777' : '#4ec9b0';
+}
+
+function toggleAddDoc() {
+    const form = document.getElementById('addDocForm');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function saveNewDoc() {
+    const title = document.getElementById('addDocTitle').value.trim();
+    const type = document.getElementById('addDocType').value;
+    const content = document.getElementById('addDocContent').value.trim();
+    if (!title || !content) { alert('Title and content are required'); return; }
+    const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const r = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            doc_id: `${type}-${slug}-${Date.now()}`,
+            type, title, content,
+            metadata: { subject: clientName, research_method: type === 'interview' ? 'interview' : 'manual' },
+            client_links: [clientName],
+        }),
+    });
+    if (!r.ok) { alert('Could not save document'); return; }
+    document.getElementById('addDocTitle').value = '';
+    document.getElementById('addDocContent').value = '';
+    toggleAddDoc();
+    await loadClient();
+    switchTab('documents');
+}
+
+function renderDocuments() {
+    const docs = _docFilter==='all' ? _allDocs : _allDocs.filter(d => d.type===_docFilter);
+    const el = document.getElementById('documentsContent');
+    if (!docs.length) { el.innerHTML=`<div class="empty-state">No ${_docFilter==='all'?'':_docFilter+' '}documents.</div>`; return; }
+    el.innerHTML = docs.map(d => {
+        const meta  = safeMeta(d.metadata);
+        const date  = fmtDate(meta.date||meta.osint_date||d.created_at);
+        const srcUrl = meta.source_url||'';
+        const did   = esc(d.id||d.doc_id);
+        const slug  = esc(d.doc_id||d.id);
+        const isMail = meta.brief_type === 'mail_template';
+        const oStatus = meta.outreach_status || 'generated';
+        const outreachSel = isMail ? `<select onclick="event.stopPropagation()" onchange="setOutreachStatus(${d.id}, this.value, this)"
+                title="Outreach outcome (thesis evaluation)"
+                style="background:var(--c-bg2, #1a1a1a);border:1px solid var(--c-line, #2a2a2a);color:${oStatus==='generated'?'#777':'#4ec9b0'};border-radius:3px;font-size:0.66rem;padding:0.05rem 0.2rem;">
+                ${['generated','sent','replied','meeting'].map(s => `<option value="${s}" ${s===oStatus?'selected':''}>${s}</option>`).join('')}
+            </select>` : '';
+        return `<div>
+            <div class="doc-row" id="drow-${did}" onclick="toggleDoc('${did}','${slug}')">
+                <span class="doc-type-badge ${docTypeClass(d.type)}">${d.type}</span>
+                <div class="doc-row-info">
+                    <div class="doc-row-title" title="${esc(d.title)}">${esc(d.title)}</div>
+                    <div class="doc-row-sub">
+                        ${date ? `<span class="doc-row-date">${date}</span>` : ''}
+                        ${outreachSel}
+                        ${srcUrl ? `<a class="source-chip" href="${esc(srcUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${esc(srcUrl)}">${esc(srcUrl.replace(/^https?:\/\//,'').split('/')[0])}</a>` : ''}
+                    </div>
+                </div>
+                <button class="dl-btn" data-doc-id="${slug}" data-title="${esc(d.title||'')}" onclick="event.stopPropagation();downloadDoc(this.dataset.docId,this.dataset.title)">&#8595; .md</button>
+                <span class="doc-chevron">▸</span>
+            </div>
+            <div class="doc-panel" id="dpanel-${did}">
+                <div class="doc-body" id="dbody-${did}"><span class="doc-loading">Loading…</span></div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function toggleDoc(did, slug) {
+    const row   = document.getElementById('drow-'+did);
+    const panel = document.getElementById('dpanel-'+did);
+    const body  = document.getElementById('dbody-'+did);
+    if (!panel) return;
+    const isOpen = panel.classList.contains('open');
+
+    // Close all open panels
+    document.querySelectorAll('.doc-panel.open').forEach(p => {
+        p.classList.remove('open');
+        const id = p.id.replace('dpanel-','');
+        document.getElementById('drow-'+id)?.classList.remove('expanded');
+    });
+    if (isOpen) return;
+
+    panel.classList.add('open');
+    row.classList.add('expanded');
+
+    if (!body.dataset.loaded) {
+        body.innerHTML = '<span class="doc-loading">Loading…</span>';
+        try {
+            const r = await fetch(`/api/documents/${encodeURIComponent(slug||did)}`, { headers: authHeaders() });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const doc = await r.json();
+            body.dataset.loaded = '1';
+            body.innerHTML = marked.parse(doc.content||'_(No content)_');
+            body.querySelectorAll('a').forEach(a => { a.setAttribute('target','_blank'); a.setAttribute('rel','noopener'); });
+        } catch(e) {
+            body.innerHTML = `<span style="color:var(--c-red, #f14c4c);font-size:0.78rem">Failed: ${e.message}</span>`;
+        }
+    }
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────
+async function enrichOne(evt, contactName, btn) {
+    evt.preventDefault();
+    evt.stopPropagation();
+    btn.disabled = true;
+    btn.textContent = '⏳';
+    try {
+        const r = await fetch(`/api/contacts/${encodeURIComponent(contactName)}/enrich`, {
+            method: 'POST', headers: authHeaders(),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        showToast(`Searching LinkedIn for <strong>${esc(contactName)}</strong>…`, 5000);
+        const data = await r.json();
+        const runId = data.run_id;
+        const poll = setInterval(async () => {
+            try {
+                const sr = await fetch(`/api/agents/tasks/${runId}`, { headers: authHeaders() });
+                if (!sr.ok) return;
+                const run = await sr.json();
+                if (run.status === 'done' || run.status === 'failed') {
+                    clearInterval(poll);
+                    await loadContacts();
+                }
+            } catch {}
+        }, 4000);
+    } catch(e) {
+        btn.disabled = false;
+        btn.textContent = '🔍';
+        showToast(`<span style="color:var(--c-red, #f14c4c)">Enrich failed: ${e.message}</span>`);
+    }
+}
+
+const _ROLE_PRESETS = ['CISO', 'CIO / IT-Leitung', 'IT-Architekt', 'DevOps', 'Security', 'Einkauf / Procurement'];
+function openFindPeople() {
+    if (document.getElementById('fpOverlay')) return;
+    const ov = document.createElement('div');
+    ov.id = 'fpOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000';
+    ov.innerHTML = `
+      <div style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line3, #3a3a3a);border-radius:8px;padding:1.2rem;width:min(440px,92vw)">
+        <h3 style="margin:0 0 0.3rem">Find People at ${esc(clientName)}</h3>
+        <p style="color:var(--c-muted, #888);font-size:0.78rem;margin:0 0 0.8rem">Optionally target specific roles/personas — the agent will prioritise them. Leave blank to search broadly.</p>
+        <div id="fpChips" style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-bottom:0.6rem"></div>
+        <input id="fpRoles" type="text" placeholder="e.g. CISO, IT-Architekt, DevOps" style="width:100%;box-sizing:border-box;background:var(--c-ink, #111);border:1px solid var(--c-line2, #333);border-radius:5px;color:var(--c-text, #d4d4d4);padding:0.5rem 0.7rem;font-size:0.85rem;font-family:inherit">
+        <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem">
+          <button id="fpCancel" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-text3, #aaa);border-radius:5px;padding:0.4rem 0.9rem;cursor:pointer;font-size:0.82rem">Cancel</button>
+          <button id="fpGo" style="background:var(--c-accent, #4ec9b0);color:var(--c-ink, #111);font-weight:600;border:none;border-radius:5px;padding:0.4rem 1.1rem;cursor:pointer;font-size:0.82rem">&#x1F50D; Search</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    const input = ov.querySelector('#fpRoles');
+    const chips = ov.querySelector('#fpChips');
+    _ROLE_PRESETS.forEach(r => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.textContent = r;
+        b.style.cssText = 'background:var(--c-linefaint, #222);border:1px solid var(--c-line3, #3a3a3a);color:var(--c-text3, #bbb);border-radius:12px;padding:0.2rem 0.6rem;font-size:0.72rem;cursor:pointer';
+        b.onclick = () => { const cur = input.value.split(',').map(s => s.trim()).filter(Boolean); if (!cur.includes(r)) { cur.push(r); input.value = cur.join(', '); } input.focus(); };
+        chips.appendChild(b);
+    });
+    const close = () => ov.remove();
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    ov.querySelector('#fpCancel').onclick = close;
+    ov.querySelector('#fpGo').onclick = () => { const roles = input.value.trim(); close(); findPeople(roles); };
+    input.focus();
+}
+async function findPeople(targetRoles) {
+    const btn = document.getElementById('findPeopleBtn');
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span style="opacity:0.6">Searching…</span>';
+    btn.style.color = '#569cd6';
+    btn.style.borderColor = '#569cd6';
+    try {
+        const r = await fetch('/api/agents/find-people', {
+            method: 'POST', headers: authHeaders(),
+            body: JSON.stringify({ client_name: clientName, target_roles: targetRoles || null }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const rolesMsg = targetRoles ? ` (roles: ${esc(targetRoles)})` : '';
+        showToast(`People search started for <strong>${esc(clientName)}</strong>${rolesMsg} — contacts will appear when done. <a href="/agents">View in Agents →</a>`, 8000);
+    } catch(e) {
+        showToast(`<span style="color:var(--c-red, #f14c4c)">Failed: ${e.message}</span>`);
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        btn.style.color = '';
+        btn.style.borderColor = '';
+    }
+}
+
+async function triggerResearch() {
+    const btn = document.getElementById('researchBtn');
+    btn.disabled = true; btn.textContent = 'Starting…';
+    try {
+        const r = await fetch('/api/research/trigger', {
+            method: 'POST', headers: authHeaders(),
+            body: JSON.stringify({ subject: clientName, subject_type: 'company' }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        showToast(`🔬 Research started for <strong>${esc(clientName)}</strong> — <a href="/agents">View in Agents →</a>`, 6000);
+    } catch(e) {
+        showToast(`<span style="color:var(--c-red, #f14c4c)">Failed: ${e.message}</span>`);
+    } finally {
+        btn.disabled = false; btn.textContent = 'Trigger Research';
+    }
+}
+
+function openInChat() {
+    location.href = `/knowledge?client=${encodeURIComponent(clientName)}`;
+}
+
+// ── Latest Research ───────────────────────────────────────────────────────
+async function loadLatestResearch() {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/docs`, { headers: authHeaders() });
+    if (!r.ok) return;
+    const { documents = [] } = await r.json();
+    const relevant = documents
+        .filter(d => d.type === 'research' || d.type === 'osint')
+        .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+    if (!relevant.length) return;
+
+    const doc = relevant[0];
+    const preview = (doc.content || '').slice(0, 400);
+    const hasMore = doc.content && doc.content.length > 400;
+    const uid = 'lr-' + (doc.id || doc.doc_id);
+    const typeCls = doc.type === 'osint' ? 'lr-osint' : 'lr-research';
+
+    document.getElementById('latestResearchCard').innerHTML = `
+        <div class="lr-header">
+            <span class="lr-badge ${typeCls}">${esc(doc.type)}</span>
+            <span class="lr-title">${esc(doc.title || '')}</span>
+            <span class="lr-date">${fmtDate(doc.created_at)}</span>
+        </div>
+        <div class="lr-preview">${esc(preview)}${hasMore ? '…' : ''}</div>
+        ${hasMore ? `<button class="lr-expand-btn" onclick="toggleLR('${uid}')">Show full</button>` : ''}
+        <button class="btn" style="font-size:0.72rem;margin-top:0.4rem" onclick="switchTab('documents')">All research →</button>
+        ${hasMore ? `<div class="lr-full" id="${uid}">${esc(doc.content)}</div>` : ''}
+    `;
+    document.getElementById('latestResearchSection').style.display = 'block';
+}
+
+function toggleLR(uid) {
+    const el = document.getElementById(uid);
+    if (!el) return;
+    el.style.display = el.style.display === 'block' ? 'none' : 'block';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+async function init() {
+    const ok = await checkAuth();
+    if (!ok) return;
+    await Promise.all([loadClient(), loadContacts(), loadSignals(), loadBrief(), loadLatestResearch(), loadMatchSummary(), loadJobs()]);
+}
+
+// ── Open positions (jobs) → inferred needs → match ─────────────────────────
+function renderJobs(d) {
+    const link = document.getElementById('jobsCareersLink');
+    if (d.careers_url) { link.href = d.careers_url; link.style.display = ''; } else { link.style.display = 'none'; }
+    const body = document.getElementById('jobsBody');
+    const positions = d.positions || [];
+    const needs = d.inferred_needs || [];
+    if (!positions.length && !needs.length) {
+        body.innerHTML = '<span class="empty-state" style="padding:0.4rem 0;text-align:left">No open positions found yet — click Scan jobs.</span>';
+        return;
+    }
+    const needMap = {};
+    (d.needs_mapped || []).forEach(m => { needMap[(m.need||'').trim().toLowerCase()] = m.products || []; });
+    let html = '';
+    if (needs.length) {
+        html += `<div style="margin-bottom:0.7rem"><div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-muted2, #777);margin-bottom:0.4rem">Likely needs (from their hiring) → product fit</div>`;
+        html += needs.map(n => {
+            const prods = needMap[(n||'').trim().toLowerCase()] || [];
+            const why = prods.length
+                ? prods.map(p => `<div style="color:#9aa;font-size:0.7rem;margin:0.15rem 0 0 0.3rem">→ <a href="/match?client=${encodeURIComponent(clientName)}" style="color:var(--c-bluehi, #9cc7f0);text-decoration:none;font-weight:600">${esc(p.name)}</a> <span style="color:var(--c-muted, #888)">— ${esc(p.why)}</span></div>`).join('')
+                : `<div style="color:var(--c-muted2, #666);font-size:0.68rem;margin:0.1rem 0 0 0.3rem">no clear product match</div>`;
+            return `<div style="margin-bottom:0.5rem">
+                <span style="display:inline-block;background:#1e2a1e;border:1px solid #2e4a2e;color:#9ec99e;border-radius:4px;padding:0.18rem 0.5rem;font-size:0.74rem">${esc(n)}</span>
+                ${why}</div>`;
+        }).join('');
+        html += `</div>`;
+    }
+    if (positions.length) {
+        html += `<div style="font-size:0.66rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-muted2, #777);margin:0.3rem 0 0.35rem">${positions.length} open position${positions.length===1?'':'s'}</div>`;
+        html += `<div style="max-height:230px;overflow-y:auto;border:1px solid #242424;border-radius:5px">` +
+            positions.map(p => {
+                const extra = [p.team, p.location].filter(Boolean).join(' · ');
+                const summary = p.summary ? `<span style="color:#8fa3a0;font-size:0.72rem"> — ${esc(p.summary)}</span>` : '';
+                const sub = extra ? `<div style="color:#6a6a6a;font-size:0.66rem;margin-top:0.05rem">${esc(extra)}</div>` : '';
+                const arrow = p.url ? `<span style="color:var(--c-blue, #569cd6)"> ↗</span>` : '';
+                const titleLine = `<span style="color:#ddd">${esc(p.title)}</span>${summary}${arrow}`;
+                return p.url
+                    ? `<a href="${esc(p.url)}" target="_blank" rel="noopener" title="Open this posting ↗" style="display:block;padding:0.32rem 0.55rem;border-bottom:1px solid var(--c-linefaint, #222);font-size:0.8rem;text-decoration:none" onmouseover="this.style.background='#202022'" onmouseout="this.style.background='transparent'">${titleLine}${sub}</a>`
+                    : `<div style="padding:0.32rem 0.55rem;border-bottom:1px solid var(--c-linefaint, #222);font-size:0.8rem">${titleLine}${sub}</div>`;
+            }).join('') + `</div>`;
+    }
+    if (d.last_scanned) html += `<div style="color:var(--c-faint, #555);font-size:0.66rem;margin-top:0.5rem">Scanned ${new Date(d.last_scanned).toLocaleDateString()}</div>`;
+    body.innerHTML = html;
+}
+
+async function loadJobs() {
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/jobs`, { headers: authHeaders() });
+        if (r.ok) renderJobs(await r.json());
+    } catch (_) {}
+}
+
+async function _runJobScan(careersUrl) {
+    const btn = document.getElementById('scanJobsBtn');
+    btn.disabled = true; btn.textContent = 'Scanning…';
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/jobs/scan`, {
+            method: 'POST', headers: authHeaders(),
+            body: JSON.stringify(careersUrl ? { careers_url: careersUrl } : {}),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.found) {
+            showToast(d.careers_url ? 'No open positions found at that page' : 'No careers page found for this client');
+        } else {
+            showToast(`Found ${d.positions} position${d.positions===1?'':'s'} · ${d.needs} inferred need${d.needs===1?'':'s'}`);
+        }
+        await loadJobs();
+    } catch (_) { showToast('Scan failed'); }
+    btn.disabled = false; btn.textContent = 'Scan jobs';
+}
+function scanJobs() { return _runJobScan(''); }
+function setCareersUrl() {
+    const cur = document.getElementById('jobsCareersLink');
+    const prefill = (cur && cur.style.display !== 'none') ? cur.href : '';
+    const url = prompt('Careers / open-positions page URL for this client\n(paste the exact listing URL — useful for ATS pages auto-discovery can\'t read):', prefill);
+    if (url === null) return;
+    const trimmed = url.trim();
+    if (trimmed && !/^https?:\/\//.test(trimmed)) { showToast('Enter a full http(s) URL'); return; }
+    _runJobScan(trimmed);
+}
+
+// Inline per-product fit on the Overview tab — saves bouncing to /match for the basics.
+async function loadMatchSummary() {
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/match-summary`, { headers: authHeaders() });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!d.products || !d.products.length) return;
+        const fitColor = { 'Strong Fit': '#4ec9b0', 'Potential Fit': '#ce9178', 'Not a Fit': '#888' };
+        document.getElementById('matchSummaryLink').href = `/match?client=${encodeURIComponent(clientName)}`;
+        document.getElementById('matchSummaryCards').innerHTML = d.products.slice(0, 8).map(p => {
+            const col = fitColor[p.fit] || '#888';
+            return `<a href="/match?client=${encodeURIComponent(clientName)}" title="${esc(p.fit)}"
+                style="display:inline-flex;align-items:center;gap:0.45rem;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line, #2a2a2a);border-left:3px solid ${col};border-radius:5px;padding:0.32rem 0.6rem;margin:0 0.4rem 0.4rem 0;text-decoration:none;color:var(--c-text2, #ccc);font-size:0.78rem">
+                <span style="font-weight:600">${esc(p.product)}</span>
+                <span style="color:${col};font-size:0.72rem;white-space:nowrap">${esc(p.fit)} · ${p.score}/10</span></a>`;
+        }).join('');
+        document.getElementById('matchSummarySection').style.display = '';
+    } catch (_) {}
+}
+
+init();
+
+// ── Meeting Prep ───────────────────────────────────────────────────────────
+let _currentBriefContent = '';
+let _mpChatHistory = [];
+
+async function openMeetingPrep() {
+    document.getElementById('mpOverlay').style.display = 'block';
+    document.getElementById('mpMeta').textContent = 'Loading…';
+    document.getElementById('mpBody').style.display = 'none';
+    document.getElementById('mpEmpty').style.display = 'none';
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/meeting-prep`, { headers: authHeaders() });
+        if (r.ok) {
+            const data = await r.json();
+            if (data.brief) {
+                showMeetingPrep(data.brief, data.generated_at);
+                document.getElementById('mpGenerateBtn').textContent = 'Regenerate';
+                return;
+            }
+        }
+    } catch(_) {}
+    document.getElementById('mpMeta').textContent = 'No prep yet. Click Generate to create one.';
+    document.getElementById('mpEmpty').style.display = 'block';
+    document.getElementById('mpGenerateBtn').textContent = 'Generate';
+}
+
+function closeMeetingPrep() {
+    document.getElementById('mpOverlay').style.display = 'none';
+    _currentBriefContent = '';
+    _mpChatHistory = [];
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const chatInput = document.getElementById('mpChatInput');
+    if (chatInput) {
+        chatInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMpChat(); }
+        });
+    }
+    try { localStorage.setItem('wk_last_client', clientName); } catch (_) {}
+    if (location.hash === '#findings') switchTab('findings');
+    else if (location.hash === '#documents') switchTab('documents');
+    else {
+        // Restore the tab we were last on for this client (nav-state persistence).
+        try {
+            const last = localStorage.getItem('wk_last_tab_' + clientName);
+            if (last && last !== 'overview') switchTab(last);
+        } catch (_) {}
+    }
+});
+
+async function generateMeetingPrep() {
+    const btn = document.getElementById('mpGenerateBtn');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    document.getElementById('mpMeta').textContent = 'Generating meeting brief — this may take a minute…';
+    document.getElementById('mpBody').style.display = 'none';
+    document.getElementById('mpEmpty').style.display = 'none';
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/meeting-prep`, {
+            method: 'POST', headers: authHeaders(),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        showMeetingPrep(data.brief, data.generated_at);
+        btn.textContent = 'Regenerate';
+    } catch(e) {
+        document.getElementById('mpMeta').textContent = 'Generation failed. Try again.';
+        document.getElementById('mpEmpty').style.display = 'block';
+        document.getElementById('mpEmpty').textContent = 'Generation failed.';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function showMeetingPrep(content, generatedAt) {
+    _currentBriefContent = content || '';
+    document.getElementById('mpEmpty').style.display = 'none';
+    const el = document.getElementById('mpBody');
+    el.style.display = 'block';
+    el.innerHTML = typeof marked !== 'undefined' ? marked.parse(content) : content.replace(/\n/g, '<br>');
+    el.querySelectorAll('a').forEach(a => { a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener'); });
+    if (generatedAt) document.getElementById('mpMeta').textContent = `Generated ${String(generatedAt).slice(0, 10)}`;
+    document.getElementById('mpChatHistory').innerHTML = '';
+}
+
+function downloadBrief() {
+    if (!_currentBriefContent) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const filename = `meeting-prep-${slug}-${today}.md`;
+    const blob = new Blob([_currentBriefContent], { type: 'text/markdown' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+async function sendMpChat() {
+    const input = document.getElementById('mpChatInput');
+    const question = input.value.trim();
+    if (!question) return;
+    const btn = document.getElementById('mpChatSendBtn');
+    btn.disabled = true; btn.textContent = '…';
+    input.disabled = true;
+
+    const history = document.getElementById('mpChatHistory');
+    const qEl = document.createElement('div');
+    qEl.className = 'mp-chat-q';
+    qEl.textContent = `Q: ${question}`;
+    history.appendChild(qEl);
+    input.value = '';
+
+    _mpChatHistory.push({ role: 'user', content: question });
+
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/meeting-prep/chat`, {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, brief: _currentBriefContent, history: _mpChatHistory.slice(-6) }),
+        });
+        const data = await r.json();
+        _mpChatHistory.push({ role: 'assistant', content: data.answer || '' });
+        const aEl = document.createElement('div');
+        aEl.className = 'mp-chat-a';
+        aEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(data.answer || 'No answer.') : (data.answer || 'No answer.').replace(/\n/g, '<br>');
+        history.appendChild(aEl);
+        if (data.sources && data.sources.length > 0) {
+            const srcEl = document.createElement('div');
+            srcEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.4rem;';
+            data.sources.forEach(s => {
+                const badge = document.createElement('span');
+                const typeColors = { finding: '#569cd6', signal: '#4ec9b0', research: '#ce9178', osint: '#9cdcfe', meeting: '#888', default: '#666' };
+                const col = typeColors[s.type] || typeColors.default;
+                badge.style.cssText = `font-size:0.68rem;padding:0.1rem 0.4rem;border-radius:3px;border:1px solid ${col};color:${col};white-space:nowrap;`;
+                badge.textContent = s.title ? s.title.slice(0, 35) : s.type;
+                if (s.source_url) { badge.style.cursor = 'pointer'; badge.title = s.source_url; badge.onclick = () => window.open(s.source_url, '_blank'); }
+                srcEl.appendChild(badge);
+            });
+            history.appendChild(srcEl);
+        }
+        history.scrollTop = history.scrollHeight;
+    } catch(e) {
+        const aEl = document.createElement('div');
+        aEl.className = 'mp-chat-a';
+        aEl.style.color = '#f14c4c';
+        aEl.textContent = 'Failed to get answer. Try again.';
+        history.appendChild(aEl);
+    } finally {
+        btn.disabled = false; btn.textContent = 'Ask';
+        input.disabled = false; input.focus();
+    }
+}
+</script>
+
+<div class="mp-overlay" id="addContactOverlay" style="display:none" onclick="if(event.target===this)closeAddContact()">
+  <div class="mp-box" style="max-width:380px" onclick="event.stopPropagation()">
+    <div class="mp-header">
+      <span class="mp-title">Add Contact</span>
+      <button class="mp-close" onclick="closeAddContact()">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.6rem">
+      <div style="display:flex;gap:0.5rem">
+        <div style="flex:1">
+          <label style="font-size:0.72rem;color:var(--c-muted, #888);display:block;margin-bottom:0.25rem">First Name <span style="color:var(--c-red, #f14c4c)">*</span></label>
+          <input id="acFirstName" placeholder="First name" maxlength="80" style="width:100%;box-sizing:border-box;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.4rem 0.65rem;font-size:0.82rem;font-family:inherit">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:0.72rem;color:var(--c-muted, #888);display:block;margin-bottom:0.25rem">Last Name</label>
+          <input id="acLastName" placeholder="Last name" maxlength="80" style="width:100%;box-sizing:border-box;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.4rem 0.65rem;font-size:0.82rem;font-family:inherit">
+        </div>
+      </div>
+      <div>
+        <label style="font-size:0.72rem;color:var(--c-muted, #888);display:block;margin-bottom:0.25rem">Role</label>
+        <input id="acRole" placeholder="e.g. Head of Sales" maxlength="120" style="width:100%;box-sizing:border-box;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.4rem 0.65rem;font-size:0.82rem;font-family:inherit">
+      </div>
+      <div>
+        <label style="font-size:0.72rem;color:var(--c-muted, #888);display:block;margin-bottom:0.25rem">Email</label>
+        <input id="acEmail" type="email" placeholder="name@company.com" maxlength="200" style="width:100%;box-sizing:border-box;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.4rem 0.65rem;font-size:0.82rem;font-family:inherit">
+      </div>
+    </div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.4rem">
+      <button class="btn" onclick="closeAddContact()">Cancel</button>
+      <button class="btn btn-teal" id="acSubmitBtn" onclick="submitAddContact()">Add Contact</button>
+    </div>
+    <div id="acError" style="font-size:0.75rem;color:var(--c-red, #f14c4c);display:none"></div>
+  </div>
+</div>
+
+<div class="mp-overlay" id="csvImportOverlay" style="display:none" onclick="if(event.target===this)closeCsvImport()">
+  <div class="mp-box" style="max-width:420px" onclick="event.stopPropagation()">
+    <div class="mp-header">
+      <span class="mp-title">Import Contacts from CSV</span>
+      <button class="mp-close" onclick="closeCsvImport()">✕</button>
+    </div>
+    <div style="font-size:0.73rem;color:var(--c-muted2, #666);line-height:1.6">
+      Expected columns (any order, case-insensitive):<br>
+      <code style="color:var(--c-bluehi, #9cdcfe)">name</code> or <code style="color:var(--c-bluehi, #9cdcfe)">first_name</code> + <code style="color:var(--c-bluehi, #9cdcfe)">last_name</code> &nbsp;·&nbsp;
+      <code style="color:var(--c-bluehi, #9cdcfe)">email</code> &nbsp;·&nbsp;
+      <code style="color:var(--c-bluehi, #9cdcfe)">role</code> (optional)
+    </div>
+    <div>
+      <label style="font-size:0.72rem;color:var(--c-muted, #888);display:block;margin-bottom:0.25rem">CSV file</label>
+      <input id="csvFileInput" type="file" accept=".csv" style="font-size:0.8rem;color:var(--c-text3, #bbb);width:100%">
+    </div>
+    <div id="csvPreview" style="display:none;background:var(--c-bg, #1e1e1e);border-radius:4px;padding:0.6rem 0.75rem;font-size:0.73rem;color:var(--c-muted, #888);max-height:140px;overflow-y:auto"></div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+      <button class="btn" onclick="closeCsvImport()">Cancel</button>
+      <button class="btn btn-teal" id="csvImportBtn" onclick="submitCsvImport()" disabled>Import</button>
+    </div>
+    <div id="csvResult" style="display:none;font-size:0.78rem"></div>
+  </div>
+</div>
+
+<div class="mp-overlay" id="mpOverlay" style="display:none">
+  <div class="mp-box">
+    <div class="mp-header">
+      <span class="mp-title">Meeting Preparation Brief</span>
+      <button class="mp-close" onclick="closeMeetingPrep()">✕</button>
+    </div>
+    <div id="mpMeta" class="mp-meta"></div>
+    <div id="mpBody" class="mp-rendered" style="display:none"></div>
+    <div id="mpEmpty" style="font-size:0.82rem;color:var(--c-faint, #555);display:none">No prep yet. Click Generate to create one.</div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+      <button class="btn btn-teal" id="mpGenerateBtn" onclick="generateMeetingPrep()">Generate</button>
+      <button class="btn" id="mpDownloadBtn" onclick="downloadBrief()">⬇ Download</button>
+      <button class="btn" onclick="closeMeetingPrep()">Close</button>
+    </div>
+    <div class="mp-chat-section" id="mpChatSection">
+      <div class="mp-chat-label">Ask a question about this brief</div>
+      <div class="mp-chat-history" id="mpChatHistory"></div>
+      <div class="mp-chat-input-row">
+        <input class="mp-chat-input" id="mpChatInput" placeholder="E.g. What are the biggest risks? What should I avoid?" maxlength="500">
+        <button class="btn btn-teal" id="mpChatSendBtn" onclick="sendMpChat()">Ask</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

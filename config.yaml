@@ -1,0 +1,257 @@
+model: large-v2        # WhisperX model size for file transcription (tiny, base, small, medium, large-v2)
+live_model: base       # faster-whisper model for live mic transcription (tiny or base recommended)
+language: en           # auto-detect, or force "en" / "de"
+compute_type: int8     # int8 for CPU/Apple Silicon; float16 for CUDA
+
+# Speaker diarization — requires a HuggingFace token
+# 1. Create an account at huggingface.co
+# 2. Accept terms at huggingface.co/pyannote/speaker-diarization-3.1
+# 3. Accept terms at huggingface.co/pyannote/segmentation-3.0
+# 4. Generate a token at huggingface.co/settings/tokens and paste it below
+hf_token: ""
+
+# AI summarization — used for streaming summary during live transcription only.
+# All other reasoning/generation uses the configured brain (openrouter/claude).
+ollama_model: qwen3.5
+
+# Pipeline brain — used for session summarization and entity extraction
+# ollama = local Ollama (default, private, requires ollama serve)
+# openrouter = any cloud model via openrouter.ai (good for ThinkCentre where Ollama may be absent)
+# claude = Anthropic API (requires anthropic_api_key)
+pipeline_brain: openrouter
+pipeline_model: deepseek/deepseek-v4-flash   # model name for the chosen brain (Ollama model name or OpenRouter model ID)
+
+# PostgreSQL + pgvector — hybrid search layer
+# Start DB with: docker compose up -d
+db_url: "postgresql://whisper:whisper@localhost:5432/whisper"
+db_pool_min: 2
+db_pool_max: 20
+executor_workers: 8     # ThreadPoolExecutor size (transcription, vault writes)
+
+# Embeddings — power the vector half of hybrid search.
+# embed_backend: openai = any OpenAI-compatible API (openrouter.ai/api, api.openai.com, ...)
+#                ollama = local Ollama /api/embeddings (self-host variant)
+# embed_url is the API base WITHOUT /v1 (openai backend) or the Ollama base URL.
+# Key: with OpenRouter the existing OPENROUTE/.env key is reused automatically;
+#      for other providers set EMBED_API_KEY in .env (preferred) or embed_api_key here.
+# Vectors longer than embed_dim are truncated + renormalized client-side, so use
+# MRL-trained models only (text-embedding-3-*, qwen3-embedding, jina v3).
+# NOTE: switching backend/model changes the vector space — run
+#   python scripts/backfill_embeddings.py --all
+# afterwards or old and new vectors will not match in search.
+embed_backend: openai
+embed_url: "https://openrouter.ai/api"
+embed_api_key: ""
+embed_model: openai/text-embedding-3-small   # $0.02/1M tok via OpenRouter; truncated to 768 dims
+embed_dim: 768
+
+# ---------------------------------------------------------------------------
+# LLM provider layer (llm.py) — the single seam all chat/completion calls use.
+# Two adapter kinds cover every provider:
+#   openai-compat  → OpenAI, OpenRouter, Ollama (base_url .../v1), LM Studio,
+#                    vLLM, LiteLLM — any OpenAI-compatible endpoint
+#   anthropic      → Anthropic API (requires `pip install anthropic`)
+# api_key_env names an env var; api_key is an inline value (env wins when set).
+# Local servers (Ollama/LM Studio) need a non-empty dummy api_key like "local".
+# When this block is removed, the legacy *_brain/*_model keys below are
+# synthesized into the same structure automatically (backward compatible).
+# ---------------------------------------------------------------------------
+llm:
+  providers:
+    openrouter:
+      kind: openai-compat
+      base_url: https://openrouter.ai/api/v1
+      api_key_env: OPENROUTER_API_KEY
+    anthropic:
+      kind: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+    ollama:
+      kind: openai-compat
+      base_url: http://localhost:11434/v1
+      api_key: local
+    # lmstudio:
+    #   kind: openai-compat
+    #   base_url: http://localhost:1234/v1
+    #   api_key: local
+  roles:
+    default:  {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    research: {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    pipeline: {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    chat:     {provider: openrouter, model: deepseek/deepseek-v4-pro}
+    match:    {provider: openrouter, model: deepseek/deepseek-v4-pro}
+    summary:  {provider: ollama,     model: qwen3.5}
+    triage:   {provider: openrouter, model: deepseek/deepseek-v4-flash}
+
+# Subscription logins (ChatGPT-Codex / GitHub Copilot flows in the Pi service).
+# GRAY ZONE: neither vendor officially sanctions these for third-party apps
+# without a whitelist; Anthropic's flow is banned outright and never offered.
+# Enable only after reviewing the providers' terms of service.
+llm_oauth_gray_flows: false
+
+# Agent runtime (legacy keys — still honored as fallback when llm: is absent)
+agent_brain: openrouter  # ollama | claude | openrouter — used for enrichment/org agents
+agent_model: deepseek/deepseek-v4-flash  # model for enrichment/org agents
+
+# Research brain — used for research, OSINT, and deep research tasks (public web data, cloud is fine)
+research_brain: openrouter                          # ollama | claude | openrouter
+research_model: deepseek/deepseek-v4-flash          # OpenRouter model ID (or Ollama model name)
+# Good alternatives: meta-llama/llama-3.3-70b-instruct, openai/gpt-4o-mini, google/gemini-flash-1.5
+
+anthropic_api_key: ""    # required only if agent_brain or research_brain: claude
+openrouter_api_key: ""   # required only if agent_brain or research_brain: openrouter (get key at openrouter.ai)
+
+# Match page — proactive product-client matching
+match_brain: openrouter
+match_research_model: deepseek/deepseek-v4-flash  # Stage 1: pain-point web research (Pi)
+match_model: deepseek/deepseek-v4-pro             # Stage 2: Pi match synthesis (reasoning)
+match_watchdog_timeout_secs: 1800  # 30 min absolute cap for match runs
+
+# Cloud model options (used by match page and other UI model selectors)
+cloud_models:
+  - id: deepseek/deepseek-v4-flash
+    label: "DeepSeek V4 Flash (fast)"
+  - id: deepseek/deepseek-v4-pro
+    label: "DeepSeek V4 Pro (best reasoning)"
+  - id: minimax/minimax-m2.7
+    label: "MiniMax M2.7"
+  - id: z-ai/glm-5.1
+    label: "GLM-5.1"
+  - id: qwen/qwen3.6-plus
+    label: "Qwen3.6 Plus"
+
+# Agent service — Pi handles all agent types
+# Start with: docker compose --profile research up -d
+agent_service_url_pi:     "http://localhost:8001"   # Pi: all agent types
+agent_service_url:        "http://localhost:8001"   # legacy fallback (single-backend mode)
+agent_service_token: ""             # shared secret for internal auth (set same value in Docker env)
+agent_service_brain: openrouter          # default brain
+agent_service_model: "deepseek/deepseek-v4-flash"
+# Pi chat backend — used by the knowledge page chat interface (Pi agent Q&A over the KB)
+# v4-pro: v4-flash proved weak at multi-step tool calling (Session 80); chat
+# quality drives evaluation UX and chat volume is low, so the cost delta is cents.
+pi_chat_brain: openrouter
+pi_chat_model: deepseek/deepseek-v4-pro
+# Backend routing: "pi" | "python" (Hermes retired in Phase 29)
+agent_service_backend: "pi"
+# URL the main server is reachable at from inside Docker containers (for callbacks)
+server_url: "http://host.docker.internal:8000"
+# Public base URL of this deployment (used in outbound links, e.g. rep digest
+# emails). Leave empty when the instance is not publicly reachable — links then
+# fall back to server_url or relative paths.
+public_url: ""
+
+# Context windows (num_ctx sent to Ollama on every call)
+# qwen3.5 native max: 32768. Default Ollama value is only 2048 — far too small.
+# 24 GB Apple Silicon: 16384 costs ~2.4 GB KV cache; 32768 costs ~4.8 GB.
+agent_num_ctx: 16384          # leaf agents: enrichment, research, osint
+orchestrator_num_ctx: 32768   # orchestrator (think=True) needs headroom for reasoning tokens
+
+# Transcription mode
+# local = browser mic → faster-whisper on server (default)
+# app   = buzzowl-mac sends POST /api/transcript/ingest; server does no Whisper inference
+transcription_mode: app
+
+# Pipeline gate
+pipeline_sweep_interval_min: 10  # how often the agent sweep scans for unprocessed sessions
+org_agent_enabled: false          # set true to re-enable daily cron + post-research auto-trigger
+
+# Heartbeat throttling — research/osint/match heartbeats no longer hit every client.
+# Focus clients (★ on the client page) are monitored on schedule; for osint runs a
+# no-LLM SearXNG news fingerprint skips clients whose news picture hasn't changed.
+# Non-focus clients get a small trickle: only the stalest ones, a few per run.
+heartbeat_stale_days: 14            # non-focus client is eligible when newest doc is older
+heartbeat_max_nonfocus_per_run: 3   # max stale non-focus clients per heartbeat run
+news_change_detection: true         # SearXNG fingerprint gate for osint-type heartbeats
+source_rediscover_days: 7           # sweep retries source discovery for source-less clients
+# Source monitor (daily sweep over ALL clients' monitored news/press pages):
+# focus clients with changes get an automatic news-OSINT run; if the agent then
+# scores any signal at/above this relevance (1-5), the match analysis re-runs
+# (agent-decided escalation). 0 disables escalation.
+match_escalation_min_relevance: 4
+
+# Research-QA reviewer heartbeat — samples recent agent-written research and flags
+# quality problems with deterministic heuristics (no LLM). A client's synthesis doc
+# (research / brief / client_brief) is flagged 'stale' when it predates that client's
+# newest finding by more than research_qa_stale_days. Cross-client contamination and
+# missing-sources checks scan the doc content directly.
+research_qa_stale_days: 10          # synthesis older than newest finding by > N days → stale
+research_qa_sample_size: 200        # max recent agent research/brief docs scanned per run
+
+# Bulk/multi mail generation — concurrent LLM calls per job. Lower = gentler on
+# OpenRouter rate limits (the >10-client stability lever). _call_brain_sync retries
+# transient 429/5xx/timeout with backoff, so a small number here is the safe default.
+mail_concurrency: 4
+
+# Next-best-action queue (/today page + home panel)
+# Daily ranked "who to contact today and why" list. Ranking is deterministic
+# (weights below); the LLM only writes the reason prose on top of scored facts.
+nba_signal_days: 7          # fresh-signal window
+nba_queue_size: 10          # entries in full queue = LLM batch size
+nba_followup_days: 5        # sent-no-reply threshold for "follow up"
+nba_snapshot_ttl_hours: 24  # GET recomputes inline if snapshot older
+nba_weights:
+  signal_relevance: 3       # x relevance_score (1-5), per fresh signal (top 3 per client)
+  signal_type_bonus: { pain_point: 2, opportunity: 2, risk: 1, news: 0 }
+  news_pending: 12
+  outreach_draft: 10
+  outreach_followup: 14
+  recent_outreach: -6       # damper: mailed < nba_followup_days ago
+  stale_per_two_weeks: 1
+  stale_cap: 4
+  focus_multiplier: 1.5
+
+# Web search
+# SearXNG (primary): self-hosted metasearch engine — docker compose up -d starts it at :8080
+# DuckDuckGo (fallback): used automatically when SearXNG is unreachable, no key needed
+searxng_url: "http://localhost:8080"
+
+# Deep Research Engine (Phase 7)
+research_max_depth: 3             # maximum child task depth (root orchestrate = 0)
+research_workers: 4               # concurrent asyncio worker tasks in research_runner
+research_interest_threshold: 4    # minimum relevance score (1-5) to spawn child search tasks
+
+# Model benchmark (scripts/research_benchmark.py)
+# brain: ollama | claude | openrouter   model: Ollama model name or OpenRouter model ID
+benchmark_models:
+  # Local models (Ollama)
+  - brain: ollama
+    model: qwen3.5
+    label: "ollama/qwen3.5"
+  - brain: ollama
+    model: llama3.2
+    label: "ollama/llama3.2"
+  - brain: ollama
+    model: gemma4
+    label: "ollama/gemma4"
+  # Cloud models via OpenRouter (requires OPENROUTER_API_KEY or OPENROUTE in .env)
+  - brain: openrouter
+    model: minimax/minimax-m2.7
+    label: "openrouter/minimax-m2.7"
+  - brain: openrouter
+    model: deepseek/deepseek-v4-flash
+    label: "openrouter/deepseek-v4-flash"
+  - brain: openrouter
+    model: openai/gpt-5.4-nano
+    label: "openrouter/gpt-5.4-nano"
+
+# MCP tool servers (consumed by internal agents and Claude Code as MCP client)
+mcp_servers:
+  searxng:
+    url: "http://localhost:8080"           # local SearXNG instance (primary search)
+  web_search:
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    env:
+      BRAVE_API_KEY: ""                    # optional — leave blank to rely on SearXNG
+
+# SMTP — outbound email for per-rep client digests (Insights → Rep digests).
+# Admin-triggered send only. Leave blank to disable (digests are still generated
+# for review; the admin gets a Telegram reminder). Prefer the SMTP_* env vars in
+# .env over committing credentials here.
+smtp_host: ""        # e.g. smtp.your-domain.de   (SMTP_HOST)
+smtp_port: 587       # 587 STARTTLS, 465 SSL       (SMTP_PORT)
+smtp_user: ""        # SMTP username               (SMTP_USER)
+smtp_pass: ""        # SMTP password               (SMTP_PASS)
+smtp_from: ""        # From address, e.g. noreply@your-domain.de  (SMTP_FROM)
+smtp_from_name: "Buzzowl"   # From display name  (SMTP_FROM_NAME)
+digest_auto_send: false   # when true, the rep_digest heartbeat emails reps automatically (default: admin sends manually)

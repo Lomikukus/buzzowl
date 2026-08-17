@@ -1,0 +1,97 @@
+use_default_settings: true
+
+server:
+  # secret_key is intentionally NOT set here — the SearXNG image reads it from the
+  # SEARXNG_SECRET env var (set in docker-compose.yml, override via .env with
+  # `openssl rand -hex 32`). SearXNG refuses to start on its built-in
+  # "ultrasecretkey" default, so compose always supplies a value.
+  bind_address: "0.0.0.0:8080"
+  base_url: "http://localhost:8080/"
+
+search:
+  formats:
+    - html
+    - json
+  default_lang: en
+  # How long (seconds) a failed engine is banned before being retried.
+  # Low values mean suspended engines recover quickly within a run.
+  ban_time_on_fail: 10
+  max_ban_time_on_fail: 120
+
+outgoing:
+  request_timeout: 15.0
+  max_request_timeout: 20.0
+  # http2 causes protocol errors with yahoo and some other engines
+  enable_http2: false
+
+engines:
+  # --- Independent indexes (most reliable, no CAPTCHA/rate-limit issues) ---
+  - name: mojeek
+    engine: mojeek
+    shortcut: mj
+    disabled: false
+    timeout: 12.0
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: false
+    timeout: 12.0
+
+  # --- Large commercial indexes (good coverage, occasional rate limits) ---
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
+    timeout: 12.0
+
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+    timeout: 15.0
+
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    disabled: false
+    timeout: 12.0
+
+  # --- Previously suspended engines (keep enabled — recover when ban expires) ---
+  - name: brave
+    engine: brave
+    shortcut: bv
+    disabled: false
+    timeout: 12.0
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    timeout: 12.0
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: false
+    timeout: 12.0
+
+  # --- Always-reliable reference sources ---
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+    timeout: 10.0
+
+  # --- News-specific engines (feeds Phase 6.5 news search angle) ---
+  - name: bing news
+    engine: bing_news
+    shortcut: bin
+    disabled: false
+    timeout: 12.0
+
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    disabled: false
+    timeout: 12.0

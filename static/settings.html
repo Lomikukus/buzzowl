@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; padding: 1.5rem 2rem; max-width: 860px; }
+
+h2 { font-size: 1rem; font-weight: 600; color: var(--c-text, #d4d4d4); margin-bottom: 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+.section { margin-bottom: 2.5rem; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+th { text-align: left; color: var(--c-faint, #555); font-weight: 500; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0.6rem 0.5rem; }
+td { padding: 0.55rem 0.6rem; border-top: 1px solid var(--c-bg2, #1a1a1a); vertical-align: middle; }
+tr:hover td { background: var(--c-linefaint, #222); }
+
+/* Role badge */
+.role-badge { display: inline-block; font-size: 0.65rem; font-weight: 600; padding: 0.1rem 0.45rem; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+.role-badge.admin { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.role-badge.member { background: #1e2a3a; color: var(--c-blue, #569cd6); }
+
+/* Status badge for invites */
+.status-badge { display: inline-block; font-size: 0.65rem; font-weight: 600; padding: 0.1rem 0.45rem; border-radius: 3px; text-transform: uppercase; }
+.status-badge.pending { background: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.status-badge.used    { background: var(--c-bg, #1e1e1e); color: var(--c-faint, #555); border: 1px solid var(--c-line2, #333); }
+.status-badge.expired { background: #2a1e1e; color: var(--c-orange, #ce9178); }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.7rem; border-radius: 4px; border: 1px solid var(--c-line2, #333); background: transparent; color: var(--c-text, #d4d4d4); font-size: 0.78rem; cursor: pointer; transition: background 0.15s; }
+.btn:hover { background: var(--c-line, #2a2a2a); }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn.danger { border-color: #5a1e1e; color: var(--c-red, #f14c4c); }
+.btn.danger:hover { background: #2a1515; }
+.btn.primary { border-color: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); background: #0d2a1e; }
+.btn.primary:hover { background: var(--c-accenttint, #1a3a2e); }
+.btn-row { display: flex; gap: 0.4rem; }
+
+/* Generate form */
+.gen-form { display: flex; flex-direction: column; gap: 0.75rem; max-width: 420px; }
+.form-row { display: flex; flex-direction: column; gap: 0.3rem; }
+.form-row label { font-size: 0.72rem; color: var(--c-muted2, #777); }
+.form-input, .form-select {
+  background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4);
+  border-radius: 4px; padding: 0.4rem 0.65rem; font-size: 0.84rem;
+}
+.form-input:focus, .form-select:focus { outline: none; border-color: var(--c-accent, #4ec9b0); }
+.form-select option { background: var(--c-surface, #252526); }
+
+/* Key display */
+.key-box { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+.key-text {
+  flex: 1; background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-accent, #4ec9b0);
+  padding: 0.4rem 0.65rem; border-radius: 4px; font-family:var(--c-font-mono, monospace); font-size: 0.8rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text;
+}
+.copy-feedback { font-size: 0.72rem; color: var(--c-accent, #4ec9b0); height: 1rem; }
+.key-note { font-size: 0.72rem; color: var(--c-faint, #555); margin-top: 0.3rem; }
+
+/* Auth overlay */
+.auth-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.auth-box {
+  background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); border-radius: 8px;
+  padding: 2rem; width: 320px; display: flex; flex-direction: column; gap: 0.75rem;
+}
+.auth-box h2 { font-size: 1.1rem; font-weight: 600; border: none; margin-bottom: 0.25rem; }
+.auth-input {
+  background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4);
+  border-radius: 4px; padding: 0.45rem 0.7rem; font-size: 0.88rem; width: 100%;
+}
+.auth-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.auth-error { color: var(--c-red, #f14c4c); font-size: 0.78rem; min-height: 1rem; }
+.auth-btn {
+  background: #0e4069; border: none; color: var(--c-text, #d4d4d4); border-radius: 4px;
+  padding: 0.5rem; font-size: 0.88rem; cursor: pointer; margin-top: 0.25rem;
+}
+.auth-btn:hover { background: #1a5a9a; }
+
+/* Access denied */
+.denied { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 60vh; gap: 0.75rem; color: var(--c-faint, #555); }
+.denied h3 { color: var(--c-text, #d4d4d4); font-size: 1rem; }
+
+.empty-note { color: var(--c-faint2, #444); font-size: 0.78rem; padding: 0.75rem 0; }
+.hb-enabled  { background:var(--c-accenttint, #1a3a2e);color:var(--c-accent, #4ec9b0);font-size:0.62rem;padding:0.08rem 0.35rem;border-radius:3px;font-weight:600;display:inline-block; }
+.hb-disabled { background:var(--c-line, #2a2a2a);color:var(--c-muted2, #666);font-size:0.62rem;padding:0.08rem 0.35rem;border-radius:3px;font-weight:600;display:inline-block; }
+.task-trunc  { max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.78rem;color:var(--c-muted, #888); }
+.hb-overlay  { position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:400; }
+.hb-box      { background:var(--c-surface, #252526);border:1px solid var(--c-line2, #333);border-radius:8px;padding:1.5rem;width:480px;display:flex;flex-direction:column;gap:0.75rem; }
+.hb-box h3   { font-size:0.92rem;font-weight:600;color:var(--c-text, #d4d4d4);margin:0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <div class="content" id="mainContent" style="display:none">
+
+    <!-- Mac App Token (all users) -->
+    <div class="section">
+      <h2>Your Account</h2>
+      <div style="max-width:480px">
+        <div class="form-row" style="margin-bottom:0.25rem">
+          <label>Mac App Token — paste into Buzzowl Recorder → Settings → Auth Token</label>
+        </div>
+        <div style="display:flex;gap:0.4rem;align-items:center">
+          <input type="password" id="macTokenDisplay" readonly
+            style="flex:1;background:var(--c-ink, #111);border:1px solid var(--c-line, #2a2a2a);color:var(--c-bluehi, #9cdcfe);border-radius:4px;padding:0.4rem 0.65rem;font-family:var(--c-font-mono, monospace);font-size:0.8rem;cursor:default">
+          <button class="btn" id="macTokenShowBtn" onclick="toggleToken()">Show</button>
+          <button class="btn primary" onclick="copyToken()">Copy</button>
+        </div>
+        <div id="macTokenCopyStatus" style="font-size:0.72rem;color:var(--c-accent, #4ec9b0);min-height:1rem;margin-top:0.2rem"></div>
+      </div>
+
+      <!-- UI A/B: opt-in front-end theme -->
+      <div style="max-width:480px;margin-top:1.4rem;border-top:1px solid var(--c-line, #2a2a2a);padding-top:1.1rem">
+        <div class="form-row" style="margin-bottom:0.45rem">
+          <label>Appearance — try the new IBM-style look <span style="color:var(--c-muted,#888)">(beta)</span></label>
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="themeClassicBtn" onclick="wkPickTheme('classic')">Classic</button>
+          <button class="btn" id="themeCarbonBtn" onclick="wkPickTheme('carbon')">New look (beta)</button>
+          <span id="themeStatus" style="font-size:0.74rem;color:var(--c-accent, #4ec9b0)"></span>
+        </div>
+        <div style="font-size:0.72rem;color:var(--c-muted, #888);margin-top:0.4rem">
+          Applies to your account only — other users are unaffected, and you can switch back anytime.
+        </div>
+      </div>
+    </div>
+    <script>
+      function updateThemeButtons(v){
+        var c=document.getElementById('themeClassicBtn'), k=document.getElementById('themeCarbonBtn');
+        if(!c||!k) return;
+        c.classList.toggle('primary', v!=='carbon');
+        k.classList.toggle('primary', v==='carbon');
+      }
+      async function wkPickTheme(v){
+        if (window.wkSetTheme) await window.wkSetTheme(v);
+        updateThemeButtons(v);
+        var s=document.getElementById('themeStatus');
+        if(s) s.textContent = v==='carbon' ? 'New look enabled — switched just for you' : 'Classic look';
+      }
+      (function(){
+        var v='classic';
+        try { v = localStorage.getItem('wk_theme')==='carbon' ? 'carbon':'classic'; } catch(e){}
+        updateThemeButtons(v);
+      })();
+    </script>
+
+    <!-- Admin-only sections -->
+    <div id="adminSections" style="display:none">
+
+    <!-- Team Members -->
+    <div class="section">
+      <h2>Team Members</h2>
+      <table id="usersTable">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Username</th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Joined</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"><tr><td colspan="6" class="empty-note">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Invitations -->
+    <div class="section">
+      <h2>Invitations</h2>
+      <table id="invitesTable">
+        <thead>
+          <tr>
+            <th>Key (preview)</th>
+            <th>Email label</th>
+            <th>Role</th>
+            <th>Created by</th>
+            <th>Expires</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="invitesBody"><tr><td colspan="7" class="empty-note">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Generate invite -->
+    <div class="section">
+      <h2>Generate Invite Key</h2>
+      <div class="gen-form">
+        <div class="form-row">
+          <label>Email label <span style="color:var(--c-faint2, #444)">(optional — not enforced, just a hint)</span></label>
+          <input class="form-input" id="genEmail" type="text" placeholder="alice@example.com">
+        </div>
+        <div class="form-row">
+          <label>Role</label>
+          <select class="form-select" id="genRole">
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div>
+          <button class="btn primary" id="genBtn" onclick="generateInvite()">Generate Key</button>
+        </div>
+        <div id="keyResult" style="display:none">
+          <div class="key-box">
+            <div class="key-text" id="keyText"></div>
+            <button class="btn" onclick="copyKey()">Copy</button>
+          </div>
+          <div class="copy-feedback" id="copyFeedback"></div>
+          <div class="key-note">Valid for 7 days. Share this key with the new team member — they enter it in the "Join" tab on the login screen.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Usage & Evaluation (admin) -->
+    <div class="section">
+      <h2>Usage &amp; Evaluation</h2>
+      <div id="outreachSummary" style="display:flex;gap:0.9rem;margin-bottom:0.8rem;font-size:0.78rem;color:var(--c-muted, #888);flex-wrap:wrap"></div>
+      <div style="display:flex;gap:0.6rem;align-items:center;margin-bottom:0.7rem;flex-wrap:wrap">
+        <select class="form-select" id="promptSurface" style="width:auto" onchange="loadPrompts()">
+          <option value="">All surfaces</option>
+          <option value="chat">Chat</option>
+          <option value="kb_search">KB search</option>
+          <option value="research_trigger">Research triggers</option>
+          <option value="mail">Mail generation</option>
+          <option value="mp_chat">Meeting-prep chat</option>
+          <option value="mp_brief">Meeting-prep briefs</option>
+          <option value="product_chat">Product chat</option>
+          <option value="presentation">Presentation prompts</option>
+          <option value="brief">Account briefs</option>
+          <option value="page_view">Page views</option>
+          <option value="nba_click">Action-queue clicks</option>
+        </select>
+        <button class="btn" onclick="loadPrompts()">Refresh</button>
+        <button class="btn primary" onclick="downloadEvalExport()">Download evaluation data (JSON)</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:0.76rem">
+          <thead><tr style="color:var(--c-muted2, #666);text-align:left">
+            <th style="padding:0.3rem 0.5rem">Time</th><th style="padding:0.3rem 0.5rem">User</th>
+            <th style="padding:0.3rem 0.5rem">Surface</th><th style="padding:0.3rem 0.5rem">Prompt</th>
+          </tr></thead>
+          <tbody id="promptRows"><tr><td colspan="4" style="padding:0.5rem;color:var(--c-faint, #555)">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- LLM Providers (admin) -->
+    <div class="section">
+      <h2>LLM Providers</h2>
+      <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
+        Connect your own LLM backend — OpenRouter, Anthropic, OpenAI, or a local server
+        (Ollama / LM Studio via an OpenAI-compatible base URL). Keys are stored server-side
+        and never shown again. Local servers need any non-empty key (e.g. <code>local</code>).
+      </p>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:0.76rem">
+          <thead><tr style="color:var(--c-muted2, #666);text-align:left">
+            <th style="padding:0.3rem 0.5rem">Status</th><th style="padding:0.3rem 0.5rem">Name</th>
+            <th style="padding:0.3rem 0.5rem">Kind</th><th style="padding:0.3rem 0.5rem">Base URL</th>
+            <th style="padding:0.3rem 0.5rem">API key</th><th style="padding:0.3rem 0.5rem">Key env var</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="llmProviderRows"></tbody>
+        </table>
+      </div>
+      <div style="margin:0.6rem 0 1.1rem;display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center">
+        <button class="btn" id="llmAddProviderBtn">+ Add provider</button>
+        <button class="btn" id="llmTestBtn">Test connections</button>
+        <button class="btn primary" id="llmConnectOrBtn" title="Log in at OpenRouter — a key is provisioned automatically, no copy-paste">Connect OpenRouter</button>
+        <span style="font-size:0.72rem;color:var(--c-muted, #888)">One login → 400+ models (incl. Claude &amp; GPT), pay per token.</span>
+      </div>
+      <h3 style="font-size:0.85rem;margin:0 0 0.4rem">Model roles</h3>
+      <p style="font-size:0.74rem;color:var(--c-muted, #888);margin:0 0 0.5rem">
+        Which provider/model each part of the system uses. Unset roles fall back to <em>default</em>.
+      </p>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:0.76rem;max-width:640px">
+          <thead><tr style="color:var(--c-muted2, #666);text-align:left">
+            <th style="padding:0.3rem 0.5rem">Role</th><th style="padding:0.3rem 0.5rem">Provider</th>
+            <th style="padding:0.3rem 0.5rem">Model</th>
+          </tr></thead>
+          <tbody id="llmRoleRows"></tbody>
+        </table>
+      </div>
+      <div id="llmSubSection" style="display:none;margin-top:1.1rem">
+        <h3 style="font-size:0.85rem;margin:0 0 0.3rem">Subscription logins</h3>
+        <p style="font-size:0.72rem;color:var(--c-warn, #d7ba7d);margin:0 0 0.5rem">
+          ⚠ Not officially sanctioned for third-party apps without a vendor whitelist —
+          enabled via <code>llm_oauth_gray_flows</code>. Use at your own risk; review the
+          provider's terms. (Claude subscription login is blocked by Anthropic and not offered.)
+        </p>
+        <div id="llmSubRows" style="display:flex;flex-direction:column;gap:0.5rem"></div>
+      </div>
+      <div style="margin-top:0.7rem;display:flex;gap:0.6rem;align-items:center">
+        <button class="btn primary" id="llmSaveBtn">Save LLM settings</button>
+        <span id="llmSaveMsg" style="font-size:0.76rem;color:var(--c-muted, #888)"></span>
+      </div>
+    </div>
+
+    </div><!-- /adminSections -->
+
+    <!-- Scheduled Jobs (all users) -->
+    <div class="section" id="scheduledJobsSection">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <h2 style="margin-bottom:0;border-bottom:none">Scheduled Jobs</h2>
+        <button class="btn primary" id="hbAddBtn">+ Add Job</button>
+      </div>
+      <table id="hbTable">
+        <thead>
+          <tr>
+            <th>Agent type</th>
+            <th>Schedule</th>
+            <th>Task</th>
+            <th>Status</th>
+            <th>Last run</th>
+            <th>Next run</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="hbBody"><tr><td colspan="7" class="empty-note">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+  </div><!-- /mainContent -->
+
+</div>
+
+<!-- Heartbeat add/edit modal -->
+<div class="hb-overlay" id="hbOverlay" style="display:none">
+  <div class="hb-box">
+    <h3 id="hbModalTitle">Add Job</h3>
+    <input type="hidden" id="hbEditId">
+    <div class="form-row">
+      <label>Agent type</label>
+      <select class="form-select" id="hbAgentType"></select>
+    </div>
+    <div class="form-row">
+      <label>Cron expression <span style="color:var(--c-faint2, #444);font-size:0.7rem">(5 parts: min hr day mon weekday)</span></label>
+      <input class="form-input" id="hbCronExpr" type="text" placeholder="0 8 * * 1-5" style="font-family:var(--c-font-mono, monospace)">
+      <div id="hbCronPreview" style="font-size:0.72rem;color:var(--c-accent, #4ec9b0);min-height:1rem;margin-top:0.25rem"></div>
+    </div>
+    <div class="form-row">
+      <label>Task prompt</label>
+      <textarea class="form-input" id="hbTask" rows="3" placeholder="Describe what the agent should do…"></textarea>
+    </div>
+    <div class="form-row" style="flex-direction:row;align-items:center;gap:0.5rem">
+      <input type="checkbox" id="hbEnabled" checked>
+      <label for="hbEnabled" style="color:var(--c-muted, #888);font-size:0.82rem;cursor:pointer">Enabled</label>
+    </div>
+    <div id="hbError" style="color:var(--c-red, #f14c4c);font-size:0.78rem;min-height:1rem"></div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+      <button class="btn" id="hbCancelBtn">Cancel</button>
+      <button class="btn primary" id="hbSaveBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Auth overlay -->
+<div class="auth-overlay" id="authOverlay" style="display:none">
+  <div class="auth-box">
+    <h2>Buzzowl</h2>
+    <input class="auth-input" id="authOrg"  type="text"     placeholder="Organisation slug" autocomplete="organization">
+    <input class="auth-input" id="authUser" type="text"     placeholder="Username"          autocomplete="username">
+    <input class="auth-input" id="authPass" type="password" placeholder="Password"          autocomplete="current-password">
+    <div class="auth-error" id="authError"></div>
+    <button class="auth-btn" onclick="doLogin()">Sign in</button>
+  </div>
+</div>
+
+<script>
+const TOKEN_KEY = 'wk_token';
+let _token = localStorage.getItem(TOKEN_KEY) || '';
+let _meUser = null;
+
+function H() {
+  return { 'Authorization': `Bearer ${_token}`, 'Content-Type': 'application/json' };
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+async function doLogin() {
+  const org  = document.getElementById('authOrg').value.trim();
+  const user = document.getElementById('authUser').value.trim();
+  const pass = document.getElementById('authPass').value;
+  const err  = document.getElementById('authError');
+  err.textContent = '';
+  const r = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ org_slug: org, username: user, password: pass }),
+  });
+  const d = await r.json();
+  if (!r.ok) { err.textContent = d.detail || 'Login failed'; return; }
+  _token = d.token;
+  localStorage.setItem(TOKEN_KEY, _token);
+  document.getElementById('authOverlay').style.display = 'none';
+  window.navbarRefreshUser?.();
+  init();
+}
+
+async function init() {
+  const r = await fetch('/api/auth/me', { headers: H() });
+  if (r.status === 401) { document.getElementById('authOverlay').style.display = 'flex'; return; }
+  const d = await r.json();
+  _meUser = d.user;
+  document.getElementById('mainContent').style.display = 'block';
+  // Populate Mac App Token (all users)
+  document.getElementById('macTokenDisplay').value = _token;
+  loadHeartbeats();
+  if (_meUser.role === 'admin') {
+    document.getElementById('adminSections').style.display = 'block';
+    loadUsers();
+    loadInvites();
+    loadPrompts();
+    loadLlmConfig();
+  }
+}
+
+// ── LLM Providers (admin) ─────────────────────────────────────────────────
+
+const LLM_ROLES = ['default', 'chat', 'research', 'pipeline', 'match', 'summary', 'triage'];
+const LLM_KEY_MASK = '•••';
+let _llmStatus = {};   // provider name → {reachable, has_key}
+
+function _llmEsc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function _llmDot(name) {
+  const st = _llmStatus[name];
+  const color = !st ? 'var(--c-faint, #555)'
+    : st.reachable === false ? 'var(--c-danger, #e06c75)'
+    : (st.reachable || st.has_key) ? 'var(--c-accent, #4ec9b0)'
+    : 'var(--c-warn, #d7ba7d)';
+  return `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${color}" title="${st ? (st.reachable === false ? 'unreachable' : 'ok') : 'untested'}"></span>`;
+}
+
+function _llmProviderRow(name, p) {
+  const tr = document.createElement('tr');
+  tr.dataset.provider = name;
+  tr.innerHTML = `
+    <td style="padding:0.3rem 0.5rem" data-dot>${_llmDot(name)}</td>
+    <td style="padding:0.3rem 0.5rem"><input class="form-input" data-f="name" value="${_llmEsc(name)}" style="width:7.5rem"></td>
+    <td style="padding:0.3rem 0.5rem">
+      <select class="form-select" data-f="kind" style="width:auto">
+        <option value="openai-compat"${p.kind !== 'anthropic' ? ' selected' : ''}>openai-compat</option>
+        <option value="anthropic"${p.kind === 'anthropic' ? ' selected' : ''}>anthropic</option>
+      </select></td>
+    <td style="padding:0.3rem 0.5rem"><input class="form-input" data-f="base_url" value="${_llmEsc(p.base_url || '')}" placeholder="https://…/v1" style="width:16rem"></td>
+    <td style="padding:0.3rem 0.5rem"><input class="form-input" type="password" data-f="api_key" value="" placeholder="${p.has_key ? 'configured — blank keeps it' : 'not set'}" autocomplete="new-password" style="width:10rem"></td>
+    <td style="padding:0.3rem 0.5rem"><input class="form-input" data-f="api_key_env" value="${_llmEsc(p.api_key_env || '')}" placeholder="ENV_VAR" style="width:9rem"></td>
+    <td style="padding:0.3rem 0.5rem"><button class="btn" data-remove title="Remove provider">✕</button></td>`;
+  return tr;
+}
+
+function _llmRoleRow(role, entry, providerNames) {
+  const tr = document.createElement('tr');
+  tr.dataset.role = role;
+  const opts = providerNames.map(n =>
+    `<option value="${_llmEsc(n)}"${entry && entry.provider === n ? ' selected' : ''}>${_llmEsc(n)}</option>`).join('');
+  tr.innerHTML = `
+    <td style="padding:0.3rem 0.5rem;color:var(--c-muted, #888)">${_llmEsc(role)}</td>
+    <td style="padding:0.3rem 0.5rem"><select class="form-select" data-f="provider" style="width:auto">${opts}</select></td>
+    <td style="padding:0.3rem 0.5rem"><input class="form-input" data-f="model" value="${_llmEsc(entry ? entry.model : '')}" placeholder="model id" style="width:16rem"></td>`;
+  return tr;
+}
+
+function _llmRender(cfg) {
+  const pBody = document.getElementById('llmProviderRows');
+  const rBody = document.getElementById('llmRoleRows');
+  pBody.innerHTML = ''; rBody.innerHTML = '';
+  const names = Object.keys(cfg.providers || {});
+  names.forEach(n => pBody.appendChild(_llmProviderRow(n, cfg.providers[n])));
+  LLM_ROLES.forEach(role => rBody.appendChild(_llmRoleRow(role, (cfg.roles || {})[role], names)));
+}
+
+function _llmReadForm() {
+  const providers = {};
+  document.querySelectorAll('#llmProviderRows tr').forEach(tr => {
+    const get = f => tr.querySelector(`[data-f="${f}"]`).value.trim();
+    const name = get('name');
+    if (!name) return;
+    const p = { kind: get('kind') };
+    if (get('base_url')) p.base_url = get('base_url');
+    if (get('api_key_env')) p.api_key_env = get('api_key_env');
+    // blank password = keep stored key; server treats mask/blank as "keep"
+    if (get('api_key')) p.api_key = get('api_key');
+    else p.api_key = LLM_KEY_MASK;
+    providers[name] = p;
+  });
+  const roles = {};
+  document.querySelectorAll('#llmRoleRows tr').forEach(tr => {
+    const provider = tr.querySelector('[data-f="provider"]').value;
+    const model = tr.querySelector('[data-f="model"]').value.trim();
+    if (provider && model) roles[tr.dataset.role] = { provider, model };
+  });
+  return { providers, roles };
+}
+
+async function loadLlmConfig() {
+  try {
+    const r = await fetch('/api/llm/config', { headers: H() });
+    if (!r.ok) return;
+    _llmRender(await r.json());
+  } catch (e) { /* section stays empty */ }
+  loadPiOauth();
+}
+
+const SUB_PROVIDERS = [
+  { id: 'openai-codex', label: 'ChatGPT (Codex flow)' },
+  { id: 'github-copilot', label: 'GitHub Copilot' },
+];
+
+async function loadPiOauth() {
+  try {
+    const r = await fetch('/api/llm/oauth/pi/status', { headers: H() });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.enabled) return;
+    document.getElementById('llmSubSection').style.display = 'block';
+    const rows = document.getElementById('llmSubRows');
+    rows.innerHTML = '';
+    SUB_PROVIDERS.forEach(p => {
+      const st = (d.providers || {})[p.id] || {};
+      const div = document.createElement('div');
+      div.dataset.sub = p.id;
+      div.style.cssText = 'display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;font-size:0.76rem';
+      div.innerHTML = `
+        <span style="min-width:10rem">${_llmEsc(p.label)}</span>
+        <span data-substate style="color:${st.connected ? 'var(--c-accent, #4ec9b0)' : 'var(--c-muted, #888)'}">${st.connected ? 'connected' : 'not connected'}</span>
+        <button class="btn" data-subconnect>${st.connected ? 'Reconnect' : 'Connect'}</button>
+        ${st.connected ? '<button class="btn" data-subdisconnect>Disconnect</button>' : ''}
+        <span data-subflow style="display:none;gap:0.4rem;align-items:center;flex-wrap:wrap">
+          <a data-subauth href="#" target="_blank" style="color:var(--c-accent, #4ec9b0)">Open login page</a>
+          <input class="form-input" data-subcode placeholder="paste code / redirect URL" style="width:14rem">
+          <button class="btn" data-subcomplete>Complete</button>
+        </span>`;
+      rows.appendChild(div);
+    });
+  } catch (e) { /* hidden */ }
+}
+
+document.getElementById('llmSubRows') && document.getElementById('llmSubRows').addEventListener('click', async (ev) => {
+  const row = ev.target.closest('[data-sub]');
+  if (!row) return;
+  const provider = row.dataset.sub;
+  const msg = document.getElementById('llmSaveMsg');
+  if (ev.target.closest('[data-subconnect]')) {
+    const r = await fetch('/api/llm/oauth/pi/start', { method: 'POST', headers: H(), body: JSON.stringify({ provider }) });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.detail || r.status); return; }
+    row.dataset.session = d.session_id;
+    const flow = row.querySelector('[data-subflow]');
+    flow.style.display = 'inline-flex';
+    row.querySelector('[data-subauth]').href = d.auth_url;
+    msg.textContent = d.instructions || 'Complete the login, then paste the code here.';
+  } else if (ev.target.closest('[data-subcomplete]')) {
+    const code = row.querySelector('[data-subcode]').value.trim();
+    const r = await fetch('/api/llm/oauth/pi/complete', { method: 'POST', headers: H(), body: JSON.stringify({ session_id: row.dataset.session, code }) });
+    const d = await r.json();
+    if (r.status === 202) { msg.textContent = 'Still pending — approve in the browser, then click Complete again.'; return; }
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.detail || r.status); return; }
+    msg.textContent = provider + ' connected.';
+    loadPiOauth();
+  } else if (ev.target.closest('[data-subdisconnect]')) {
+    await fetch('/api/llm/oauth/pi/disconnect', { method: 'POST', headers: H(), body: JSON.stringify({ provider }) });
+    loadPiOauth();
+  }
+});
+
+async function testLlmConnections() {
+  const msg = document.getElementById('llmSaveMsg');
+  msg.textContent = 'Testing…';
+  try {
+    const r = await fetch('/api/llm/status', { headers: H() });
+    const d = await r.json();
+    _llmStatus = {};
+    (d.providers || []).forEach(p => { _llmStatus[p.name] = p; });
+    document.querySelectorAll('#llmProviderRows tr').forEach(tr => {
+      const name = tr.querySelector('[data-f="name"]').value.trim();
+      tr.querySelector('[data-dot]').innerHTML = _llmDot(name);
+    });
+    msg.textContent = 'Connection test done.';
+  } catch (e) { msg.textContent = 'Test failed: ' + e.message; }
+}
+
+async function saveLlmConfig() {
+  const msg = document.getElementById('llmSaveMsg');
+  msg.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/llm/config', {
+      method: 'POST', headers: H(), body: JSON.stringify(_llmReadForm()),
+    });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.detail || r.status); return; }
+    _llmRender(d);
+    msg.textContent = 'Saved. New calls use the updated providers immediately.';
+  } catch (e) { msg.textContent = 'Save failed: ' + e.message; }
+}
+
+async function connectOpenRouter() {
+  const msg = document.getElementById('llmSaveMsg');
+  msg.textContent = 'Opening OpenRouter…';
+  try {
+    const r = await fetch('/api/llm/oauth/openrouter/start', {
+      method: 'POST', headers: H(),
+      body: JSON.stringify({ callback_url: location.origin + '/settings' }),
+    });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.detail || r.status); return; }
+    msg.textContent = 'Complete the login in the OpenRouter tab — you will be sent back here.';
+    window.location.href = d.auth_url;
+  } catch (e) { msg.textContent = 'Connect failed: ' + e.message; }
+}
+
+async function _finishOpenRouterConnect(code) {
+  const msg = document.getElementById('llmSaveMsg');
+  msg.textContent = 'Finishing OpenRouter connect…';
+  try {
+    const r = await fetch('/api/llm/oauth/openrouter/complete', {
+      method: 'POST', headers: H(), body: JSON.stringify({ code }),
+    });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.detail || r.status); return; }
+    _llmRender(d);
+    msg.textContent = 'OpenRouter connected — key stored. Assign roles and save if needed.';
+  } catch (e) { msg.textContent = 'Connect failed: ' + e.message; }
+  // strip ?code= from the URL so a reload doesn't retry a used code
+  history.replaceState(null, '', location.pathname);
+}
+
+document.getElementById('llmConnectOrBtn').addEventListener('click', connectOpenRouter);
+// OpenRouter redirects back to /settings?code=… — finish the handshake
+const _orCode = new URLSearchParams(location.search).get('code');
+if (_orCode) { window.addEventListener('load', () => _finishOpenRouterConnect(_orCode)); }
+
+document.getElementById('llmAddProviderBtn').addEventListener('click', () => {
+  document.getElementById('llmProviderRows')
+    .appendChild(_llmProviderRow('', { kind: 'openai-compat', base_url: '', has_key: false }));
+});
+document.getElementById('llmTestBtn').addEventListener('click', testLlmConnections);
+document.getElementById('llmSaveBtn').addEventListener('click', saveLlmConfig);
+document.getElementById('llmProviderRows').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('[data-remove]');
+  if (btn) btn.closest('tr').remove();
+});
+
+// ── Usage & Evaluation (admin) ────────────────────────────────────────────
+
+async function loadOutreachSummary() {
+  const el = document.getElementById('outreachSummary');
+  try {
+    const r = await fetch('/api/outreach/summary', { headers: { 'Authorization': 'Bearer ' + _token } });
+    if (!r.ok) return;
+    const d = await r.json();
+    const c = d.counts || {};
+    const chip = (label, n, color) =>
+      `<span style="background:var(--c-surface, #252526);border:1px solid var(--c-line, #2a2a2a);border-radius:5px;padding:0.25rem 0.7rem;">
+         <strong style="color:${color}">${n || 0}</strong> ${label}</span>`;
+    el.innerHTML =
+      chip('mails generated', c.generated, '#888') +
+      chip('sent', c.sent, '#569cd6') +
+      chip('replied', c.replied, '#ce9178') +
+      chip('meetings booked', c.meeting, '#4ec9b0');
+  } catch (_) {}
+}
+
+async function loadPrompts() {
+  loadOutreachSummary();
+  const surface = document.getElementById('promptSurface').value;
+  const qs = surface ? `&surface=${encodeURIComponent(surface)}` : '';
+  const rows = document.getElementById('promptRows');
+  try {
+    const r = await fetch(`/api/eval/prompts?limit=100${qs}`, { headers: { 'Authorization': 'Bearer ' + _token } });
+    if (!r.ok) { rows.innerHTML = '<tr><td colspan="4" style="padding:0.5rem;color:var(--c-redhi, #f48771)">Could not load.</td></tr>'; return; }
+    const prompts = (await r.json()).prompts || [];
+    if (!prompts.length) {
+      rows.innerHTML = '<tr><td colspan="4" style="padding:0.5rem;color:var(--c-faint, #555)">No prompts logged yet.</td></tr>';
+      return;
+    }
+    const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    rows.innerHTML = prompts.map(p => `
+      <tr style="border-top:1px solid var(--c-line, #2a2a2a)">
+        <td style="padding:0.3rem 0.5rem;color:var(--c-muted2, #666);white-space:nowrap">${esc((p.created_at||'').slice(0,16).replace('T',' '))}</td>
+        <td style="padding:0.3rem 0.5rem;color:var(--c-bluehi, #9cdcfe)">${esc(p.user_name||'—')}</td>
+        <td style="padding:0.3rem 0.5rem;color:var(--c-orange, #ce9178)">${esc(p.surface)}</td>
+        <td style="padding:0.3rem 0.5rem;color:var(--c-text3, #bbb)">${esc((p.prompt||'').slice(0,140))}${(p.prompt||'').length>140?'…':''}</td>
+      </tr>`).join('');
+  } catch (_) {
+    rows.innerHTML = '<tr><td colspan="4" style="padding:0.5rem;color:var(--c-redhi, #f48771)">Network error.</td></tr>';
+  }
+}
+
+async function downloadEvalExport() {
+  try {
+    const r = await fetch('/api/eval/export', { headers: { 'Authorization': 'Bearer ' + _token } });
+    if (!r.ok) { alert('Export failed'); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `evaluation-export-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (_) { alert('Export failed'); }
+}
+
+// ── Mac App Token ─────────────────────────────────────────────────────────
+
+function toggleToken() {
+  const inp = document.getElementById('macTokenDisplay');
+  const btn = document.getElementById('macTokenShowBtn');
+  if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'Hide'; }
+  else                         { inp.type = 'password'; btn.textContent = 'Show'; }
+}
+
+function copyToken() {
+  navigator.clipboard.writeText(_token).then(() => {
+    const el = document.getElementById('macTokenCopyStatus');
+    el.textContent = 'Copied!';
+    setTimeout(() => { el.textContent = ''; }, 2000);
+  });
+}
+
+// ── Users ──────────────────────────────────────────────────────────────────
+
+async function loadUsers() {
+  const r = await fetch('/api/users', { headers: H() });
+  if (!r.ok) return;
+  const d = await r.json();
+  renderUsers(d.users || []);
+}
+
+function renderUsers(users) {
+  const tb = document.getElementById('usersBody');
+  if (!users.length) { tb.innerHTML = '<tr><td colspan="6" class="empty-note">No members yet.</td></tr>'; return; }
+  tb.innerHTML = users.map(u => {
+    const isSelf = u.id === _meUser?.id;
+    const otherRole = u.role === 'admin' ? 'member' : 'admin';
+    const otherLabel = u.role === 'admin' ? 'Make member' : 'Make admin';
+    return `<tr>
+      <td>${esc(u.display_name)}</td>
+      <td style="color:var(--c-muted2, #777);font-family:var(--c-font-mono, monospace);font-size:0.78rem">@${esc(u.username)}</td>
+      <td><input type="email" data-id="${u.id}" value="${esc(u.email || '')}" placeholder="add email…"
+                 onkeydown="if(event.key==='Enter')this.blur()" onchange="saveEmail(this)"
+                 style="width:200px;max-width:100%;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.22rem 0.45rem;font-size:0.8rem"></td>
+      <td><span class="role-badge ${esc(u.role)}">${esc(u.role)}</span></td>
+      <td style="color:var(--c-faint, #555);font-size:0.78rem">${fmtDate(u.created_at)}</td>
+      <td>
+        <div class="btn-row">
+          <button class="btn" ${isSelf ? 'disabled title="Cannot modify your own account"' : `onclick="changeRole(${u.id}, '${otherRole}')"`}>${esc(otherLabel)}</button>
+          <button class="btn danger" ${isSelf ? 'disabled title="Cannot delete your own account"' : `onclick="removeUser(${u.id}, '${esc(u.display_name)}')"` }>Remove</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function changeRole(userId, role) {
+  const r = await fetch(`/api/users/${userId}`, {
+    method: 'PATCH', headers: H(), body: JSON.stringify({ role }),
+  });
+  if (!r.ok) { const d = await r.json(); alert(d.detail || 'Failed'); return; }
+  loadUsers();
+}
+
+async function saveEmail(inp) {
+  const orig = (inp.defaultValue || '').trim();
+  const email = inp.value.trim();
+  if (email === orig) return;
+  inp.style.borderColor = '#555';
+  const r = await fetch(`/api/users/${inp.dataset.id}`, {
+    method: 'PATCH', headers: H(), body: JSON.stringify({ email }),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    alert(d.detail || 'Failed to save email');
+    inp.style.borderColor = '#a33'; return;
+  }
+  inp.defaultValue = email;
+  inp.style.borderColor = '#2d5a48';
+  setTimeout(() => { inp.style.borderColor = '#333'; }, 1200);
+}
+
+async function removeUser(userId, name) {
+  if (!confirm(`Remove ${name} from the org? This cannot be undone.`)) return;
+  const r = await fetch(`/api/users/${userId}`, { method: 'DELETE', headers: H() });
+  if (!r.ok) { const d = await r.json(); alert(d.detail || 'Failed'); return; }
+  loadUsers();
+}
+
+// ── Invites ─────────────────────────────────────────────────────────────────
+
+async function loadInvites() {
+  const r = await fetch('/api/auth/invites', { headers: H() });
+  if (!r.ok) return;
+  const d = await r.json();
+  renderInvites(d.invites || []);
+}
+
+function renderInvites(invites) {
+  const tb = document.getElementById('invitesBody');
+  if (!invites.length) { tb.innerHTML = '<tr><td colspan="7" class="empty-note">No invitations yet.</td></tr>'; return; }
+  tb.innerHTML = invites.map(inv => {
+    const preview = inv.invite_key ? inv.invite_key.slice(0, 8) + '…' : '—';
+    let statusClass = 'pending', statusLabel = 'Pending';
+    if (inv.used_at) { statusClass = 'used'; statusLabel = 'Used'; }
+    else if (inv.is_expired) { statusClass = 'expired'; statusLabel = 'Expired'; }
+    const canRevoke = inv.is_pending;
+    return `<tr>
+      <td style="font-family:var(--c-font-mono, monospace);font-size:0.78rem;color:var(--c-muted2, #777)">${esc(preview)}</td>
+      <td style="color:var(--c-muted, #888)">${esc(inv.email || '—')}</td>
+      <td><span class="role-badge ${esc(inv.role)}">${esc(inv.role)}</span></td>
+      <td style="color:var(--c-faint, #555);font-size:0.78rem">${esc(inv.created_by_username || '—')}</td>
+      <td style="color:var(--c-faint, #555);font-size:0.78rem">${fmtDate(inv.expires_at)}</td>
+      <td><span class="status-badge ${statusClass}">${statusLabel}</span>
+          ${inv.used_by_username ? `<span style="color:var(--c-faint2, #444);font-size:0.7rem;display:block">by @${esc(inv.used_by_username)}</span>` : ''}
+      </td>
+      <td>${canRevoke ? `<button class="btn danger" onclick="revokeInvite(${inv.id})">Revoke</button>` : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function revokeInvite(inviteId) {
+  if (!confirm('Revoke this invite key? The recipient will no longer be able to use it.')) return;
+  const r = await fetch(`/api/auth/invites/${inviteId}`, { method: 'DELETE', headers: H() });
+  if (!r.ok) { const d = await r.json(); alert(d.detail || 'Failed'); return; }
+  loadInvites();
+}
+
+// ── Generate invite ──────────────────────────────────────────────────────────
+
+async function generateInvite() {
+  const btn   = document.getElementById('genBtn');
+  const email = document.getElementById('genEmail').value.trim() || null;
+  const role  = document.getElementById('genRole').value;
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  const r = await fetch('/api/auth/invite', {
+    method: 'POST', headers: H(), body: JSON.stringify({ email, role }),
+  });
+  btn.disabled = false;
+  btn.textContent = 'Generate Key';
+  if (!r.ok) { const d = await r.json(); alert(d.detail || 'Failed'); return; }
+  const d = await r.json();
+  document.getElementById('keyText').textContent = d.invite_key;
+  document.getElementById('keyResult').style.display = 'block';
+  document.getElementById('copyFeedback').textContent = '';
+  loadInvites();
+}
+
+function copyKey() {
+  const key = document.getElementById('keyText').textContent;
+  navigator.clipboard.writeText(key).then(() => {
+    document.getElementById('copyFeedback').textContent = 'Copied!';
+    setTimeout(() => { document.getElementById('copyFeedback').textContent = ''; }, 2000);
+  });
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+
+window.addEventListener('DOMContentLoaded', () => {
+  initNavbar({ active: 'settings' });
+  if (_token) {
+    init();
+  } else {
+    document.getElementById('authOverlay').style.display = 'flex';
+  }
+});
+
+// ── Heartbeat Jobs ─────────────────────────────────────────────────────────
+
+function cronToHuman(expr) {
+  const parts = (expr || '').trim().split(/\s+/);
+  if (parts.length !== 5) return expr;
+  const [min, hr, dom, mon, dow] = parts;
+  const pad = n => String(n).padStart(2, '0');
+  function time(h, m) {
+    if (/^\d+$/.test(h) && /^\d+$/.test(m)) return `${pad(h)}:${pad(m)}`;
+    return `${h}:${m}`;
+  }
+  const dayNames = {0:'Sun',1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat'};
+  // Every N minutes
+  if (/^\*\/\d+$/.test(min) && hr==='*' && dom==='*' && mon==='*' && dow==='*')
+    return `Every ${min.slice(2)} minutes`;
+  // Every hour at :mm
+  if (/^\d+$/.test(min) && hr==='*' && dom==='*' && mon==='*' && dow==='*')
+    return `Every hour at :${pad(min)}`;
+  // Daily / weekday / specific day
+  if (/^\d+$/.test(min) && /^\d+$/.test(hr) && dom==='*' && mon==='*') {
+    const t = time(hr, min);
+    if (dow === '*') return `Daily at ${t}`;
+    if (dow === '1-5') return `Weekdays (Mon–Fri) at ${t}`;
+    if (dow === '0,6' || dow === '6,0') return `Weekends at ${t}`;
+    if (dow === '1,3,5') return `Mon, Wed, Fri at ${t}`;
+    if (/^\d$/.test(dow)) return `${dayNames[parseInt(dow)] || dow}s at ${t}`;
+    return `${dow} at ${t}`;
+  }
+  return expr;
+}
+
+async function loadHeartbeats() {
+  const r = await fetch('/api/heartbeats', { headers: H() });
+  if (!r.ok) return;
+  const data = await r.json();
+  renderHeartbeats(data.heartbeats || []);
+}
+
+function renderHeartbeats(hbs) {
+  const tb = document.getElementById('hbBody');
+  if (!hbs.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="empty-note">No heartbeat jobs configured.</td></tr>';
+    return;
+  }
+  tb.innerHTML = hbs.map(h => {
+    const cls   = h.enabled ? 'hb-enabled' : 'hb-disabled';
+    const label = h.enabled ? 'enabled' : 'disabled';
+    const last  = h.last_run_at ? fmtDate(h.last_run_at) : '—';
+    const next  = h.next_run_at ? fmtDate(h.next_run_at) : '—';
+    const hJson = esc(JSON.stringify(h));
+    const humanCron = cronToHuman(h.cron_expr);
+    return `<tr>
+      <td style="font-family:var(--c-font-mono, monospace);font-size:0.8rem">${esc(h.agent_type)}</td>
+      <td>
+        <div style="font-size:0.8rem;color:var(--c-text2, #ccc)">${esc(humanCron)}</div>
+        <div style="font-family:var(--c-font-mono, monospace);font-size:0.68rem;color:var(--c-faint, #555);margin-top:1px">${esc(h.cron_expr)}</div>
+      </td>
+      <td><div class="task-trunc" title="${esc(h.task)}">${esc(h.task)}</div></td>
+      <td><span class="${cls}">${label}</span></td>
+      <td style="color:var(--c-faint, #555);font-size:0.75rem">${last}</td>
+      <td style="color:var(--c-faint, #555);font-size:0.75rem">${next}</td>
+      <td>
+        <div class="btn-row">
+          <button class="btn" data-hb="${hJson}" data-action="edit">Edit</button>
+          <button class="btn" data-hb-id="${h.id}" data-action="run">Run now</button>
+          <button class="btn danger" data-hb-id="${h.id}" data-action="delete">Delete</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  tb.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.action;
+      if (action === 'edit')   { openHbModal(JSON.parse(btn.dataset.hb)); }
+      if (action === 'run')    { runHbNow(Number(btn.dataset.hbId), btn); }
+      if (action === 'delete') { deleteHb(Number(btn.dataset.hbId)); }
+    });
+  });
+}
+
+async function openHbModal(hb) {
+  document.getElementById('hbModalTitle').textContent = hb ? 'Edit Job' : 'Add Job';
+  document.getElementById('hbEditId').value    = hb ? hb.id : '';
+  document.getElementById('hbCronExpr').value  = hb ? hb.cron_expr : '';
+  document.getElementById('hbTask').value      = hb ? hb.task      : '';
+  document.getElementById('hbEnabled').checked = hb ? hb.enabled   : true;
+  document.getElementById('hbError').textContent = '';
+
+  const sel = document.getElementById('hbAgentType');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  sel.disabled = true;
+  document.getElementById('hbOverlay').style.display = 'flex';
+
+  try {
+    const r = await fetch('/api/heartbeats/types', { headers: H() });
+    const data = await r.json();
+    sel.innerHTML = (data.types || [])
+      .map(t => `<option value="${esc(t.value)}"${hb && hb.agent_type === t.value ? ' selected' : ''}>${esc(t.label)} (${esc(t.value)})</option>`)
+      .join('');
+    if (!hb) sel.selectedIndex = 0;
+  } catch {
+    sel.innerHTML = '<option value="">— failed to load, refresh and retry —</option>';
+  } finally {
+    sel.disabled = false;
+  }
+}
+
+async function saveHeartbeat() {
+  const id        = document.getElementById('hbEditId').value;
+  const agentType = document.getElementById('hbAgentType').value.trim();
+  const cronExpr  = document.getElementById('hbCronExpr').value.trim();
+  const task      = document.getElementById('hbTask').value.trim();
+  const enabled   = document.getElementById('hbEnabled').checked;
+  const errEl     = document.getElementById('hbError');
+
+  if (!agentType || !cronExpr || !task) { errEl.textContent = 'All fields are required.'; return; }
+  if (cronExpr.split(/\s+/).length !== 5) { errEl.textContent = 'Cron must have exactly 5 parts.'; return; }
+
+  const btn = document.getElementById('hbSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  errEl.textContent = '';
+
+  const method = id ? 'PATCH' : 'POST';
+  const url    = id ? `/api/heartbeats/${id}` : '/api/heartbeats';
+  const r = await fetch(url, {
+    method, headers: H(),
+    body: JSON.stringify({ agent_type: agentType, cron_expr: cronExpr, task, enabled }),
+  });
+  btn.disabled = false; btn.textContent = 'Save';
+  if (!r.ok) { const d = await r.json(); errEl.textContent = d.detail || 'Save failed.'; return; }
+  document.getElementById('hbOverlay').style.display = 'none';
+  loadHeartbeats();
+}
+
+function _hbRunMessage(atype, run) {
+  if (!run) return 'Job started — it is running in the background.';
+  if (run.status === 'failed') return `Job failed: ${run.error || 'see server logs'}`;
+  const out = run.output || {};
+  if (atype === 'rep_digest')
+    return `✅ Built ${out.digests_built ?? '?'} rep digest(s)` +
+           (out.without_email ? ` (${out.without_email} without an email)` : '') +
+           `.\nReview & send them in Insights → 📬 Rep digests.`;
+  if (atype === 'task_reminder')
+    return `✅ Task reminder: ${out.summary || 'done'}.`;
+  if (['research','osint','monitor','market_monitor','jobs_monitor','source_monitor','match_monitor','org','enrichment'].includes(atype))
+    return '✅ Started — this fires background research; watch it on the Agents dashboard.';
+  return `✅ Done${out.summary ? ': ' + out.summary : ''}.`;
+}
+
+async function runHbNow(hbId, btn) {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  let resp;
+  try { const r = await fetch(`/api/heartbeats/${hbId}/run`, { method: 'POST', headers: H() });
+        if (!r.ok) throw new Error(); resp = await r.json(); }
+  catch (_) { if (btn) { btn.disabled = false; btn.textContent = orig; } alert('Failed to trigger job'); return; }
+  const prevId = resp.prev_run_id || 0;
+  let atype = resp.agent_type || '', outcome = null;
+  // These server-side jobs don't appear on the Agents page — poll for the outcome.
+  for (let i = 0; i < 70; i++) {   // up to ~3.5 min (rep_digest runs NBA per rep)
+    await new Promise(s => setTimeout(s, 3000));
+    let d;
+    try { const lr = await fetch(`/api/heartbeats/${hbId}/last-run`, { headers: H() }); if (!lr.ok) continue; d = (await lr.json()).run; }
+    catch (_) { continue; }
+    if (!d || d.id <= prevId) continue;               // wait for the NEW run
+    atype = d.agent_type || atype;
+    if (d.status === 'done' || d.status === 'failed') { outcome = d; break; }
+  }
+  if (btn) { btn.disabled = false; btn.textContent = orig; }
+  loadHeartbeats();
+  alert(_hbRunMessage(atype, outcome));
+}
+
+async function deleteHb(hbId) {
+  if (!confirm('Delete this heartbeat job? It will stop running immediately.')) return;
+  const r = await fetch(`/api/heartbeats/${hbId}`, { method: 'DELETE', headers: H() });
+  if (!r.ok) { const d = await r.json(); alert(d.detail || 'Delete failed'); return; }
+  loadHeartbeats();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('hbAddBtn').addEventListener('click', () => openHbModal(null));
+  document.getElementById('hbCancelBtn').addEventListener('click', () => {
+    document.getElementById('hbOverlay').style.display = 'none';
+  });
+  document.getElementById('hbSaveBtn').addEventListener('click', saveHeartbeat);
+  document.getElementById('hbCronExpr').addEventListener('input', () => {
+    const val = document.getElementById('hbCronExpr').value;
+    const preview = document.getElementById('hbCronPreview');
+    if (!val.trim()) { preview.textContent = ''; return; }
+    const human = cronToHuman(val.trim());
+    preview.textContent = human !== val.trim() ? `→ ${human}` : '';
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Opportunities — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; padding: 1.2rem 1.5rem; max-width: 920px; width: 100%; margin: 0 auto; }
+
+.toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.75rem 1rem; background: var(--c-bg2, #1a1a1a); border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; }
+.toolbar-title { font-size: 0.78rem; font-weight: 700; color: var(--c-accent, #4ec9b0); text-transform: uppercase; letter-spacing: 0.08em; }
+.toolbar-meta { font-size: 0.72rem; color: var(--c-faint, #555); }
+.scope-tabs { display: flex; gap: 0.35rem; margin-left: 0.5rem; }
+.scope-tab { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888); border-radius: 4px; padding: 0.22rem 0.7rem; font-size: 0.72rem; cursor: pointer; font-family: inherit; }
+.scope-tab:hover { color: var(--c-text, #d4d4d4); }
+.scope-tab.active { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+
+.summary-line { font-size: 0.74rem; color: var(--c-muted2, #666); margin-bottom: 0.9rem; }
+
+.opp-card { background: var(--c-bg2, #1a1a1a); border: 1px solid #242424; border-radius: 7px; margin-bottom: 0.7rem; overflow: hidden; border-left: 3px solid var(--c-accentline, #2d5a48); }
+.opp-card.focus { border-left-color: var(--c-accent, #4ec9b0); }
+.opp-head { display: flex; align-items: baseline; gap: 0.55rem; padding: 0.7rem 0.95rem; background: #1d1d1d; border-bottom: 1px solid #242424; flex-wrap: wrap; }
+.opp-name { color: var(--c-texthi, #e6e6e6); font-weight: 700; font-size: 0.98rem; text-decoration: none; letter-spacing: -0.01em; }
+.opp-name:hover { color: var(--c-accent, #4ec9b0); }
+.opp-star { color: var(--c-accent, #4ec9b0); font-size: 0.82rem; }
+.opp-cat { font-size: 0.62rem; color: var(--c-muted2, #777); background: var(--c-line, #262626); border-radius: 8px; padding: 0.08rem 0.45rem; }
+.opp-total { margin-left: auto; font-size: 0.74rem; color: var(--c-bluehi, #9cdcfe); font-weight: 700; }
+.opp-total .u { color: var(--c-faint, #555); font-weight: 400; }
+.expand-all { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888); border-radius: 4px; padding: 0.15rem 0.5rem; font-size: 0.66rem; cursor: pointer; font-family: inherit; }
+.expand-all:hover { color: var(--c-text, #d4d4d4); border-color: var(--c-faint, #555); }
+
+.prod-search { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.25rem 0.6rem; font-size: 0.78rem; width: 200px; }
+.prod-search:focus { outline: none; border-color: var(--c-accent, #4ec9b0); }
+
+.opp-bands { padding: 0.35rem 0.5rem 0.55rem; }
+.opp-band { border-radius: 5px; }
+.opp-band + .opp-band { margin-top: 0.15rem; }
+.opp-band > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.3rem 0.45rem; border-radius: 5px;
+}
+.opp-band > summary::-webkit-details-marker { display: none; }
+.opp-band > summary:hover { background: #202020; }
+.band-score { font-size: 0.72rem; font-weight: 700; min-width: 3rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.band-barwrap { flex: 1; min-width: 60px; height: 9px; background: var(--c-linefaint, #232323); border-radius: 3px; overflow: hidden; }
+.band-bar { display: block; height: 100%; min-width: 3px; border-radius: 3px; }
+.band-count { font-size: 0.7rem; color: var(--c-text4, #999); flex-shrink: 0; min-width: 5.5rem; text-align: right; }
+.tier-high .band-score { color: var(--c-accent, #4ec9b0); }  .tier-high .band-bar { background: var(--c-accent, #4ec9b0); }
+.tier-mid  .band-score { color: #d7ba7d; }  .tier-mid  .band-bar { background: #d7ba7d; }
+.tier-low  .band-score { color: var(--c-orange, #ce9178); }  .tier-low  .band-bar { background: var(--c-orange, #ce9178); }
+
+.band-clients { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.35rem 0.55rem 0.5rem 3.6rem; }
+.cchip { font-size: 0.72rem; color: #cbd5e1; background: var(--c-linefaint, #232323); border: 1px solid #2c2c2c; border-radius: 10px; padding: 0.08rem 0.55rem; text-decoration: none; }
+.cchip:hover { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+
+.opp-empty { padding: 0.55rem 0.95rem 0.75rem; font-size: 0.74rem; color: var(--c-faint, #555); }
+
+.empty-state { text-align: center; padding: 3rem 1rem; color: var(--c-faint, #555); }
+.empty-state a { color: var(--c-accent, #4ec9b0); }
+.loading-text { color: var(--c-faint2, #444); font-size: 0.82rem; padding: 2rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <div class="toolbar">
+    <span class="toolbar-title">Opportunities by product</span>
+    <span class="toolbar-meta">companies banded by their product-fit score — where the sales are</span>
+    <input class="prod-search" type="search" id="prodSearch" placeholder="Filter products…" oninput="applyQuery(this.value)" style="margin-left:auto">
+    <div class="scope-tabs">
+      <button class="scope-tab active" data-focus="false">All products</button>
+      <button class="scope-tab" data-focus="true">★ Focus</button>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="summary-line" id="summaryLine"></div>
+    <div id="oppList"></div>
+    <div class="empty-state" id="emptyState" style="display:none">
+      No qualified opportunities (fit ≥ 5) yet. Run product matches to populate this view.<br>
+      <a href="/match">Open Match →</a>
+    </div>
+    <div class="loading-text" id="loadingText">Loading…</div>
+  </div>
+</div>
+
+<script>
+initNavbar({ active: 'opportunities' });
+
+const TOKEN_KEY = 'wk_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const H = () => { const t = getToken(); return t ? { 'Authorization': `Bearer ${t}` } : {}; };
+if (!getToken()) { window.location.href = '/'; }
+
+let _focusOnly = false;
+let _minScore = 5;
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function tierOf(n) { return n >= 8 ? 'high' : (n >= 6 ? 'mid' : 'low'); }
+
+function bandRow(score, clients, maxCount) {
+  const n = clients.length;
+  const pct = maxCount > 0 ? Math.max(6, Math.round(n / maxCount * 100)) : 0;
+  const chips = clients.map(c =>
+    `<a class="cchip" href="/client/${encodeURIComponent(c)}">${esc(c)}</a>`).join('');
+  return `
+    <details class="opp-band tier-${tierOf(score)}">
+      <summary>
+        <span class="band-score">${score}/10</span>
+        <span class="band-barwrap"><span class="band-bar" style="width:${pct}%"></span></span>
+        <span class="band-count">${n} ${n === 1 ? 'company' : 'companies'}</span>
+      </summary>
+      <div class="band-clients">${chips}</div>
+    </details>`;
+}
+
+function cardHtml(p) {
+  // bands is { "10": [names], "9": [...], ... }; iterate high→low.
+  const scores = Object.keys(p.bands).map(Number).sort((a, b) => b - a);
+  const maxCount = Math.max(1, ...scores.map(s => p.bands[String(s)].length));
+  const rows = scores.map(s => bandRow(s, p.bands[String(s)], maxCount)).join('');
+  return `
+    <div class="opp-card${p.is_focus ? ' focus' : ''}">
+      <div class="opp-head">
+        <a class="opp-name" href="/product/${p.id}" title="Open the ${esc(p.name)} product page">${esc(p.name)}</a>
+        ${p.is_focus ? '<span class="opp-star" title="Focus product">★</span>' : ''}
+        ${p.category ? `<span class="opp-cat">${esc(p.category)}</span>` : ''}
+        <span class="opp-total">${p.total} <span class="u">potential ${p.total === 1 ? 'sale' : 'sales'} (≥${_minScore})</span></span>
+        <button class="expand-all" data-act="expandall" aria-expanded="false">⤢ Expand all</button>
+      </div>
+      <div class="opp-bands">${rows}</div>
+    </div>`;
+}
+
+let _data = { products: [] };
+let _query = '';
+
+function render(data) {
+  _data = data || { products: [] };
+  draw();
+}
+
+function draw() {
+  document.getElementById('loadingText').style.display = 'none';
+  const all = _data.products || [];
+  const q = _query.trim().toLowerCase();
+  const allWith = all.filter(p => p.total > 0);
+  const shown = allWith.filter(p => !q || (p.name || '').toLowerCase().includes(q));
+  const list = document.getElementById('oppList');
+  const emptyEl = document.getElementById('emptyState');
+
+  if (!shown.length) {
+    list.innerHTML = '';
+    emptyEl.innerHTML = q
+      ? `No products match “${esc(_query)}”.`
+      : 'No qualified opportunities (fit ≥ 5) yet. Run product matches to populate this view.<br><a href="/match">Open Match →</a>';
+    emptyEl.style.display = 'block';
+  } else {
+    emptyEl.style.display = 'none';
+    list.innerHTML = shown.map(cardHtml).join('');
+  }
+
+  const hidden = all.length - allWith.length;
+  const bits = [`${allWith.length} ${allWith.length === 1 ? 'product' : 'products'} with opportunities`,
+                `${_data.matched_clients || 0} of ${_data.total_clients || 0} companies analyzed`];
+  if (q) bits.unshift(`${shown.length} shown`);
+  if (hidden > 0) bits.push(`${hidden} product${hidden === 1 ? '' : 's'} with no qualified fit`);
+  document.getElementById('summaryLine').textContent = bits.join(' · ');
+}
+
+function applyQuery(v) { _query = v || ''; draw(); }
+
+async function load() {
+  document.getElementById('loadingText').style.display = 'block';
+  document.getElementById('oppList').innerHTML = '';
+  document.getElementById('emptyState').style.display = 'none';
+  try {
+    const r = await fetch(`/api/opportunities?focus_only=${_focusOnly}&min_score=${_minScore}`, { headers: H() });
+    if (r.status === 401) { window.location.href = '/'; return; }
+    if (!r.ok) { document.getElementById('loadingText').textContent = 'Failed to load opportunities.'; return; }
+    render(await r.json());
+  } catch (e) {
+    document.getElementById('loadingText').textContent = 'Error: ' + e.message;
+  }
+}
+
+// Expand/collapse all bands within a product card (native <details>).
+document.getElementById('oppList').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-act="expandall"]');
+  if (!btn) return;
+  const dets = [...btn.closest('.opp-card').querySelectorAll('details.opp-band')];
+  const openAll = dets.some(d => !d.open);
+  dets.forEach(d => { d.open = openAll; });
+  btn.textContent = openAll ? '⤡ Collapse all' : '⤢ Expand all';
+  btn.setAttribute('aria-expanded', openAll ? 'true' : 'false');
+});
+
+document.querySelectorAll('.scope-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.scope-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    _focusOnly = tab.dataset.focus === 'true';
+    load();
+  });
+});
+
+load();
+</script>
+</body>
+</html>

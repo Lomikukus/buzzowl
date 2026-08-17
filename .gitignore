@@ -1,0 +1,51 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Audio, transcripts, and summaries — never commit recorded content
+raw_audio/
+raw_transcripts/
+summaries/
+!tests/fixtures/summaries/
+test-audio/*.m4a
+test-audio/*.wav
+test-audio/*.mp3
+test-audio/*.mp4
+
+# Models and cache
+*.bin
+*.pt
+*.onnx
+
+# Secrets
+config.local.yaml
+.env
+
+# Local (per-machine) Claude Code settings — never commit
+.claude/settings.local.json
+
+# Vault and research data — stays local, never commit client/meeting content
+north-info/
+data/
+
+# Camofox browser — cloned separately, not a submodule
+camofox-browser/
+
+
+# Node — agent service build artifacts and dependencies
+agent_service_ts/node_modules/
+agent_service_ts/dist/
+
+# Claude Code worktrees (embedded repos)
+.claude/worktrees/
+
+# Personal documents — root-level PDFs and local screenshots never belong in the repo
+Master_expose.pdf
+/*.pdf
+screenshots/
+docker-compose.override.yml

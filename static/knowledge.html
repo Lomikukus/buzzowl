@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buzzowl — Knowledge</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/components/navbar.js?v=20260714d"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family:var(--c-font-mono, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace);
+            background: var(--c-bg2, #1a1a1a);
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Buttons ──────────────────────────────────── */
+        button {
+            cursor: pointer; font-family: inherit;
+            border: 1px solid var(--c-line, #2a2a2a); background: var(--c-linefaint, #222); color: var(--c-text2, #ccc);
+            border-radius: 4px; font-size: 0.78rem; padding: 0.3rem 0.7rem;
+        }
+        button:hover:not(:disabled) { border-color: var(--c-blue, #569cd6); color: var(--c-bluehi, #9cdcfe); }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.primary { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border-color: var(--c-accent, #4ec9b0); font-weight: 600; }
+        button.primary:hover:not(:disabled) { background: var(--c-accent2, #3ab89e); border-color: var(--c-accent2, #3ab89e); }
+
+        /* ── Login overlay ────────────────────────────── */
+        #loginOverlay {
+            position: fixed; inset: 0; background: rgba(26,26,26,0.97); z-index: 9999;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #loginOverlay.hidden { display: none; }
+        #loginPanel {
+            background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line2, #333); border-radius: 10px;
+            padding: 1.8rem; width: 380px; max-width: 95vw;
+            display: flex; flex-direction: column; gap: 0.85rem;
+        }
+        #loginPanel h2 { font-size: 1rem; color: var(--c-bluehi, #9cdcfe); margin-bottom: 0.2rem; }
+        .login-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+        .login-tab {
+            padding: 0.35rem 1rem; font-size: 0.8rem; cursor: pointer;
+            color: var(--c-muted2, #666); background: none; border: none; font-family: inherit;
+            border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .login-tab.active { color: var(--c-bluehi, #9cdcfe); border-bottom-color: var(--c-bluehi, #9cdcfe); }
+        .login-fields { display: flex; flex-direction: column; gap: 0.7rem; }
+        .login-field { display: flex; flex-direction: column; gap: 0.3rem; }
+        .login-field label { font-size: 0.75rem; color: var(--c-muted, #888); }
+        .login-field input {
+            background: var(--c-ink, #111); border: 1px solid var(--c-line2, #333); border-radius: 5px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.83rem;
+            padding: 0.45rem 0.65rem;
+        }
+        .login-field input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #loginSubmitBtn {
+            background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); font-weight: 600;
+            width: 100%; padding: 0.5rem; font-size: 0.85rem; margin-top: 0.2rem;
+            border-color: var(--c-accent, #4ec9b0);
+        }
+        #loginSubmitBtn:hover:not(:disabled) { background: var(--c-accent2, #3ab89e); }
+        #loginError { font-size: 0.78rem; color: var(--c-red, #f14c4c); min-height: 1.1rem; }
+
+        /* ── Research toolbar ─────────────────────────── */
+        .wk-toolbar { display:flex; align-items:center; gap:0.5rem; padding:0.35rem 1.2rem; border-bottom:1px solid var(--c-bg, #1e1e1e); flex-shrink:0; }
+        .wk-toolbar button { font-size:0.72rem; padding:0.25rem 0.65rem; border:1px solid #1a3a5a; color:var(--c-blue, #569cd6); background:#0d1a2a; border-radius:3px; cursor:pointer; font-family:inherit; }
+        .wk-toolbar button:hover { background:#0f2a40; }
+
+        /* ── Main layout ──────────────────────────────── */
+        .main {
+            display: flex; flex: 1; min-height: 0;
+        }
+
+        /* ── Left panel — Dashboard ───────────────────── */
+        .left-panel {
+            width: 320px; flex-shrink: 0;
+            border-right: 1px solid var(--c-linefaint, #222);
+            display: flex; flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-section {
+            padding: 0.75rem 0.9rem;
+            border-bottom: 1px solid var(--c-bg, #1e1e1e);
+        }
+        .panel-section-title {
+            font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em;
+            color: var(--c-faint2, #444); margin-bottom: 0.55rem;
+        }
+
+        /* Stats bar */
+        #statsBar {
+            display: flex; gap: 1.2rem; flex-shrink: 0;
+        }
+        .stat { display: flex; flex-direction: column; gap: 0.15rem; }
+        .stat-num { font-size: 1.1rem; color: var(--c-bluehi, #9cdcfe); font-weight: 700; }
+        .stat-label { font-size: 0.62rem; color: var(--c-faint, #555); text-transform: uppercase; letter-spacing: 0.08em; }
+
+        /* Clients list */
+        #clientsSection {
+            flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
+        }
+        #clientsSection .panel-section-title {
+            padding: 0.75rem 0.9rem 0; margin-bottom: 0.4rem; flex-shrink: 0;
+        }
+        #clientsList {
+            overflow-y: auto; flex: 1;
+        }
+        .client-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0.35rem 0.9rem; font-size: 0.8rem; cursor: pointer;
+            border-left: 3px solid transparent; transition: background 0.15s;
+        }
+        .client-row:hover { background: var(--c-bg, #1e1e1e); }
+        .client-row.active {
+            border-left-color: var(--c-blue, #569cd6); background: #0d1a2a; color: var(--c-bluehi, #9cdcfe);
+        }
+        .client-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        .client-count {
+            font-size: 0.65rem; color: var(--c-faint2, #444); flex-shrink: 0; margin-left: 0.5rem;
+        }
+        .client-row.active .client-count { color: #4a7fa5; }
+
+        /* Contacts */
+        #contactsList { display: flex; flex-direction: column; gap: 0.25rem; }
+        .contact-row {
+            font-size: 0.78rem; padding: 0.2rem 0;
+            display: flex; align-items: baseline; gap: 0.4rem;
+        }
+        .contact-name { color: var(--c-text, #d4d4d4); }
+        .contact-meta { font-size: 0.68rem; color: var(--c-faint, #555); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* Activity */
+        #activityList { display: flex; flex-direction: column; gap: 0.3rem; }
+        .activity-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.76rem; }
+        .agent-badge {
+            font-size: 0.6rem; padding: 0.1rem 0.4rem; border-radius: 3px;
+            font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0;
+        }
+        .ab-research { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+        .ab-osint    { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+        .ab-enrichment { background: #2e1a3a; color: var(--c-purple, #c586c0); }
+        .ab-org      { background: var(--c-orangetint, #3a2a1a); color: var(--c-orange, #ce9178); }
+        .ab-delegator { background: #1a2e1a; color: #b5cea8; }
+        .activity-stat { color: var(--c-muted2, #777); }
+        .activity-stat span { color: var(--c-accent, #4ec9b0); }
+
+        /* ── Sessions ────────────────────────────────── */
+        #sessionsSection {
+            flex-shrink: 0; max-height: 190px; overflow: hidden;
+            display: flex; flex-direction: column;
+            border-bottom: 1px solid var(--c-bg, #1e1e1e);
+        }
+        .sessions-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0.6rem 0.9rem 0.35rem; flex-shrink: 0;
+        }
+        #sessionsList { overflow-y: auto; flex: 1; }
+        .session-row {
+            display: flex; align-items: center; gap: 0.4rem;
+            padding: 0.3rem 0.9rem; font-size: 0.78rem; cursor: pointer;
+            border-left: 3px solid transparent; transition: background 0.12s;
+        }
+        .session-row:hover { background: var(--c-bg, #1e1e1e); }
+        .session-row.active { border-left-color: var(--c-accent, #4ec9b0); background: var(--c-postint, #0d2a1a); color: var(--c-accent, #4ec9b0); }
+        .session-title {
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+        }
+        .session-date { font-size: 0.6rem; color: var(--c-line2, #333); flex-shrink: 0; }
+        .session-row.active .session-date { color: #2a5a3a; }
+        #newSessionBtn {
+            font-size: 0.65rem; padding: 0.15rem 0.5rem;
+            color: var(--c-accent, #4ec9b0); border-color: #2a5a3a;
+        }
+        #newSessionBtn:hover { background: var(--c-postint, #0d2a1a); }
+
+        /* ── Right panel — Chat ───────────────────────── */
+        .right-panel {
+            flex: 1; min-width: 0;
+            display: flex; flex-direction: column;
+        }
+
+        /* Messages area */
+        #chatMessages {
+            flex: 1; overflow-y: auto; padding: 1rem 1.2rem;
+            display: flex; flex-direction: column; gap: 1rem;
+            min-height: 0;
+        }
+
+        .msg-wrap { display: flex; flex-direction: column; gap: 0.3rem; }
+        .msg-wrap.user-wrap { align-items: flex-end; }
+        .msg-wrap.ai-wrap   { align-items: flex-start; }
+
+        .msg-bubble {
+            max-width: 78%; padding: 0.65rem 0.9rem;
+            border-radius: 10px; font-size: 0.83rem; line-height: 1.65;
+        }
+        .msg-user {
+            background: #0d1a2a; border: 1px solid #1e3a5a; color: #c8d8e8;
+            border-radius: 10px 10px 2px 10px;
+        }
+        .msg-ai {
+            background: var(--c-bg2, #1a1a1a); border: 1px solid #252525; color: var(--c-text, #d4d4d4);
+            border-radius: 10px 10px 10px 2px;
+        }
+        .msg-thinking {
+            color: var(--c-faint2, #444); font-style: italic; font-size: 0.78rem;
+            padding: 0.4rem 0.9rem;
+        }
+
+        /* Markdown inside AI bubbles */
+        .msg-ai h1, .msg-ai h2, .msg-ai h3 { color: var(--c-bluehi, #9cdcfe); font-size: 0.88rem; margin: 0.5rem 0 0.25rem; }
+        .msg-ai strong { color: var(--c-neutraly, #dcdcaa); }
+        .msg-ai em { color: var(--c-orange, #ce9178); }
+        .msg-ai ul, .msg-ai ol { padding-left: 1.4rem; margin: 0.3rem 0; }
+        .msg-ai li { margin-bottom: 0.15rem; }
+        .msg-ai p { margin-bottom: 0.4rem; }
+        .msg-ai p:last-child { margin-bottom: 0; }
+        .msg-ai code { background: var(--c-ink, #111); padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.8rem; color: var(--c-orange, #ce9178); }
+        .msg-ai pre { background: var(--c-ink, #111); border-radius: 6px; padding: 0.7rem; margin: 0.4rem 0; overflow-x: auto; }
+        .msg-ai blockquote { border-left: 3px solid var(--c-line2, #333); padding-left: 0.7rem; color: var(--c-muted, #888); margin: 0.3rem 0; }
+
+        /* Source pills */
+        .sources-row {
+            display: flex; flex-wrap: wrap; gap: 0.4rem; padding-left: 0.2rem;
+        }
+        .source-pill {
+            font-size: 0.64rem; padding: 0.15rem 0.55rem; border-radius: 10px;
+            border: 1px solid var(--c-line, #2a2a2a); color: var(--c-muted, #888); white-space: nowrap;
+            max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+            cursor: default; text-decoration: none; display: inline-block;
+        }
+        a.source-pill { cursor: pointer; }
+        .source-pill:hover { color: var(--c-text2, #ccc); border-color: var(--c-faint2, #444); }
+        .src-meeting    { border-color: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+        .src-research, .src-osint, .src-finding, .src-summary { border-color: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+        .src-client, .src-contact { border-color: #2e1a3a; color: var(--c-purple, #c586c0); }
+
+        /* Chat footer */
+        .chat-footer {
+            padding: 0.75rem 1.2rem;
+            border-top: 1px solid var(--c-linefaint, #222);
+            display: flex; flex-direction: column; gap: 0.5rem;
+        }
+        #scopeChip {
+            display: none; align-items: center; gap: 0.4rem;
+            font-size: 0.72rem; color: var(--c-blue, #569cd6);
+        }
+        #scopeChip.visible { display: flex; }
+        #scopeLabel {
+            background: #0d1a2a; border: 1px solid #1e3a5a; color: var(--c-blue, #569cd6);
+            padding: 0.15rem 0.55rem; border-radius: 10px; font-size: 0.7rem;
+        }
+        #clearScopeBtn {
+            background: none; border: none; color: var(--c-faint, #555); padding: 0; font-size: 0.75rem;
+        }
+        #clearScopeBtn:hover { color: var(--c-red, #f14c4c); }
+        .chat-input-row { display: flex; gap: 0.6rem; }
+        #chatInput {
+            flex: 1; background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); border-radius: 6px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.83rem;
+            padding: 0.5rem 0.75rem; resize: none; line-height: 1.4; height: 2.5rem;
+        }
+        #chatInput:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #sendBtn { flex-shrink: 0; align-self: flex-end; padding: 0.5rem 1.1rem; }
+        .prompt-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+        .prompt-chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-bluehi, #9cdcfe); border-radius: 14px; padding: 0.22rem 0.7rem; font-size: 0.74rem; cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+        .prompt-chip:hover { border-color: var(--c-accent, #4ec9b0); background: var(--c-line, #2a2a2a); }
+
+        /* Model selector */
+        .chat-controls { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; }
+        .model-label { font-size: 0.65rem; color: var(--c-faint2, #444); text-transform: uppercase; letter-spacing: 0.06em; }
+        #modelSelect {
+            background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); border-radius: 4px;
+            color: var(--c-muted2, #777); font-family: inherit; font-size: 0.72rem;
+            padding: 0.2rem 0.5rem; cursor: pointer;
+        }
+        #modelSelect:focus { outline: none; border-color: var(--c-blue, #569cd6); color: var(--c-text2, #ccc); }
+        #modelSelect option { background: var(--c-bg2, #1a1a1a); }
+
+        /* ── Signal panel ────────────────────────────── */
+        #signalPanel {
+            flex-shrink: 0;
+            border-bottom: 1px solid var(--c-bg, #1e1e1e);
+        }
+        .signal-panel-header {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.4rem 1.2rem; cursor: pointer; user-select: none;
+        }
+        .signal-panel-header:hover { background: #1c1c1c; }
+        .signal-panel-title {
+            font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--c-line3, #3a3a3a); flex: 1;
+        }
+        .signal-panel-count { color: var(--c-accent, #4ec9b0); margin-left: 0.25rem; }
+        #toggleSignalsBtn {
+            background: none; border: none; color: var(--c-line, #2a2a2a); font-size: 0.68rem; padding: 0;
+        }
+        #toggleSignalsBtn:hover { color: var(--c-faint, #555); }
+        #signalCards {
+            display: flex; gap: 0.6rem; overflow-x: auto;
+            padding: 0 1.2rem 0.6rem; flex-shrink: 0;
+        }
+        #signalCards.collapsed { display: none; }
+        #signalCards::-webkit-scrollbar { height: 3px; }
+        .signal-card {
+            flex-shrink: 0; width: 230px;
+            background: var(--c-bg2, #1a1a1a); border: 1px solid #242424; border-radius: 6px;
+            padding: 0.5rem 0.65rem; display: flex; flex-direction: column; gap: 0.28rem;
+        }
+        .signal-card:hover { border-color: #303030; }
+        .signal-card-top { display: flex; align-items: center; gap: 0.4rem; }
+        .signal-badge {
+            font-size: 0.56rem; padding: 0.08rem 0.35rem; border-radius: 3px;
+            font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+            flex-shrink: 0;
+        }
+        .sb-pain_point  { background: var(--c-redtint, #3a1010); color: var(--c-red, #f14c4c); }
+        .sb-opportunity { background: var(--c-postint, #0d2a1a); color: var(--c-accent, #4ec9b0); }
+        .sb-risk        { background: var(--c-orangetint, #2e1a0a); color: var(--c-orange, #ce9178); }
+        .sb-news        { background: var(--c-bluetint, #0d1a2e); color: var(--c-blue, #569cd6); }
+        .signal-client {
+            font-size: 0.6rem; color: var(--c-faint2, #444); overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        .signal-headline {
+            font-size: 0.74rem; color: #d0d0d0; line-height: 1.35;
+            display: -webkit-box; -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .signal-evidence {
+            font-size: 0.66rem; color: var(--c-faint, #555); line-height: 1.3;
+            display: -webkit-box; -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .signal-ask-btn {
+            margin-top: 0.15rem; align-self: flex-start;
+            font-size: 0.6rem; padding: 0.12rem 0.45rem;
+            color: var(--c-accent, #4ec9b0); border-color: #1a4a2a;
+        }
+        .signal-ask-btn:hover { background: var(--c-postint, #0d2a1a); }
+
+        /* Placeholder when chat is empty */
+        #chatPlaceholder {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            flex: 1; color: var(--c-line2, #333); gap: 0.6rem; font-size: 0.85rem;
+        }
+        #chatPlaceholder .ph-title { color: #4a4a4a; font-size: 0.95rem; }
+        #chatPlaceholder .ph-hint  { font-size: 0.75rem; color: var(--c-line, #2a2a2a); }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: var(--c-ink, #111); }
+        ::-webkit-scrollbar-thumb { background: var(--c-line, #2a2a2a); border-radius: 3px; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+        .msg-wrap { animation: fadeIn 0.2s ease; }
+
+        /* Empty state */
+        .empty-note { font-size: 0.75rem; color: var(--c-line2, #333); font-style: italic; padding: 0.3rem 0; }
+
+        /* ── Research modal ──────────────────────────── */
+        .r-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.72); z-index: 200;
+            align-items: center; justify-content: center;
+        }
+        .r-overlay.open { display: flex; }
+        .r-modal {
+            background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line2, #333);
+            border-radius: 6px; padding: 1.2rem; width: 360px;
+            font-family: inherit;
+        }
+        .r-modal h3 { font-size: 0.88rem; color: var(--c-bluehi, #9cdcfe); margin-bottom: 0.9rem; }
+        .r-form-row { margin-bottom: 0.65rem; }
+        .r-form-row label { display: block; font-size: 0.67rem; color: var(--c-faint, #555); margin-bottom: 0.25rem; }
+        .r-form-row input, .r-form-row select {
+            width: 100%; background: var(--c-ink, #111); color: var(--c-text2, #ccc); border: 1px solid var(--c-line, #2a2a2a);
+            border-radius: 3px; padding: 0.35rem 0.5rem; font-size: 0.78rem; font-family: inherit;
+        }
+        .r-form-row input:focus { outline: 1px solid var(--c-blue, #569cd6); }
+        .r-actions { display: flex; gap: 0.45rem; justify-content: flex-end; margin-top: 0.85rem; }
+        .r-actions button { font-size: 0.75rem; }
+
+        /* Toast */
+        #toast {
+            position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 500;
+            background: #1e2e1e; border: 1px solid #2a5a2a; border-radius: 6px;
+            padding: 0.6rem 1rem; font-size: 0.78rem; color: var(--c-accent, #4ec9b0);
+            opacity: 0; transition: opacity 0.25s; pointer-events: none;
+        }
+        #toast.show { opacity: 1; }
+    </style>
+</head>
+<body>
+
+    <!-- Login overlay -->
+    <div id="loginOverlay" class="hidden">
+        <div id="loginPanel">
+            <h2>Buzzowl</h2>
+            <div class="login-tabs">
+                <button class="login-tab active" data-tab="login">Login</button>
+                <button class="login-tab" data-tab="register">Register</button>
+            </div>
+            <div id="loginFields" class="login-fields">
+                <div class="login-field">
+                    <label>Organisation slug</label>
+                    <input type="text" id="loginOrg" placeholder="your-org" autocomplete="organization">
+                </div>
+                <div class="login-field">
+                    <label>Username</label>
+                    <input type="text" id="loginUser" placeholder="username" autocomplete="username">
+                </div>
+                <div class="login-field">
+                    <label>Password</label>
+                    <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+                </div>
+            </div>
+            <div id="registerFields" class="login-fields" style="display:none">
+                <div class="login-field">
+                    <label>Organisation name</label>
+                    <input type="text" id="regOrgName" placeholder="Acme Corp" autocomplete="organization">
+                </div>
+                <div class="login-field">
+                    <label>Username</label>
+                    <input type="text" id="regUser" placeholder="username" autocomplete="username">
+                </div>
+                <div class="login-field">
+                    <label>Password</label>
+                    <input type="password" id="regPass" placeholder="••••••••" autocomplete="new-password">
+                </div>
+            </div>
+            <div id="loginError"></div>
+            <button id="loginSubmitBtn">Login</button>
+        </div>
+    </div>
+
+    <nav id="main-nav"></nav>
+    <div class="wk-toolbar">
+        <button id="researchBtn" onclick="openResearchModal()">+ Research</button>
+    </div>
+
+    <!-- Research modal -->
+    <div class="r-overlay" id="researchOverlay">
+        <div class="r-modal">
+            <h3>Start Research <span style="font-size:0.65rem;color:var(--c-faint, #555);font-weight:normal">via Hermes</span></h3>
+            <div class="r-form-row">
+                <label>Subject</label>
+                <input id="rs-subject" placeholder="e.g. Bosch GmbH" />
+            </div>
+            <div class="r-form-row">
+                <label>Custom angles (optional)</label>
+                <input id="rs-angles" placeholder="e.g. recent funding, leadership changes" />
+            </div>
+            <div class="r-form-row">
+                <label>Brain (model provider)</label>
+                <select id="rs-brain">
+                    <option value="">default (from config)</option>
+                    <option value="ollama">ollama (local)</option>
+                    <option value="openrouter">openrouter</option>
+                    <option value="claude">claude (Anthropic API)</option>
+                </select>
+            </div>
+            <div class="r-form-row">
+                <label>Model override (optional)</label>
+                <input id="rs-model" placeholder="e.g. meta-llama/llama-3.3-70b-instruct" />
+            </div>
+            <div class="r-actions">
+                <button onclick="closeResearchModal()">Cancel</button>
+                <button class="primary" onclick="submitResearch()">Start</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <div class="main">
+
+        <!-- Left: Dashboard -->
+        <div class="left-panel">
+
+            <!-- Stats -->
+            <div class="panel-section">
+                <div class="panel-section-title">Overview</div>
+                <div id="statsBar">
+                    <div class="stat">
+                        <span class="stat-num" id="statClients">—</span>
+                        <span class="stat-label">Clients</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-num" id="statContacts">—</span>
+                        <span class="stat-label">Contacts</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-num" id="statSessions">—</span>
+                        <span class="stat-label">Sessions</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Conversations -->
+            <div id="sessionsSection">
+                <div class="sessions-header">
+                    <span class="panel-section-title" style="margin:0">Conversations</span>
+                    <button id="newSessionBtn">+ New</button>
+                </div>
+                <div id="sessionsList">
+                    <div class="empty-note" style="padding:0.3rem 0.9rem">No conversations yet</div>
+                </div>
+            </div>
+
+            <!-- Clients — takes remaining space -->
+            <div id="clientsSection">
+                <div class="panel-section-title" style="display:flex;align-items:center;gap:0.4rem">Clients <span id="clientsCount" style="color:var(--c-line2, #333)"></span>
+                    <select id="kSortSelect" onchange="setKSort(this.value)" title="Sort clients" style="margin-left:auto;background:var(--c-surface, #252526);border:1px solid var(--c-line2, #333);color:var(--c-text3, #aaa);border-radius:4px;padding:0.1rem 0.3rem;font-size:0.68rem;cursor:pointer">
+                        <option value="name">A–Z</option><option value="recent">Latest</option>
+                    </select>
+                </div>
+                <div id="clientsList">
+                    <div class="empty-note" style="padding:0.3rem 0.9rem">Loading…</div>
+                </div>
+            </div>
+
+            <!-- Contacts -->
+            <div class="panel-section" style="flex-shrink:0; max-height:160px; overflow-y:auto;">
+                <div class="panel-section-title">Recent Contacts</div>
+                <div id="contactsList">
+                    <div class="empty-note">Loading…</div>
+                </div>
+            </div>
+
+            <!-- Agent activity -->
+            <div class="panel-section" style="flex-shrink:0;">
+                <div class="panel-section-title">Agent Activity (7d)</div>
+                <div id="activityList">
+                    <div class="empty-note">Loading…</div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right: Chat -->
+        <div class="right-panel">
+
+            <!-- Signal panel (hidden until signals exist) -->
+            <div id="signalPanel" style="display:none">
+                <div class="signal-panel-header" id="signalPanelHeader">
+                    <span class="signal-panel-title">Signals<span class="signal-panel-count" id="signalCount"></span></span>
+                    <button id="toggleSignalsBtn">▾</button>
+                </div>
+                <div id="signalCards"></div>
+            </div>
+
+            <div id="chatMessages">
+                <div id="chatPlaceholder">
+                    <span class="ph-title">Ask anything about your knowledge base</span>
+                    <span class="ph-hint">Click a client on the left to scope the conversation</span>
+                </div>
+            </div>
+            <div class="chat-footer">
+                <div id="scopeChip">
+                    <span>Scoped to:</span>
+                    <span id="scopeLabel"></span>
+                    <button id="clearScopeBtn" title="Clear scope">✕</button>
+                </div>
+                <div class="chat-controls">
+                    <span class="model-label">Backend</span>
+                    <select id="backendSelect">
+                        <option value="pi" selected>Pi agent (OpenRouter)</option>
+                        <option value="ollama">Ollama (local RAG)</option>
+                    </select>
+                    <span class="model-label" id="modelLabel">Model</span>
+                    <select id="modelSelect">
+                        <option value="">default</option>
+                    </select>
+                </div>
+                <div id="promptChips" class="prompt-chips"></div>
+                <div class="chat-input-row">
+                    <textarea id="chatInput" placeholder="Ask a question about your clients, contacts, or meetings…" rows="1"></textarea>
+                    <button class="primary" id="sendBtn">Send</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ─── Auth ─────────────────────────────────────────────────────────────
+        const TOKEN_KEY  = 'wk_token';
+        const getToken   = () => localStorage.getItem(TOKEN_KEY);
+        const setToken   = t  => localStorage.setItem(TOKEN_KEY, t);
+        const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+        const authHeaders = () => {
+            const t = getToken();
+            return t ? { 'Authorization': `Bearer ${t}` } : {};
+        };
+
+        const loginOverlay   = document.getElementById('loginOverlay');
+        const loginError     = document.getElementById('loginError');
+        const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+
+        function showLoginOverlay() { loginOverlay.classList.remove('hidden'); }
+        function hideLoginOverlay() { loginOverlay.classList.add('hidden'); }
+
+        async function initAuth() {
+            const token = getToken();
+            if (!token) { showLoginOverlay(); return; }
+            try {
+                const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+                if (res.ok) {
+                    hideLoginOverlay();
+                    loadDashboard();
+                } else {
+                    clearToken(); showLoginOverlay();
+                }
+            } catch {
+                hideLoginOverlay();
+                loadDashboard();
+            }
+        }
+
+        document.querySelectorAll('.login-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const isLogin = tab.dataset.tab === 'login';
+                document.getElementById('loginFields').style.display    = isLogin ? '' : 'none';
+                document.getElementById('registerFields').style.display = isLogin ? 'none' : '';
+                loginSubmitBtn.textContent = isLogin ? 'Login' : 'Create account';
+                loginError.textContent = '';
+            });
+        });
+
+        loginSubmitBtn.addEventListener('click', async () => {
+            const activeTab = document.querySelector('.login-tab.active').dataset.tab;
+            loginError.textContent = '';
+            loginSubmitBtn.disabled = true;
+            try {
+                let res;
+                if (activeTab === 'login') {
+                    res = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            org_slug: document.getElementById('loginOrg').value.trim(),
+                            username: document.getElementById('loginUser').value.trim(),
+                            password: document.getElementById('loginPass').value,
+                        }),
+                    });
+                } else {
+                    res = await fetch('/api/auth/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            org_name: document.getElementById('regOrgName').value.trim(),
+                            username: document.getElementById('regUser').value.trim(),
+                            password: document.getElementById('regPass').value,
+                        }),
+                    });
+                }
+                const d = await res.json();
+                if (!res.ok) {
+                    loginError.textContent = d.detail || 'Authentication failed';
+                } else {
+                    setToken(d.token);
+                    hideLoginOverlay();
+                    window.navbarRefreshUser?.();
+                    loadDashboard();
+                }
+            } catch { loginError.textContent = 'Could not reach server'; }
+            finally   { loginSubmitBtn.disabled = false; }
+        });
+
+        ['loginOrg','loginUser','loginPass','regOrgName','regUser','regPass'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') loginSubmitBtn.click(); });
+        });
+
+        // ─── Dashboard ────────────────────────────────────────────────────────
+        let allClients = [];
+
+        async function loadDashboard() {
+            await Promise.all([loadClients(), loadContacts(), loadActivity(), loadSessions(), loadSignals()]);
+
+            // Auto-open session + backend + client scope from URL params
+            // (e.g. /knowledge?client=Bosch  — from the client page "Open in chat")
+            const params = new URLSearchParams(window.location.search);
+            const backendParam = params.get('backend');
+            const sessionParam = params.get('session');
+            const clientParam = params.get('client');
+            if (backendParam) {
+                const sel = document.getElementById('backendSelect');
+                if (sel) { sel.value = backendParam; syncModelVisibility(); }
+            }
+            if (clientParam) {
+                setScope(clientParam);   // scope the chat to this client + highlight the row
+            }
+            if (sessionParam) {
+                await openSession(parseInt(sessionParam));
+                if (chatInput) chatInput.focus();
+            }
+            renderPromptChips();   // show quick-prompt chips (scoped if a client is set)
+        }
+
+        async function loadClients() {
+            try {
+                const res = await fetch('/api/clients', { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                allClients = data.clients || [];
+                renderClients();
+
+                // Derive session count from clients
+                const totalSessions = allClients.reduce((s, c) => s + (c.session_count || 0), 0);
+                document.getElementById('statClients').textContent  = allClients.length;
+                document.getElementById('statSessions').textContent = totalSessions;
+                document.getElementById('clientsCount').textContent = allClients.length ? `(${allClients.length})` : '';
+            } catch (e) {
+                document.getElementById('clientsList').innerHTML = '<div class="empty-note" style="padding:0.3rem 0.9rem">Could not load clients</div>';
+            }
+        }
+
+        let _kSort = localStorage.getItem('wk_clients_sort') || 'name';
+        function setKSort(mode) { _kSort = mode; try { localStorage.setItem('wk_clients_sort', mode); } catch (_) {} renderClients(); }
+        function _kSortClients(arr) {
+            const copy = arr.slice();
+            if (_kSort === 'recent') copy.sort((a, b) => (Date.parse(b.last_activity || '') || 0) - (Date.parse(a.last_activity || '') || 0));
+            else copy.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+            return copy;
+        }
+
+        function renderClients() {
+            const list = document.getElementById('clientsList');
+            const sel = document.getElementById('kSortSelect'); if (sel) sel.value = _kSort;
+            if (!allClients.length) {
+                list.innerHTML = '<div class="empty-note" style="padding:0.3rem 0.9rem">No clients yet</div>';
+                return;
+            }
+            list.innerHTML = _kSortClients(allClients).map(c => {
+                const sessions = c.session_count || 0;
+                const countLabel = sessions === 1 ? '1 session' : `${sessions} sessions`;
+                return `<div class="client-row" data-name="${escHtml(c.name)}" title="${escHtml(c.name)}">
+                    <span class="client-name">${escHtml(c.name)}</span>
+                    <span style="display:flex;align-items:center;gap:0.4rem">
+                        <span class="client-count">${sessions > 0 ? countLabel : ''}</span>
+                        <a href="/client/${encodeURIComponent(c.name)}" title="Open client brief"
+                           style="color:var(--c-faint2, #444);font-size:0.7rem;text-decoration:none;flex-shrink:0"
+                           onclick="event.stopPropagation()">↗</a>
+                    </span>
+                </div>`;
+            }).join('');
+
+            list.querySelectorAll('.client-row').forEach(row => {
+                row.addEventListener('click', () => setScope(row.dataset.name, row));
+            });
+        }
+
+        async function loadContacts() {
+            try {
+                const res = await fetch('/api/people', { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                const contacts = (data.contacts || []).slice(0, 8);
+                document.getElementById('statContacts').textContent = data.contacts?.length ?? '—';
+                const list = document.getElementById('contactsList');
+                if (!contacts.length) {
+                    list.innerHTML = '<div class="empty-note">No contacts yet</div>';
+                    return;
+                }
+                list.innerHTML = contacts.map(c => {
+                    const meta = c.metadata || {};
+                    const parts = [meta.role, meta.company].filter(Boolean).join(' · ');
+                    return `<div class="contact-row">
+                        <span class="contact-name">${escHtml(c.name)}</span>
+                        ${parts ? `<span class="contact-meta">${escHtml(parts)}</span>` : ''}
+                    </div>`;
+                }).join('');
+            } catch {
+                document.getElementById('contactsList').innerHTML = '<div class="empty-note">Could not load</div>';
+            }
+        }
+
+        async function loadActivity() {
+            try {
+                const res = await fetch('/api/agents/activity?days=7', { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                const summary = data.summary || [];
+                const list = document.getElementById('activityList');
+                if (!summary.length) {
+                    list.innerHTML = '<div class="empty-note">No agent activity this week</div>';
+                    return;
+                }
+                list.innerHTML = summary.map(s => {
+                    const cls = `ab-${s.agent_type}`;
+                    return `<div class="activity-row">
+                        <span class="agent-badge ${cls}">${escHtml(s.agent_type)}</span>
+                        <span class="activity-stat"><span>${s.done}</span>/${s.total} done${s.failed ? `, ${s.failed} failed` : ''}</span>
+                    </div>`;
+                }).join('');
+            } catch {
+                document.getElementById('activityList').innerHTML = '<div class="empty-note">Could not load</div>';
+            }
+        }
+
+        // ─── Signals ──────────────────────────────────────────────────────────
+        let signalsExpanded = true;
+
+        async function loadSignals() {
+            try {
+                const params = new URLSearchParams();
+                if (currentScope) params.set('client_name', currentScope);
+                const res = await fetch('/api/signals?' + params, { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                renderSignals(data.signals || []);
+            } catch {}
+        }
+
+        function renderSignals(signals) {
+            const panel = document.getElementById('signalPanel');
+            const cards = document.getElementById('signalCards');
+            const countEl = document.getElementById('signalCount');
+            if (!signals.length) { panel.style.display = 'none'; return; }
+            panel.style.display = '';
+            countEl.textContent = ` (${signals.length})`;
+            const typeLabels = { pain_point: 'Pain', opportunity: 'Opportunity', risk: 'Risk', news: 'News' };
+            cards.innerHTML = signals.map(s => {
+                const meta = s.metadata || {};
+                const stype = meta.signal_type || 'news';
+                const label = typeLabels[stype] || stype;
+                const client = escHtml(meta.subject || '');
+                const headline = escHtml(s.title || '');
+                const evidence = escHtml(s.content || '');
+                return `<div class="signal-card">
+                    <div class="signal-card-top">
+                        <span class="signal-badge sb-${stype}">${escHtml(label)}</span>
+                        ${client ? `<span class="signal-client">${client}</span>` : ''}
+                    </div>
+                    <div class="signal-headline">${headline}</div>
+                    ${evidence ? `<div class="signal-evidence">${evidence}</div>` : ''}
+                    <button class="signal-ask-btn"
+                        data-headline="${escHtml(s.title || '')}"
+                        data-client="${escHtml(meta.subject || '')}">Ask AI →</button>
+                </div>`;
+            }).join('');
+            cards.querySelectorAll('.signal-ask-btn').forEach(btn => {
+                btn.addEventListener('click', () => askAboutSignal(btn.dataset.headline, btn.dataset.client));
+            });
+            if (!signalsExpanded) cards.classList.add('collapsed');
+        }
+
+        function askAboutSignal(headline, clientName) {
+            const prefix = clientName ? `[${clientName}] ` : '';
+            chatInput.value = `Tell me more about: ${prefix}${headline}`;
+            if (clientName) {
+                const row = document.querySelector(`.client-row[data-name="${CSS.escape(clientName)}"]`);
+                setScope(clientName, row);
+            }
+            chatInput.dispatchEvent(new Event('input'));
+            chatInput.focus();
+        }
+
+        document.getElementById('signalPanelHeader').addEventListener('click', () => {
+            signalsExpanded = !signalsExpanded;
+            document.getElementById('signalCards').classList.toggle('collapsed', !signalsExpanded);
+            document.getElementById('toggleSignalsBtn').textContent = signalsExpanded ? '▾' : '▸';
+        });
+
+        // ─── Scope chip ───────────────────────────────────────────────────────
+        let currentScope = null;
+
+        function setScope(name, rowEl) {
+            currentScope = name;
+            document.getElementById('scopeLabel').textContent = name;
+            document.getElementById('scopeChip').classList.add('visible');
+            document.querySelectorAll('.client-row').forEach(r => r.classList.remove('active'));
+            const row = rowEl || document.querySelector(`.client-row[data-name="${(name || '').replace(/"/g, '\\"')}"]`);
+            if (row) { row.classList.add('active'); row.scrollIntoView({ block: 'nearest' }); }
+            renderPromptChips();
+            document.getElementById('chatInput').focus();
+            loadSignals(); // refresh signals scoped to this client
+        }
+
+        function clearScope() {
+            currentScope = null;
+            document.getElementById('scopeChip').classList.remove('visible');
+            document.querySelectorAll('.client-row').forEach(r => r.classList.remove('active'));
+            renderPromptChips();
+            loadSignals(); // reload unscoped signals
+        }
+
+        // ─── Quick-prompt chips above the chat input ──────────────────────────
+        function promptChipSet(scope) {
+            const who = scope || 'this client';
+            return [
+                { label: '📋 Meeting prep', text: `Prepare a concise meeting briefing for ${who}: recent activity, open topics, and what I should raise.` },
+                { label: '🏢 Business model', text: `Summarize ${who}'s core business model and main revenue drivers.` },
+                { label: '🎯 Pain points', text: `What are the likely pain points and priorities at ${who}, and how could we help?` },
+                { label: '✍ Talking points', text: `Give me 3 talking points for my next conversation with ${who}.` },
+                { label: '❓ Quiz me', text: `Ask me 3 questions to check how well I know ${who}.` },
+            ];
+        }
+        function renderPromptChips() {
+            const el = document.getElementById('promptChips');
+            if (!el) return;
+            el.innerHTML = promptChipSet(currentScope).map((c, i) =>
+                `<button class="prompt-chip" data-i="${i}">${c.label}</button>`).join('');
+            const set = promptChipSet(currentScope);
+            el.querySelectorAll('.prompt-chip').forEach(btn => {
+                btn.addEventListener('click', () => quickPrompt(set[+btn.dataset.i].text));
+            });
+        }
+        function quickPrompt(text) {
+            const ta = document.getElementById('chatInput');
+            ta.value = text;
+            sendMessage();
+        }
+
+        document.getElementById('clearScopeBtn').addEventListener('click', clearScope);
+
+        // ─── Sessions ─────────────────────────────────────────────────────────
+        let currentSessionId = null;
+
+        async function loadSessions() {
+            try {
+                const res = await fetch('/api/chat/sessions', { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                renderSessions(data.sessions || []);
+            } catch {}
+        }
+
+        function relativeDate(iso) {
+            const d = new Date(iso);
+            const now = new Date();
+            const diff = (now - d) / 1000;
+            if (diff < 60)    return 'just now';
+            if (diff < 3600)  return Math.floor(diff/60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+            return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        }
+
+        function renderSessions(sessions) {
+            const list = document.getElementById('sessionsList');
+            if (!sessions.length) {
+                list.innerHTML = '<div class="empty-note" style="padding:0.3rem 0.9rem">No conversations yet</div>';
+                return;
+            }
+            list.innerHTML = sessions.map(s =>
+                `<div class="session-row${s.id === currentSessionId ? ' active' : ''}" data-id="${s.id}">
+                    <span class="session-title">${escHtml(s.title)}</span>
+                    <span class="session-date">${relativeDate(s.updated_at)}</span>
+                </div>`
+            ).join('');
+            list.querySelectorAll('.session-row').forEach(row => {
+                row.addEventListener('click', () => openSession(parseInt(row.dataset.id)));
+            });
+        }
+
+        async function openSession(sessionId) {
+            if (sessionId === currentSessionId) return;
+            try {
+                const res = await fetch(`/api/chat/sessions/${sessionId}`, { headers: authHeaders() });
+                if (!res.ok) return;
+                const session = await res.json();
+                currentSessionId = sessionId;
+                clearChat();
+                for (const m of (session.messages || [])) {
+                    if (m.role === 'user') appendUserBubble(m.content, false);
+                    else if (m.role === 'ai') appendAIBubble(m.content, m.sources || []);
+                }
+                if (session.client_name) {
+                    const row = document.querySelector(`.client-row[data-name="${CSS.escape(session.client_name)}"]`);
+                    setScope(session.client_name, row);
+                } else {
+                    clearScope();
+                }
+                renderSessions(await (await fetch('/api/chat/sessions', { headers: authHeaders() })).json().then(d => d.sessions || []));
+            } catch {}
+        }
+
+        function startNewSession() {
+            currentSessionId = null;
+            clearChat();
+            clearScope();
+            renderSessions([]); // will reload properly on next message
+            loadSessions();
+            chatInput.focus();
+        }
+
+        document.getElementById('newSessionBtn').addEventListener('click', startNewSession);
+
+        // ─── Chat ─────────────────────────────────────────────────────────────
+        const chatMessages    = document.getElementById('chatMessages');
+        const chatPlaceholder = document.getElementById('chatPlaceholder');
+        const chatInput       = document.getElementById('chatInput');
+        const sendBtn         = document.getElementById('sendBtn');
+
+        function escHtml(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function scrollBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
+
+        function clearChat() {
+            document.querySelectorAll('#chatMessages .msg-wrap').forEach(el => el.remove());
+            chatPlaceholder.style.display = '';
+        }
+
+        function appendUserBubble(text, scroll = true) {
+            chatPlaceholder.style.display = 'none';
+            const wrap = document.createElement('div');
+            wrap.className = 'msg-wrap user-wrap';
+            wrap.innerHTML = `<div class="msg-bubble msg-user">${escHtml(text)}</div>`;
+            chatMessages.appendChild(wrap);
+            if (scroll) scrollBottom();
+            return wrap;
+        }
+
+        function appendThinking() {
+            chatPlaceholder.style.display = 'none';
+            const wrap = document.createElement('div');
+            wrap.className = 'msg-wrap ai-wrap';
+            wrap.innerHTML = `<div class="msg-thinking">Thinking…</div>`;
+            chatMessages.appendChild(wrap);
+            scrollBottom();
+            return wrap;
+        }
+
+        function sourceClass(type) {
+            if (!type) return '';
+            if (type === 'meeting') return 'src-meeting';
+            if (['research','osint','finding','summary'].includes(type)) return 'src-research';
+            if (['client','contact'].includes(type)) return 'src-client';
+            return '';
+        }
+
+        function pillsHtml(sources) {
+            if (!sources.length) return '';
+            const seen = new Set();
+            const pills = sources.filter(s => {
+                const key = (s.url || s.title || '').trim();
+                if (!key || seen.has(key)) return false;
+                seen.add(key); return true;
+            }).map(s => {
+                const cls = `source-pill ${sourceClass(s.type)}`;
+                const label = escHtml(s.title || s.type || 'source');
+                const tip = escHtml(s.snippet || s.url || '');
+                if (s.url) {
+                    return `<a class="${cls}" href="${escHtml(s.url)}" target="_blank" rel="noopener" title="${tip}">↗ ${label}</a>`;
+                }
+                return `<span class="${cls}" title="${tip}">${label}</span>`;
+            });
+            return `<div class="sources-row">${pills.join('')}</div>`;
+        }
+
+        function replaceWithAI(thinkingWrap, answer, sources) {
+            thinkingWrap.innerHTML = `<div class="msg-bubble msg-ai">${marked.parse(answer)}</div>${pillsHtml(sources)}`;
+            scrollBottom();
+        }
+
+        // Live thinking preview — renders the agent's progress events (searching,
+        // reading profiles, …) inside the thinking bubble while the answer is generated
+        function renderThinkingEvents(wrap, events) {
+            const recent = (events || []).slice(-5);
+            if (!recent.length) return;
+            const lines = recent.map((e, i) => {
+                const last = i === recent.length - 1;
+                return `<div style="font-size:0.74rem;padding:0.1rem 0;color:${last ? '#4ec9b0' : '#555'};">${last ? '▸' : '✓'} ${escHtml(e)}</div>`;
+            }).join('');
+            wrap.innerHTML = `<div class="msg-thinking" style="text-align:left;">${lines}</div>`;
+            scrollBottom();
+        }
+
+        async function pollChatProgress(chatId, thinkingWrap) {
+            for (let i = 0; i < 150; i++) {
+                await new Promise(r => setTimeout(r, 1000));
+                let d;
+                try {
+                    const r = await fetch(`/api/chat/progress/${chatId}`, { headers: authHeaders() });
+                    if (!r.ok) { replaceWithAI(thinkingWrap, '_(chat run lost — please retry)_', []); return; }
+                    d = await r.json();
+                } catch { continue; }
+                if (d.status === 'done' || d.status === 'failed') {
+                    replaceWithAI(thinkingWrap, d.answer || '_(no answer)_', d.sources || []);
+                    return;
+                }
+                renderThinkingEvents(thinkingWrap, d.events);
+            }
+            replaceWithAI(thinkingWrap, '_(chat timed out — please retry)_', []);
+        }
+
+        function appendAIBubble(answer, sources) {
+            chatPlaceholder.style.display = 'none';
+            const wrap = document.createElement('div');
+            wrap.className = 'msg-wrap ai-wrap';
+            wrap.innerHTML = `<div class="msg-bubble msg-ai">${marked.parse(answer)}</div>${pillsHtml(sources)}`;
+            chatMessages.appendChild(wrap);
+            scrollBottom();
+        }
+
+        async function sendMessage() {
+            const text = chatInput.value.trim();
+            if (!text) return;
+            chatInput.value = '';
+            chatInput.style.height = '';
+            sendBtn.disabled = true;
+
+            appendUserBubble(text);
+            const thinkingWrap = appendThinking();
+
+            // Create a session on first message
+            if (!currentSessionId) {
+                try {
+                    const res = await fetch('/api/chat/sessions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                        body: JSON.stringify({ client_name: currentScope || null }),
+                    });
+                    if (res.ok) currentSessionId = (await res.json()).id;
+                } catch {}
+            }
+
+            try {
+                const backend = backendSelect.value;
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify({
+                        message: text,
+                        client_name: currentScope || null,
+                        // Don't send the Ollama model when Pi is selected — Pi uses its own
+                        // configured model (OpenRouter). Passing an Ollama model name to Pi
+                        // causes getModel('openrouter', 'qwen3.5') to fail.
+                        model: (backend === 'pi') ? null : (modelSelect.value || null),
+                        session_id: currentSessionId || null,
+                        backend: backend || null,
+                        stream: backend === 'pi',   // thinking preview via progress polling
+                    }),
+                });
+                const data = res.ok ? await res.json() : { answer: `_(Error ${res.status})_`, sources: [] };
+                if (data.chat_id) {
+                    await pollChatProgress(data.chat_id, thinkingWrap);
+                } else {
+                    replaceWithAI(thinkingWrap, data.answer || '_(no answer)_', data.sources || []);
+                }
+            } catch {
+                replaceWithAI(thinkingWrap, '_(Could not reach server)_', []);
+            } finally {
+                sendBtn.disabled = false;
+                chatInput.focus();
+                loadSessions(); // refresh title + order in sidebar
+            }
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        chatInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+        });
+        chatInput.addEventListener('input', () => {
+            chatInput.style.height = '';
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 96) + 'px';
+        });
+
+        // ─── Backend + model selector ─────────────────────────────────────────
+        const backendSelect = document.getElementById('backendSelect');
+        const modelSelect = document.getElementById('modelSelect');
+
+        function syncModelVisibility() {
+            const isPi = backendSelect.value === 'pi';
+            document.getElementById('modelLabel').style.display = isPi ? 'none' : '';
+            modelSelect.style.display = isPi ? 'none' : '';
+        }
+
+        backendSelect.addEventListener('change', syncModelVisibility);
+        syncModelVisibility(); // Apply on load — Pi is default so model selector starts hidden
+
+        async function loadModels() {
+            try {
+                const res = await fetch('/api/ollama');
+                if (!res.ok) return;
+                const data = await res.json();
+                const models = data.models || [];
+                if (!models.length) return;
+                modelSelect.innerHTML = '';
+                const defaultModel = data.default_model || models[0];
+                models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m; opt.textContent = m;
+                    if (m === defaultModel) opt.selected = true;
+                    modelSelect.appendChild(opt);
+                });
+            } catch {}
+        }
+
+        // ─── Research modal ───────────────────────────────────────────────────
+        function openResearchModal() {
+            if (currentScope) document.getElementById('rs-subject').value = currentScope;
+            document.getElementById('researchOverlay').classList.add('open');
+            document.getElementById('rs-subject').focus();
+        }
+
+        function closeResearchModal() {
+            document.getElementById('researchOverlay').classList.remove('open');
+        }
+
+        async function submitResearch() {
+            const subject = document.getElementById('rs-subject').value.trim();
+            if (!subject) { document.getElementById('rs-subject').focus(); return; }
+
+            const brain  = document.getElementById('rs-brain').value;
+            const model  = document.getElementById('rs-model').value.trim();
+            const angles = document.getElementById('rs-angles').value.trim();
+            const body = {
+                subject,
+                ...(angles ? { angles } : {}),
+                ...(brain  ? { brain  } : {}),
+                ...(model  ? { model  } : {}),
+            };
+
+            try {
+                const res = await fetch('/api/research/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify(body),
+                });
+                if (res.ok) {
+                    closeResearchModal();
+                    document.getElementById('rs-subject').value = '';
+                    document.getElementById('rs-angles').value  = '';
+                    document.getElementById('rs-brain').value   = '';
+                    document.getElementById('rs-model').value   = '';
+                    showToast(`Research started for "${subject}" — view progress in Agents`);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert(err.detail || 'Failed to start research');
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        document.getElementById('researchOverlay').addEventListener('click', e => {
+            if (e.target === document.getElementById('researchOverlay')) closeResearchModal();
+        });
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeResearchModal();
+        });
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 4000);
+        }
+
+        // ─── Init ─────────────────────────────────────────────────────────────
+        initNavbar({ active: 'knowledge' });
+        initAuth();
+        loadModels();
+    </script>
+</body>
+</html>

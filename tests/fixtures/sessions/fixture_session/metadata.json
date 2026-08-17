@@ -1,0 +1,23 @@
+{
+  "session_id": "20260101-120000",
+  "status": "staged",
+  "created_at": "2026-01-01T12:00:00",
+  "duration_s": 90.0,
+  "language": "de",
+  "title": "Erstkontakt mit Acme GmbH",
+  "entities": {
+    "companies": [
+      {"name": "Acme GmbH", "confidence": "high"},
+      {"name": "NorthStar Solutions", "confidence": "medium"}
+    ],
+    "people": [
+      {"name": "Sarah Berger", "role": "Account Executive", "confidence": "high"},
+      {"name": "Marcus Weber", "role": "Kunde bei Acme GmbH", "confidence": "high"},
+      {"name": "Jana Kiefer", "role": "Vertriebsleiterin", "confidence": "high"}
+    ],
+    "topics": ["CRM-System Salesforce", "Pipeline-Übersicht", "Demo-Vereinbarung", "Forecast-Genauigkeit"]
+  },
+  "agent_run_id": null,
+  "promoted_at": null,
+  "error": null
+}

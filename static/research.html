@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Research — Buzzowl</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+.toolbar { display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222); background: var(--c-bg2, #1a1a1a); flex-shrink: 0; flex-wrap: wrap; }
+.search-input { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.3rem 0.75rem; font-size: 0.82rem; width: 240px; }
+.search-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.filter-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-muted, #888); border-radius: 12px; padding: 0.18rem 0.65rem; font-size: 0.72rem; cursor: pointer; transition: all 0.15s; user-select: none; }
+.chip:hover { border-color: var(--c-faint, #555); color: var(--c-text2, #ccc); }
+.chip.active { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+
+.stats-bar { display: flex; gap: 0.5rem; padding: 0.5rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222); flex-shrink: 0; background: var(--c-bg2, #1a1a1a); flex-wrap: wrap; }
+.stat-chip { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 5px; padding: 0.25rem 0.7rem; font-size: 0.76rem; }
+.stat-val { color: var(--c-bluehi, #9cdcfe); font-weight: 700; margin-right: 0.3rem; }
+.stat-label { color: var(--c-muted2, #666); }
+
+.content { flex: 1; overflow-y: auto; }
+
+/* Doc list */
+.doc-list { display: flex; flex-direction: column; }
+.doc-row { border-bottom: 1px solid #1f1f1f; cursor: pointer; }
+.doc-row:hover .doc-row-header { background: var(--c-linefaint, #232323); }
+.doc-row-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.65rem 1.5rem; }
+.type-badge { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.12rem 0.45rem; border-radius: 10px; flex-shrink: 0; }
+.type-research { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
+.type-finding  { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); }
+.type-osint    { background: #2a1f3a; color: var(--c-purple, #c586c0); }
+
+.doc-title { flex: 1; font-size: 0.83rem; color: var(--c-text2, #ccc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-client { font-size: 0.75rem; color: var(--c-blue, #569cd6); text-decoration: none; flex-shrink: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-client:hover { color: #7ab8f5; text-decoration: underline; }
+.doc-date { font-size: 0.72rem; color: var(--c-faint, #555); flex-shrink: 0; width: 90px; text-align: right; }
+.doc-chevron { color: var(--c-faint2, #444); font-size: 0.75rem; flex-shrink: 0; transition: transform 0.15s; }
+.doc-row.open .doc-chevron { transform: rotate(90deg); }
+
+/* Inline content panel */
+.doc-content-panel { display: none; padding: 1rem 1.5rem 1.2rem 2.5rem; border-top: 1px solid #1f1f1f; background: #1c1c1c; }
+.doc-row.open .doc-content-panel { display: block; }
+.doc-content-loading { color: var(--c-faint, #555); font-size: 0.8rem; }
+.doc-content-body { font-size: 0.82rem; line-height: 1.7; color: var(--c-text3, #bbb); max-width: 860px; }
+.doc-content-body h1,.doc-content-body h2,.doc-content-body h3 { color: var(--c-text, #d4d4d4); margin: 0.9rem 0 0.4rem; font-size: 0.92rem; border-bottom: 1px solid var(--c-line, #2a2a2a); padding-bottom: 0.2rem; }
+.doc-content-body h1 { font-size: 1rem; }
+.doc-content-body p { margin-bottom: 0.6rem; }
+.doc-content-body a { color: var(--c-blue, #569cd6); }
+.doc-content-body ul,.doc-content-body ol { padding-left: 1.4rem; margin-bottom: 0.6rem; }
+.doc-content-body li { margin-bottom: 0.2rem; }
+.doc-content-body strong { color: var(--c-text, #d4d4d4); }
+.doc-content-body code { background: var(--c-line, #2a2a2a); padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.78rem; }
+.doc-content-body pre { background: var(--c-line, #2a2a2a); padding: 0.75rem; border-radius: 5px; overflow-x: auto; margin-bottom: 0.6rem; }
+.doc-content-body pre code { background: none; padding: 0; }
+.doc-content-meta { font-size: 0.71rem; color: var(--c-faint, #555); margin-bottom: 0.75rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+
+.empty { text-align: center; color: var(--c-faint, #555); padding: 3rem 1rem; font-size: 0.9rem; }
+
+/* Auth overlay */
+.auth-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.auth-box { background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 8px; padding: 2rem; width: 320px; display: flex; flex-direction: column; gap: 0.85rem; }
+.auth-box h2 { font-size: 1rem; color: var(--c-text, #d4d4d4); margin-bottom: 0.25rem; }
+.auth-input { background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text, #d4d4d4); border-radius: 4px; padding: 0.4rem 0.7rem; font-size: 0.85rem; width: 100%; }
+.auth-input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+.auth-btn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); border: none; border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; font-weight: 700; cursor: pointer; width: 100%; }
+.auth-btn:hover { background: var(--c-accent2, #3ab89e); }
+.auth-error { color: var(--c-red, #f14c4c); font-size: 0.78rem; display: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <input class="search-input" type="search" placeholder="Search research…" id="searchInput" oninput="applyFilter()">
+    <div class="filter-chips">
+      <span class="chip active" data-type="all"      onclick="setFilter(this,'all')">All</span>
+      <span class="chip"        data-type="research"  onclick="setFilter(this,'research')">Research reports</span>
+      <span class="chip"        data-type="finding"   onclick="setFilter(this,'finding')">Findings</span>
+      <span class="chip"        data-type="osint"     onclick="setFilter(this,'osint')">OSINT</span>
+    </div>
+  </div>
+
+  <!-- Stats bar -->
+  <div class="stats-bar">
+    <span class="stat-chip"><span class="stat-val" id="statTotal">—</span><span class="stat-label">Total</span></span>
+    <span class="stat-chip"><span class="stat-val" id="statResearch">—</span><span class="stat-label">Research reports</span></span>
+    <span class="stat-chip"><span class="stat-val" id="statFindings">—</span><span class="stat-label">Findings</span></span>
+    <span class="stat-chip"><span class="stat-val" id="statOsint">—</span><span class="stat-label">OSINT</span></span>
+  </div>
+
+  <!-- Doc list -->
+  <div class="content">
+    <div class="doc-list" id="docList"></div>
+  </div>
+</div>
+
+<!-- Auth overlay -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-box">
+    <h2>Sign in</h2>
+    <input class="auth-input" id="authOrg"  type="text"     placeholder="Organisation slug" value="north">
+    <input class="auth-input" id="authUser" type="text"     placeholder="Username">
+    <input class="auth-input" id="authPass" type="password" placeholder="Password">
+    <div class="auth-error" id="authError"></div>
+    <button class="auth-btn" onclick="doLogin()">Sign in</button>
+  </div>
+</div>
+
+<script>
+const API = '';
+let _token = localStorage.getItem('wk_token') || '';
+let _allDocs = [];
+let _activeFilter = 'all';
+let _openRow = null;
+
+function authHeaders() {
+  return { 'Authorization': `Bearer ${_token}`, 'Content-Type': 'application/json' };
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+}
+
+// ---- Auth ----
+async function doLogin() {
+  const org  = document.getElementById('authOrg').value.trim();
+  const user = document.getElementById('authUser').value.trim();
+  const pass = document.getElementById('authPass').value;
+  const err  = document.getElementById('authError');
+  err.style.display = 'none';
+  const r = await fetch(`${API}/api/auth/login`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ org_slug: org, username: user, password: pass }),
+  });
+  const d = await r.json();
+  if (!r.ok) { err.textContent = d.detail || 'Login failed'; err.style.display = 'block'; return; }
+  _token = d.token;
+  localStorage.setItem('wk_token', _token);
+  document.getElementById('authOverlay').style.display = 'none';
+  window.navbarRefreshUser?.();
+  loadDocs();
+}
+
+
+// ---- Load ----
+async function loadDocs() {
+  const r = await fetch(`${API}/api/research/docs?types=research,finding,osint&limit=500`, {
+    headers: authHeaders(),
+  });
+  if (r.status === 401) { document.getElementById('authOverlay').style.display = 'flex'; return; }
+  const d = await r.json();
+  _allDocs = d.documents || [];
+  updateStats();
+  applyFilter();
+}
+
+function updateStats() {
+  document.getElementById('statTotal').textContent    = _allDocs.length;
+  document.getElementById('statResearch').textContent = _allDocs.filter(d => d.type === 'research').length;
+  document.getElementById('statFindings').textContent = _allDocs.filter(d => d.type === 'finding').length;
+  document.getElementById('statOsint').textContent    = _allDocs.filter(d => d.type === 'osint').length;
+}
+
+function setFilter(el, type) {
+  document.querySelectorAll('.chip[data-type]').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  _activeFilter = type;
+  applyFilter();
+}
+
+function applyFilter() {
+  const q = (document.getElementById('searchInput').value || '').toLowerCase();
+  const filtered = _allDocs.filter(d => {
+    const matchType = _activeFilter === 'all' || d.type === _activeFilter;
+    const matchQ = !q ||
+      (d.title || '').toLowerCase().includes(q) ||
+      (d.client_name || '').toLowerCase().includes(q) ||
+      (d.content || '').toLowerCase().includes(q);
+    return matchType && matchQ;
+  });
+  renderList(filtered);
+}
+
+function renderList(docs) {
+  const list = document.getElementById('docList');
+  if (!docs.length) {
+    list.innerHTML = '<div class="empty">No documents match.</div>';
+    return;
+  }
+  list.innerHTML = docs.map((doc, i) => {
+    const typeCls = { research:'type-research', finding:'type-finding', osint:'type-osint' }[doc.type] || 'type-research';
+    const typeLabel = doc.type || 'doc';
+    const title = esc(doc.title || doc.doc_id || '(untitled)');
+    const clientName = doc.client_name;
+    const clientLink = clientName
+      ? `<a class="doc-client" href="/client/${encodeURIComponent(clientName)}" onclick="event.stopPropagation()">${esc(clientName)}</a>`
+      : '<span class="doc-client" style="color:var(--c-faint, #555)">—</span>';
+    const date = formatDate(doc.created_at);
+    const docId = doc.id;
+
+    return `
+    <div class="doc-row" id="row-${docId}" onclick="toggleRow(${docId}, this)">
+      <div class="doc-row-header">
+        <span class="type-badge ${typeCls}">${esc(typeLabel)}</span>
+        <span class="doc-title" title="${title}">${title}</span>
+        ${clientLink}
+        <span class="doc-date">${date}</span>
+        <span class="doc-chevron">▶</span>
+      </div>
+      <div class="doc-content-panel" id="panel-${docId}">
+        <div class="doc-content-loading">Loading…</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleRow(docId, rowEl) {
+  // Close currently open row if different
+  if (_openRow && _openRow !== rowEl) {
+    _openRow.classList.remove('open');
+  }
+
+  const isOpen = rowEl.classList.contains('open');
+  rowEl.classList.toggle('open', !isOpen);
+  _openRow = isOpen ? null : rowEl;
+
+  if (!isOpen) {
+    await loadContent(docId);
+  }
+}
+
+async function loadContent(docId) {
+  const panel = document.getElementById(`panel-${docId}`);
+  if (panel.dataset.loaded) return;
+
+  const r = await fetch(`${API}/api/documents/${docId}`, { headers: authHeaders() });
+  if (!r.ok) {
+    panel.innerHTML = '<div class="doc-content-loading">Failed to load document.</div>';
+    return;
+  }
+  const d = await r.json();
+  const doc = d.document || d;
+
+  const meta = typeof doc.metadata === 'string' ? JSON.parse(doc.metadata || '{}') : (doc.metadata || {});
+  const sourceUrl = meta.source_url || meta.url || '';
+  const metaHtml = [
+    doc.created_at ? `<span>Date: ${formatDate(doc.created_at)}</span>` : '',
+    doc.source      ? `<span>Source: ${esc(doc.source)}</span>` : '',
+    sourceUrl       ? `<span>URL: <a href="${esc(sourceUrl)}" target="_blank" rel="noreferrer">${esc(sourceUrl.length > 60 ? sourceUrl.slice(0,57)+'…' : sourceUrl)}</a></span>` : '',
+  ].filter(Boolean).join('');
+
+  const body = doc.content ? marked.parse(doc.content) : '<em style="color:var(--c-faint, #555)">No content.</em>';
+  panel.innerHTML = `
+    ${metaHtml ? `<div class="doc-content-meta">${metaHtml}</div>` : ''}
+    <div class="doc-content-body">${body}</div>
+  `;
+  panel.dataset.loaded = '1';
+}
+
+// ---- Init ----
+window.addEventListener('DOMContentLoaded', () => {
+  initNavbar({ active: 'research' });
+
+  const stored = localStorage.getItem('wk_token');
+  if (stored) {
+    _token = stored;
+    document.getElementById('authOverlay').style.display = 'none';
+    loadDocs();
+  }
+  const prev = localStorage.getItem('wk_user');
+  if (prev) document.getElementById('authUser').value = prev;
+});
+</script>
+</body>
+</html>

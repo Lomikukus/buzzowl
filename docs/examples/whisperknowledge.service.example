@@ -1,0 +1,24 @@
+# Example systemd unit for running the FastAPI server directly on the host
+# (bare-metal / non-Docker mode). The recommended deployment runs the server as
+# a container (`docker compose --profile research up -d`) and does not need
+# this unit — keep it only if you deliberately run server.py outside Docker.
+#
+# To use: adjust User/paths, copy to /etc/systemd/system/buzzowl.service,
+# then: sudo systemctl daemon-reload && sudo systemctl enable --now buzzowl
+
+[Unit]
+Description=Buzzowl FastAPI server
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=whisper
+WorkingDirectory=/opt/buzzowl
+EnvironmentFile=/opt/buzzowl/.env
+ExecStart=/opt/buzzowl/.venv/bin/python server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

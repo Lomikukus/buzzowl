@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buzzowl — Recorder</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/components/navbar.js?v=20260714d"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+            background: var(--c-bg, #1e1e1e);
+            color: var(--c-text, #d4d4d4);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        button { font-family: inherit; cursor: pointer; transition: background 0.15s; }
+        button:disabled { opacity: 0.35; cursor: default; }
+
+        /* ── Login overlay ── */
+        #loginOverlay {
+            position: fixed; inset: 0; background: rgba(30,30,30,0.97);
+            z-index: 9999; display: flex; align-items: center; justify-content: center;
+        }
+        #loginOverlay.hidden { display: none; }
+        #loginPanel {
+            background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); border-radius: 10px;
+            padding: 1.8rem; width: 380px; max-width: 95vw;
+            display: flex; flex-direction: column; gap: 0.85rem;
+        }
+        #loginPanel h2 { font-size: 1rem; color: var(--c-bluehi, #9cdcfe); margin-bottom: 0.2rem; }
+        .login-tabs { display: flex; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+        .login-tab {
+            padding: 0.35rem 1rem; font-size: 0.8rem; cursor: pointer;
+            color: var(--c-muted2, #666); background: none; border: none; font-family: inherit;
+            border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .login-tab.active { color: var(--c-bluehi, #9cdcfe); border-bottom-color: var(--c-bluehi, #9cdcfe); }
+        .login-fields { display: flex; flex-direction: column; gap: 0.7rem; }
+        .login-field { display: flex; flex-direction: column; gap: 0.3rem; }
+        .login-field label { font-size: 0.75rem; color: var(--c-muted, #888); }
+        .login-field input {
+            background: var(--c-ink, #111); border: 1px solid var(--c-line2, #333); border-radius: 5px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.83rem; padding: 0.45rem 0.65rem;
+        }
+        .login-field input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #loginSubmitBtn {
+            background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); font-weight: 600; width: 100%;
+            padding: 0.5rem; font-size: 0.85rem; margin-top: 0.2rem; border: none; border-radius: 5px;
+        }
+        #loginSubmitBtn:hover:not(:disabled) { background: var(--c-accent2, #3ab89e); }
+        #loginError { font-size: 0.78rem; color: var(--c-red, #f14c4c); min-height: 1.1rem; }
+
+        /* ── Settings overlay ── */
+        #settingsOverlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.6); z-index: 100;
+            align-items: center; justify-content: center;
+        }
+        #settingsOverlay.open { display: flex; }
+        #settingsPanel {
+            background: var(--c-bg, #1e1e1e); border: 1px solid var(--c-line2, #333); border-radius: 10px;
+            padding: 1.5rem; width: 420px; max-width: 95vw;
+            display: flex; flex-direction: column; gap: 1rem;
+            max-height: 90vh; overflow-y: auto;
+        }
+        #settingsPanel h2 { font-size: 0.95rem; color: var(--c-bluehi, #9cdcfe); margin: 0; }
+        .settings-field { display: flex; flex-direction: column; gap: 0.4rem; }
+        .settings-field label { font-size: 0.78rem; color: var(--c-muted, #888); }
+        .settings-field input[type=password],
+        .settings-field input[type=text] {
+            background: var(--c-ink, #111); border: 1px solid var(--c-line2, #333); border-radius: 5px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.82rem; padding: 0.45rem 0.6rem;
+        }
+        .settings-field input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        .settings-instructions { font-size: 0.75rem; color: var(--c-muted2, #666); line-height: 1.6; }
+        .settings-instructions a { color: var(--c-blue, #569cd6); }
+        .settings-row { display: flex; gap: 0.6rem; justify-content: flex-end; }
+        #settingsSaveBtn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); font-weight: 600; font-size: 0.82rem; padding: 0.4rem 1.1rem; border: none; border-radius: 5px; }
+        #settingsSaveBtn:hover { background: var(--c-accent2, #3ab89e); }
+        #settingsCancelBtn { background: transparent; color: var(--c-muted2, #666); border: 1px solid var(--c-line2, #333); font-size: 0.82rem; padding: 0.4rem 1.1rem; border-radius: 5px; }
+        #settingsCancelBtn:hover { color: var(--c-text3, #aaa); border-color: var(--c-muted2, #666); }
+        #settingsSaveStatus { font-size: 0.75rem; color: var(--c-accent, #4ec9b0); align-self: center; flex: 1; }
+
+        /* ── Activity feed ── */
+        #activityPanel {
+            display: none; flex-direction: column; gap: 0.5rem;
+            padding: 0.6rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222);
+            background: var(--c-bg2, #1a1a1a); flex-shrink: 0;
+        }
+        #activityPanel.open { display: flex; }
+        #activityHeader { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+        #activitySummary { display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; }
+        .activity-badge { font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 3px; font-weight: 600; letter-spacing: 0.03em; }
+        .ab-research { background: #1a3a1a; color: var(--c-accent, #4ec9b0); }
+        .ab-osint { background: #1e2e4a; color: #7ec8e3; }
+        .ab-enrichment { background: #2e1a3a; color: #d08aff; }
+        .ab-org { background: var(--c-orangetint, #3a2a1a); color: var(--c-orange, #ce9178); }
+        .ab-other { background: var(--c-line, #2a2a2a); color: var(--c-muted, #888); }
+        #activityCloseBtn { background: transparent; color: var(--c-faint, #555); border: 1px solid var(--c-line, #2a2a2a); padding: 0.3rem 0.5rem; border-radius: 5px; cursor: pointer; font-size: 0.78rem; }
+        #activityCloseBtn:hover { color: var(--c-text4, #999); border-color: var(--c-faint, #555); }
+        #activityList { background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); border-radius: 8px; padding: 0.6rem 0.8rem; max-height: 220px; overflow-y: auto; font-size: 0.82rem; }
+        .activity-item { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--c-bg2, #1a1a1a); }
+        .activity-item:last-child { border-bottom: none; }
+        .ai-type { font-size: 0.67rem; font-weight: 700; padding: 0.05rem 0.35rem; border-radius: 3px; white-space: nowrap; flex-shrink: 0; }
+        .ai-task { color: #c8c8c8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ai-status-done { color: var(--c-accent, #4ec9b0); font-size: 0.7rem; flex-shrink: 0; }
+        .ai-status-failed { color: var(--c-red, #f14c4c); font-size: 0.7rem; flex-shrink: 0; }
+        .ai-status-active { color: var(--c-neutraly, #dcdcaa); font-size: 0.7rem; flex-shrink: 0; }
+        .ai-time { color: var(--c-faint2, #444); font-size: 0.7rem; flex-shrink: 0; }
+
+        /* ── Search panel ── */
+        #searchPanel {
+            display: none; flex-direction: column; gap: 0.5rem;
+            padding: 0.6rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222);
+            background: var(--c-bg2, #1a1a1a); flex-shrink: 0;
+        }
+        #searchPanel.open { display: flex; }
+        #searchInputRow { display: flex; gap: 0.6rem; align-items: center; }
+        #searchInput { flex: 1; background: var(--c-ink, #111); border: 1px solid var(--c-line2, #333); border-radius: 5px; color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.85rem; padding: 0.45rem 0.7rem; }
+        #searchInput:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #searchBtn { background: var(--c-blue, #569cd6); color: var(--c-ink, #111); font-weight: 600; padding: 0.38rem 1.1rem; border: none; border-radius: 5px; cursor: pointer; font-size: 0.85rem; }
+        #searchBtn:hover { background: #4a8fc4; }
+        #searchCloseBtn { background: transparent; color: var(--c-faint, #555); border: 1px solid var(--c-line, #2a2a2a); padding: 0.38rem 0.6rem; border-radius: 5px; cursor: pointer; font-size: 0.85rem; }
+        #searchCloseBtn:hover { color: var(--c-text4, #999); border-color: var(--c-faint, #555); }
+        #searchResults { background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); border-radius: 8px; padding: 0.8rem 1rem; max-height: 240px; overflow-y: auto; font-size: 0.84rem; }
+        .result-item { padding: 0.45rem 0; border-bottom: 1px solid var(--c-bg, #1e1e1e); }
+        .result-item:last-child { border-bottom: none; }
+        .result-type { display: inline-block; font-size: 0.67rem; font-weight: 700; padding: 0.05rem 0.35rem; border-radius: 3px; margin-right: 0.4rem; letter-spacing: 0.04em; }
+        .rt-session { background: #1e3a6e; color: #7ec8e3; }
+        .rt-client { background: #1a3a1a; color: var(--c-accent, #4ec9b0); }
+        .rt-contact { background: #3a1a4a; color: #d08aff; }
+        .result-title { color: var(--c-text, #d4d4d4); font-weight: 600; }
+        .result-date { color: var(--c-faint, #555); font-size: 0.74rem; margin-left: 0.3rem; }
+        .result-score { float: right; font-size: 0.7rem; color: var(--c-faint2, #444); }
+        .result-snippet { color: var(--c-muted2, #666); font-size: 0.78rem; margin-top: 0.15rem; line-height: 1.4; }
+
+        /* ── Next-best-action panel ── */
+        #nbaPanel {
+            display: none; flex-direction: column; gap: 0.4rem;
+            padding: 0.6rem 1.5rem; border-bottom: 1px solid var(--c-linefaint, #222);
+            background: var(--c-bg2, #1a1a1a); flex-shrink: 0;
+        }
+        #nbaPanel.open { display: flex; }
+        #nbaHeader { display: flex; align-items: center; gap: 0.6rem; }
+        #nbaHeader .nba-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--c-accent, #4ec9b0); font-weight: 700; flex: 1; }
+        #nbaHeader a { color: var(--c-blue, #569cd6); font-size: 0.78rem; text-decoration: none; }
+        #nbaHeader a:hover { color: #7ec8e3; }
+        #nbaList { background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); border-radius: 8px; padding: 0.3rem 0.8rem; max-height: 170px; overflow-y: auto; font-size: 0.82rem; }
+        .nba-row { display: flex; align-items: baseline; gap: 0.55rem; padding: 0.32rem 0; border-bottom: 1px solid var(--c-bg2, #1a1a1a); }
+        .nba-row:last-child { border-bottom: none; }
+        .nba-rank { color: var(--c-faint2, #444); font-size: 0.72rem; flex-shrink: 0; width: 1.1rem; }
+        .nba-client { color: var(--c-text, #d4d4d4); font-weight: 600; white-space: nowrap; cursor: pointer; flex-shrink: 0; }
+        .nba-client:hover { color: var(--c-accent, #4ec9b0); }
+        .nba-reason { color: var(--c-muted2, #777); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nba-action-btn {
+            background: var(--c-accenttint, #1a3a2e); border: 1px solid var(--c-accentline, #2d5a48); color: var(--c-accent, #4ec9b0);
+            border-radius: 4px; padding: 0.1rem 0.55rem; font-size: 0.72rem;
+            cursor: pointer; font-family: inherit; white-space: nowrap; flex-shrink: 0;
+        }
+        .nba-action-btn:hover { background: var(--c-accenttint2, #1f4a38); border-color: var(--c-accent, #4ec9b0); }
+
+        /* ── Text input panel (always visible) ── */
+        #textPanel {
+            display: flex; flex-direction: column; gap: 0.65rem;
+            padding: 1rem 1.5rem; flex-shrink: 0;
+            border-bottom: 1px solid var(--c-linefaint, #222);
+        }
+        #textPanelHeader { display: flex; align-items: center; gap: 0.8rem; }
+        #textPanelLabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--c-muted, #888); flex: 1; }
+        #langSelect {
+            background: var(--c-surface, #252526); border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-text2, #ccc);
+            border-radius: 4px; padding: 0.22rem 0.5rem;
+            font-family: inherit; font-size: 0.78rem; cursor: pointer;
+        }
+        #langSelect:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #textTitle {
+            background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); border-radius: 5px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.85rem; padding: 0.42rem 0.7rem;
+        }
+        #textTitle:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #textInput {
+            height: 160px; background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); border-radius: 8px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.85rem;
+            padding: 0.9rem 1rem; resize: vertical; line-height: 1.75;
+        }
+        #textInput:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+        #textSubmitRow { display: flex; align-items: center; gap: 1rem; justify-content: flex-end; }
+        #textSubmitBtn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); font-weight: 600; padding: 0.4rem 1.3rem; border: none; border-radius: 5px; font-size: 0.85rem; }
+        #textSubmitBtn:hover:not(:disabled) { background: var(--c-accent2, #3ab89e); }
+        #textSubmitStatus { font-size: 0.78rem; color: var(--c-faint, #555); flex: 1; }
+        .visibility-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--c-muted2, #666); cursor: pointer; user-select: none; }
+        .visibility-toggle input[type=checkbox] { display: none; }
+        .vis-pill {
+            width: 32px; height: 17px; border-radius: 9px; background: var(--c-line, #2a2a2a);
+            border: 1px solid var(--c-line3, #3a3a3a); position: relative; transition: background 0.2s;
+        }
+        .vis-pill::after {
+            content: ''; position: absolute; top: 2px; left: 2px;
+            width: 11px; height: 11px; border-radius: 50%;
+            background: var(--c-faint, #555); transition: transform 0.2s, background 0.2s;
+        }
+        .visibility-toggle input:checked + .vis-pill { background: #1a2a3a; border-color: var(--c-blue, #569cd6); }
+        .visibility-toggle input:checked + .vis-pill::after { transform: translateX(15px); background: var(--c-blue, #569cd6); }
+
+        /* ── Summary section — fixed height, scrollable ── */
+        .summary-section {
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            padding: 0.8rem 1.5rem 1rem;
+        }
+        .summary-header { display: flex; align-items: center; gap: 0.7rem; }
+        .summary-label {
+            font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em;
+            color: var(--c-purple, #c586c0); flex: 1;
+        }
+        #obsidianBtn {
+            display: none; background: transparent; color: #7ec8e3;
+            border: 1px solid #1e4a6e; font-size: 0.78rem; padding: 0.22rem 0.8rem; border-radius: 4px;
+        }
+        #obsidianBtn:hover { background: #0e2a3e; border-color: #7ec8e3; }
+        #obsidianBtn:disabled { opacity: 0.5; cursor: default; }
+        #exportStatus { display: none; font-size: 0.75rem; padding: 0.2rem 0.6rem; border-radius: 4px; }
+        .export-ok    { color: var(--c-accent, #4ec9b0); background: var(--c-postint, #1a3a2a); border: 1px solid #2a5a3a; }
+        .export-error { color: var(--c-red, #f14c4c); background: var(--c-redtint, #3a1a1a); border: 1px solid #5a2a2a; }
+        #summaryBox {
+            max-height: 40vh;
+            overflow-y: auto;
+            background: var(--c-ink, #111);
+            border: 1px solid var(--c-line, #2a2a2a);
+            border-radius: 8px;
+            padding: 0.9rem 1rem;
+            font-size: 0.87rem;
+            line-height: 1.8;
+            color: #c8c8c8;
+        }
+        #summaryBox .placeholder { color: var(--c-line3, #3a3a3a); font-style: italic; }
+        #summaryBox h1, #summaryBox h2, #summaryBox h3 { color: var(--c-purple, #c586c0); font-size: 0.92rem; margin: 0.6rem 0 0.2rem; }
+        #summaryBox strong { color: var(--c-purple, #c586c0); font-weight: 700; }
+        #summaryBox ul, #summaryBox ol { padding-left: 1.4rem; margin: 0.2rem 0 0.5rem; }
+        #summaryBox li { margin-bottom: 0.15rem; }
+        #summaryBox p { margin-bottom: 0.4rem; }
+    </style>
+</head>
+<body>
+
+    <!-- Login overlay -->
+    <div id="loginOverlay" class="hidden">
+        <div id="loginPanel">
+            <h2>Buzzowl</h2>
+            <div class="login-tabs">
+                <button class="login-tab active" data-tab="login">Login</button>
+                <button class="login-tab" data-tab="join">Join</button>
+                <button class="login-tab" data-tab="register">Register</button>
+            </div>
+            <div id="loginFields" class="login-fields">
+                <div class="login-field">
+                    <label>Organisation slug</label>
+                    <input type="text" id="loginOrg" placeholder="your-org" autocomplete="organization">
+                </div>
+                <div class="login-field">
+                    <label>Username</label>
+                    <input type="text" id="loginUser" placeholder="username" autocomplete="username">
+                </div>
+                <div class="login-field">
+                    <label>Password</label>
+                    <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
+                </div>
+            </div>
+            <div id="joinFields" class="login-fields" style="display:none">
+                <div class="login-field">
+                    <label>Invite key</label>
+                    <input type="text" id="joinKey" placeholder="Paste key from your admin" autocomplete="off">
+                </div>
+                <div class="login-field">
+                    <label>Username</label>
+                    <input type="text" id="joinUser" placeholder="username" autocomplete="username">
+                </div>
+                <div class="login-field">
+                    <label>Display name</label>
+                    <input type="text" id="joinName" placeholder="Alice Smith" autocomplete="name">
+                </div>
+                <div class="login-field">
+                    <label>Password</label>
+                    <input type="password" id="joinPass" placeholder="••••••••" autocomplete="new-password">
+                </div>
+            </div>
+            <div id="registerFields" class="login-fields" style="display:none">
+                <div class="login-field">
+                    <label>Registration key</label>
+                    <input type="text" id="regKey" placeholder="Paste key from your operator" autocomplete="off">
+                </div>
+                <div class="login-field">
+                    <label>Organisation name</label>
+                    <input type="text" id="regOrgName" placeholder="Acme Corp" autocomplete="organization">
+                </div>
+                <div class="login-field">
+                    <label>Username</label>
+                    <input type="text" id="regUser" placeholder="username" autocomplete="username">
+                </div>
+                <div class="login-field">
+                    <label>Password</label>
+                    <input type="password" id="regPass" placeholder="••••••••" autocomplete="new-password">
+                </div>
+            </div>
+            <div id="loginError"></div>
+            <button id="loginSubmitBtn">Login</button>
+        </div>
+    </div>
+
+    <!-- Settings overlay -->
+    <div id="settingsOverlay">
+        <div id="settingsPanel">
+            <h2>Settings</h2>
+            <div class="settings-field">
+                <label>HuggingFace Token (for speaker diarization)</label>
+                <input type="password" id="hfTokenInput" placeholder="hf_…" autocomplete="off">
+            </div>
+            <div class="settings-field" style="margin-top:0.8rem;">
+                <label>Mac App Token — paste into Buzzowl Recorder → Settings → Auth Token</label>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                    <input type="password" id="macTokenDisplay" readonly style="flex:1; cursor:default; background:#0a0a0a; color:var(--c-bluehi, #9cdcfe); border-color:var(--c-line, #2a2a2a);">
+                    <button id="macTokenShowBtn" style="background:transparent; border:1px solid var(--c-line2, #333); color:var(--c-muted, #888); font-size:0.78rem; padding:0.3rem 0.7rem; border-radius:4px; cursor:pointer;">Show</button>
+                    <button id="macTokenCopyBtn" style="background:var(--c-blue, #569cd6); border:none; color:var(--c-ink, #111); font-weight:600; font-size:0.78rem; padding:0.3rem 0.7rem; border-radius:4px; cursor:pointer;">Copy</button>
+                </div>
+                <span id="macTokenCopyStatus" style="font-size:0.72rem; color:var(--c-accent, #4ec9b0); min-height:1rem;"></span>
+            </div>
+            <!-- pgweb DB browser (local debugging): `docker compose --profile debug up -d pgweb`
+                 serves a DB UI on host port 5433. Intentionally not linked here — a hard
+                 localhost link is wrong for any hosted deployment. -->
+            <div id="usersSection" style="display:none; border-top:1px solid var(--c-line, #2a2a2a); padding-top:0.8rem;">
+                <div style="font-size:0.78rem; color:var(--c-muted, #888); margin-bottom:0.5rem;">Team members</div>
+                <div id="usersList" style="font-size:0.8rem; margin-bottom:0.8rem; max-height:120px; overflow-y:auto;"></div>
+                <div style="font-size:0.78rem; color:var(--c-muted2, #666); margin-bottom:0.4rem;">Invite user</div>
+                <div style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.4rem;">
+                    <input id="inviteUsername" type="text" placeholder="username" style="width:100px; background:var(--c-ink, #111); border:1px solid var(--c-line2, #333); border-radius:4px; color:var(--c-text, #d4d4d4); font-family:inherit; font-size:0.8rem; padding:0.3rem 0.5rem;">
+                    <input id="invitePassword" type="password" placeholder="password" style="width:100px; background:var(--c-ink, #111); border:1px solid var(--c-line2, #333); border-radius:4px; color:var(--c-text, #d4d4d4); font-family:inherit; font-size:0.8rem; padding:0.3rem 0.5rem;">
+                    <input id="inviteDisplay" type="text" placeholder="display name" style="width:110px; background:var(--c-ink, #111); border:1px solid var(--c-line2, #333); border-radius:4px; color:var(--c-text, #d4d4d4); font-family:inherit; font-size:0.8rem; padding:0.3rem 0.5rem;">
+                    <select id="inviteRole" style="background:var(--c-ink, #111); border:1px solid var(--c-line2, #333); border-radius:4px; color:var(--c-text, #d4d4d4); font-family:inherit; font-size:0.8rem; padding:0.3rem 0.5rem;">
+                        <option value="member">member</option>
+                        <option value="admin">admin</option>
+                    </select>
+                    <button id="inviteBtn" style="background:var(--c-blue, #569cd6); color:var(--c-ink, #111); font-weight:600; border:none; border-radius:4px; padding:0.3rem 0.8rem; font-size:0.8rem; cursor:pointer;">Invite</button>
+                </div>
+                <span id="inviteStatus" style="font-size:0.75rem; color:var(--c-faint, #555);"></span>
+            </div>
+            <div class="settings-row">
+                <a href="/settings" style="font-size:0.78rem;color:var(--c-blue, #569cd6);text-decoration:none;margin-right:auto" title="Open full settings page">⚙ Settings page →</a>
+                <span id="settingsSaveStatus"></span>
+                <button id="settingsCancelBtn">Cancel</button>
+                <button id="settingsSaveBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shared navbar -->
+    <nav id="main-nav"></nav>
+
+    <!-- Activity feed (toggleable) -->
+    <div id="activityPanel">
+        <div id="activityHeader">
+            <div id="activitySummary"><span style="color:var(--c-line3, #3a3a3a);font-style:italic;font-size:0.8rem;">Loading…</span></div>
+            <button id="activityCloseBtn">✕</button>
+        </div>
+        <div id="activityList"><span style="color:var(--c-line3, #3a3a3a);font-style:italic;">No agent runs this week.</span></div>
+    </div>
+
+    <!-- Search panel (toggleable) -->
+    <div id="searchPanel">
+        <div id="searchInputRow">
+            <input id="searchInput" type="text" placeholder="Search transcripts, clients, people…" autocomplete="off">
+            <button id="searchBtn">Search</button>
+            <button id="searchCloseBtn">✕</button>
+        </div>
+        <div id="searchResults">
+            <span style="color:var(--c-line3, #3a3a3a);font-style:italic;">Type to search across all sessions and entities…</span>
+        </div>
+    </div>
+
+    <!-- Next-best-action queue (top 5) -->
+    <div id="nbaPanel">
+        <div id="nbaHeader">
+            <span class="nba-title">Today's actions</span>
+            <a href="/today">Full list →</a>
+        </div>
+        <div id="nbaList"></div>
+    </div>
+
+    <!-- Text input — always visible -->
+    <div id="textPanel">
+        <div id="textPanelHeader">
+            <span id="textPanelLabel">Paste transcript</span>
+            <select id="langSelect">
+                <option value="en">English</option>
+                <option value="de">German</option>
+                <option value="nl">Dutch</option>
+                <option value="fr">French</option>
+                <option value="es">Spanish</option>
+                <option value="it">Italian</option>
+                <option value="pt">Portuguese</option>
+                <option value="pl">Polish</option>
+                <option value="ru">Russian</option>
+                <option value="zh">Chinese</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+                <option value="ar">Arabic</option>
+            </select>
+        </div>
+        <input id="textTitle" type="text" placeholder="Session title (optional)">
+        <textarea id="textInput" placeholder="Paste or type a transcript here…"></textarea>
+        <div id="textSubmitRow">
+            <span id="textSubmitStatus"></span>
+            <label class="visibility-toggle" title="Private sessions are visible only to you">
+                <input type="checkbox" id="visibilityToggle">
+                <span class="vis-pill"></span>
+                <span id="visibilityLabel">Shared</span>
+            </label>
+            <button id="textSubmitBtn">Export →</button>
+        </div>
+    </div>
+
+    <!-- Summary section -->
+    <div class="summary-section">
+        <div class="summary-header">
+            <span class="summary-label">AI Summary</span>
+            <button id="obsidianBtn">Promote now ↑</button>
+            <span id="exportStatus"></span>
+        </div>
+        <div id="summaryBox">
+            <div class="placeholder">Submit a transcript above — summary and pipeline status will appear here.</div>
+        </div>
+    </div>
+
+    <!-- Pipeline panel -->
+    <div class="pipeline-panel" id="pipelinePanel">
+        <div class="pipeline-header">
+            <span class="pipeline-title">Pipeline</span>
+            <span class="pipeline-subtitle" id="pipelineSubtitle"></span>
+        </div>
+        <div id="pipelineList"></div>
+    </div>
+
+    <script>
+        // ─── Navbar ──────────────────────────────────────────────────────────────
+        initNavbar({
+            active: 'record',
+            actions: [
+                { label: 'Activity', id: 'activityToggleBtn' },
+                { label: '⌕',       id: 'searchToggleBtn',  ghost: true },
+                { label: '⚙',       id: 'gearBtn',          ghost: true },
+            ],
+        });
+
+        // ─── Auth ────────────────────────────────────────────────────────────────
+        const TOKEN_KEY  = 'wk_token';
+        const getToken   = () => localStorage.getItem(TOKEN_KEY);
+        const setToken   = t  => localStorage.setItem(TOKEN_KEY, t);
+        const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+        const authHeaders = () => {
+            const t = getToken();
+            return t ? { 'Authorization': `Bearer ${t}` } : {};
+        };
+
+        const loginOverlay   = document.getElementById('loginOverlay');
+        const loginError     = document.getElementById('loginError');
+        const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+
+        function showLoginOverlay() { loginOverlay.classList.remove('hidden'); }
+        function hideLoginOverlay() { loginOverlay.classList.add('hidden'); }
+
+        async function initAuth() {
+            const token = getToken();
+            if (!token) { showLoginOverlay(); return; }
+            try {
+                const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+                if (res.ok) {
+                    hideLoginOverlay();
+                    refreshPipeline();
+                    loadNbaPanel();
+                } else {
+                    clearToken();
+                    showLoginOverlay();
+                }
+            } catch {
+                hideLoginOverlay();
+                refreshPipeline();
+            }
+        }
+
+        document.querySelectorAll('.login-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const t = tab.dataset.tab;
+                document.getElementById('loginFields').style.display    = t === 'login'    ? '' : 'none';
+                document.getElementById('joinFields').style.display     = t === 'join'     ? '' : 'none';
+                document.getElementById('registerFields').style.display = t === 'register' ? '' : 'none';
+                loginSubmitBtn.textContent = t === 'login' ? 'Login' : t === 'join' ? 'Join workspace' : 'Create account';
+                loginError.textContent = '';
+            });
+        });
+
+        loginSubmitBtn.addEventListener('click', async () => {
+            const activeTab = document.querySelector('.login-tab.active').dataset.tab;
+            loginError.textContent = '';
+            loginSubmitBtn.disabled = true;
+            try {
+                let res;
+                if (activeTab === 'login') {
+                    res = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            org_slug: document.getElementById('loginOrg').value.trim(),
+                            username: document.getElementById('loginUser').value.trim(),
+                            password: document.getElementById('loginPass').value,
+                        }),
+                    });
+                } else if (activeTab === 'join') {
+                    res = await fetch('/api/auth/accept-invite', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            invite_key:   document.getElementById('joinKey').value.trim(),
+                            username:     document.getElementById('joinUser').value.trim(),
+                            display_name: document.getElementById('joinName').value.trim(),
+                            password:     document.getElementById('joinPass').value,
+                        }),
+                    });
+                } else {
+                    res = await fetch('/api/auth/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            registration_key: document.getElementById('regKey').value.trim(),
+                            org_name:         document.getElementById('regOrgName').value.trim(),
+                            username:         document.getElementById('regUser').value.trim(),
+                            password:         document.getElementById('regPass').value,
+                        }),
+                    });
+                }
+                const d = await res.json();
+                if (!res.ok) {
+                    loginError.textContent = d.detail || 'Authentication failed';
+                } else {
+                    setToken(d.token);
+                    // Land on the dashboard home after login (recorder is now /record).
+                    location.href = '/';
+                    return;
+                }
+            } catch { loginError.textContent = 'Could not reach server'; }
+            finally   { loginSubmitBtn.disabled = false; }
+        });
+
+        ['loginOrg','loginUser','loginPass','joinKey','joinUser','joinName','joinPass','regKey','regOrgName','regUser','regPass'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') loginSubmitBtn.click(); });
+        });
+
+        // ─── Settings ────────────────────────────────────────────────────────────
+        const settingsOverlay    = document.getElementById('settingsOverlay');
+        const hfTokenInput       = document.getElementById('hfTokenInput');
+        const settingsSaveBtn    = document.getElementById('settingsSaveBtn');
+        const settingsCancelBtn  = document.getElementById('settingsCancelBtn');
+        const settingsSaveStatus = document.getElementById('settingsSaveStatus');
+        const macTokenDisplay    = document.getElementById('macTokenDisplay');
+        const macTokenShowBtn    = document.getElementById('macTokenShowBtn');
+        const macTokenCopyBtn    = document.getElementById('macTokenCopyBtn');
+        const macTokenCopyStatus = document.getElementById('macTokenCopyStatus');
+        const usersSection       = document.getElementById('usersSection');
+        const usersList          = document.getElementById('usersList');
+        const inviteBtn          = document.getElementById('inviteBtn');
+        const inviteStatus       = document.getElementById('inviteStatus');
+
+        document.getElementById('gearBtn').addEventListener('click', () => {
+            hfTokenInput.value = '';
+            settingsSaveStatus.textContent = '';
+            macTokenCopyStatus.textContent = '';
+            macTokenDisplay.type = 'password';
+            macTokenShowBtn.textContent = 'Show';
+            macTokenDisplay.value = getToken() || '';
+            settingsOverlay.classList.add('open');
+            hfTokenInput.focus();
+            const token = getToken();
+            if (token) {
+                fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } })
+                    .then(r => r.json()).then(d => {
+                        if (d.user?.role === 'admin') {
+                            usersSection.style.display = 'block';
+                            loadUsers();
+                        } else {
+                            usersSection.style.display = 'none';
+                        }
+                    }).catch(() => {
+                        usersSection.style.display = 'none';
+                    });
+            }
+        });
+
+        settingsCancelBtn.addEventListener('click', () => settingsOverlay.classList.remove('open'));
+        settingsOverlay.addEventListener('click', e => {
+            if (e.target === settingsOverlay) settingsOverlay.classList.remove('open');
+        });
+
+        settingsSaveBtn.addEventListener('click', async () => {
+            settingsSaveBtn.disabled = true;
+            settingsSaveStatus.textContent = 'Saving…';
+            try {
+                await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hf_token: hfTokenInput.value.trim() }),
+                });
+                settingsSaveStatus.textContent = 'Saved ✓';
+                setTimeout(() => settingsOverlay.classList.remove('open'), 800);
+            } catch {
+                settingsSaveStatus.textContent = 'Error saving';
+            } finally {
+                settingsSaveBtn.disabled = false;
+            }
+        });
+
+        macTokenShowBtn.addEventListener('click', () => {
+            if (macTokenDisplay.type === 'password') {
+                macTokenDisplay.type = 'text';
+                macTokenShowBtn.textContent = 'Hide';
+            } else {
+                macTokenDisplay.type = 'password';
+                macTokenShowBtn.textContent = 'Show';
+            }
+        });
+
+        macTokenCopyBtn.addEventListener('click', async () => {
+            const t = getToken();
+            if (!t) return;
+            await navigator.clipboard.writeText(t);
+            macTokenCopyStatus.textContent = '✓ Copied — paste into Mac app Settings → Auth Token';
+            setTimeout(() => { macTokenCopyStatus.textContent = ''; }, 3000);
+        });
+
+        async function loadUsers() {
+            try {
+                const res  = await fetch('/api/auth/users', { headers: authHeaders() });
+                if (res.status === 403) return;
+                const data = await res.json();
+                usersList.innerHTML = (data.users || []).map(u =>
+                    `<div style="padding:0.2rem 0; border-bottom:1px solid var(--c-bg, #1e1e1e); display:flex; gap:0.5rem; align-items:center;">
+                        <span style="color:var(--c-text, #d4d4d4);">${u.display_name}</span>
+                        <span style="color:var(--c-faint, #555); font-size:0.72rem;">@${u.username}</span>
+                        <span style="font-size:0.67rem; padding:0.05rem 0.3rem; border-radius:3px; background:${u.role==='admin'?'#1e3a6e':'#2a2a2a'}; color:${u.role==='admin'?'#7ec8e3':'#666'};">${u.role}</span>
+                    </div>`
+                ).join('') || '<span style="color:var(--c-faint2, #444);">No users found</span>';
+            } catch { usersList.innerHTML = '<span style="color:var(--c-faint2, #444);">Failed to load</span>'; }
+        }
+
+        inviteBtn.addEventListener('click', async () => {
+            const username = document.getElementById('inviteUsername').value.trim();
+            const password = document.getElementById('invitePassword').value;
+            const display  = document.getElementById('inviteDisplay').value.trim();
+            const role     = document.getElementById('inviteRole').value;
+            if (!username || !password) { inviteStatus.textContent = 'Username and password required'; inviteStatus.style.color = '#f14c4c'; return; }
+            inviteBtn.disabled = true;
+            inviteStatus.textContent = 'Inviting…'; inviteStatus.style.color = '#555';
+            try {
+                const res  = await fetch('/api/auth/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify({ username, password, display_name: display || username, role }),
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    inviteStatus.textContent = `@${data.user.username} added ✓`;
+                    inviteStatus.style.color = '#4ec9b0';
+                    document.getElementById('inviteUsername').value = '';
+                    document.getElementById('invitePassword').value = '';
+                    document.getElementById('inviteDisplay').value = '';
+                    loadUsers();
+                } else {
+                    inviteStatus.textContent = data.detail || 'Failed';
+                    inviteStatus.style.color = '#f14c4c';
+                }
+            } catch { inviteStatus.style.color = '#f14c4c'; inviteStatus.textContent = 'Error'; }
+            finally { inviteBtn.disabled = false; }
+        });
+
+        // ─── Activity feed ───────────────────────────────────────────────────────
+        const activityPanel     = document.getElementById('activityPanel');
+        const activityCloseBtn  = document.getElementById('activityCloseBtn');
+        const activitySummary   = document.getElementById('activitySummary');
+        const activityList      = document.getElementById('activityList');
+
+        const TYPE_CLASSES = {
+            research: 'ab-research', osint: 'ab-osint',
+            enrichment: 'ab-enrichment', org: 'ab-org',
+        };
+
+        function timeAgo(isoStr) {
+            const diff = (Date.now() - new Date(isoStr)) / 1000;
+            if (diff < 60)    return `${Math.round(diff)}s ago`;
+            if (diff < 3600)  return `${Math.round(diff/60)}m ago`;
+            if (diff < 86400) return `${Math.round(diff/3600)}h ago`;
+            return `${Math.round(diff/86400)}d ago`;
+        }
+
+        // ─── Next-best-action panel ─────────────────────────────────────────────
+        const nbaEsc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const NBA_ACTION_LABELS = { send_draft: 'Send draft', follow_up: 'Follow up', mail: 'Draft mail', research: 'Research' };
+
+        window.loadNbaPanel = async function () {
+            const panel = document.getElementById('nbaPanel');
+            const list  = document.getElementById('nbaList');
+            if (!panel || !getToken()) return;
+            try {
+                const res = await fetch('/api/next-actions?limit=5', { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                const queue = data.queue || [];
+                if (queue.length === 0) { panel.classList.remove('open'); return; }
+                list.innerHTML = queue.map(e => `
+                    <div class="nba-row">
+                        <span class="nba-rank">${e.rank}.</span>
+                        <span class="nba-client" data-client="${nbaEsc(e.client)}" data-action="open" data-rank="${e.rank}" data-link="/client/${encodeURIComponent(e.client)}">${e.is_focus ? '★ ' : ''}${nbaEsc(e.client)}</span>
+                        <span class="nba-reason" title="${nbaEsc(e.reason)}">${nbaEsc(e.reason)}</span>
+                        <button class="nba-action-btn" data-client="${nbaEsc(e.client)}" data-action="${nbaEsc(e.suggested_action)}" data-rank="${e.rank}" data-link="${nbaEsc(e.action_link)}">${NBA_ACTION_LABELS[e.suggested_action] || 'Open'}</button>
+                    </div>`).join('');
+                list.querySelectorAll('[data-link]').forEach(el => {
+                    el.addEventListener('click', () => {
+                        fetch('/api/next-actions/click', {
+                            method: 'POST', keepalive: true,
+                            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                            body: JSON.stringify({ client: el.dataset.client, action: el.dataset.action, rank: parseInt(el.dataset.rank, 10), page: 'home' }),
+                        }).catch(() => {});
+                        location.href = el.dataset.link;
+                    });
+                });
+                panel.classList.add('open');
+            } catch (_) { /* panel stays hidden */ }
+        };
+
+        async function loadActivity() {
+            activitySummary.innerHTML = '<span style="color:var(--c-faint, #555);font-size:0.8rem;">Loading…</span>';
+            activityList.innerHTML    = '<span style="color:var(--c-faint, #555);font-style:italic;">Loading…</span>';
+            try {
+                const res  = await fetch('/api/agents/activity?days=7', { headers: authHeaders() });
+                const data = await res.json();
+                if (data.summary.length === 0) {
+                    activitySummary.innerHTML = '<span style="color:var(--c-line3, #3a3a3a);font-size:0.8rem;font-style:italic;">No agent runs this week</span>';
+                } else {
+                    activitySummary.innerHTML = data.summary.map(s => {
+                        const cls    = TYPE_CLASSES[s.agent_type] || 'ab-other';
+                        const failed = s.failed > 0 ? ` · <span style="color:var(--c-red, #f14c4c)">${s.failed} failed</span>` : '';
+                        return `<span class="activity-badge ${cls}">${s.agent_type} ${s.total}${failed}</span>`;
+                    }).join('');
+                }
+                if (data.runs.length === 0) {
+                    activityList.innerHTML = '<span style="color:var(--c-line3, #3a3a3a);font-style:italic;">No agent runs this week.</span>';
+                } else {
+                    activityList.innerHTML = data.runs.map(r => {
+                        const cls   = TYPE_CLASSES[r.agent_type] || 'ab-other';
+                        const task  = (r.task || '').slice(0, 60) + ((r.task || '').length > 60 ? '…' : '');
+                        const statusCls = r.status === 'done' ? 'ai-status-done'
+                                        : r.status === 'failed' ? 'ai-status-failed'
+                                        : 'ai-status-active';
+                        const statusLabel = r.status === 'done' ? '✓' : r.status === 'failed' ? '✗' : '…';
+                        return `<div class="activity-item">
+                            <span class="ai-type activity-badge ${cls}">${r.agent_type}</span>
+                            <span class="ai-task" title="${r.task || ''}">${task}</span>
+                            <span class="${statusCls}">${statusLabel}</span>
+                            <span class="ai-time">${timeAgo(r.created_at)}</span>
+                        </div>`;
+                    }).join('');
+                }
+            } catch {
+                activitySummary.innerHTML = '<span style="color:var(--c-red, #f14c4c);font-size:0.8rem;">Failed to load</span>';
+                activityList.innerHTML    = '';
+            }
+        }
+
+        document.getElementById('activityToggleBtn').addEventListener('click', () => {
+            const open = activityPanel.classList.toggle('open');
+            document.getElementById('activityToggleBtn').classList.toggle('active', open);
+            if (open) loadActivity();
+        });
+        activityCloseBtn.addEventListener('click', () => {
+            activityPanel.classList.remove('open');
+            document.getElementById('activityToggleBtn').classList.remove('active');
+        });
+
+        // ─── Search ──────────────────────────────────────────────────────────────
+        const searchPanel    = document.getElementById('searchPanel');
+        const searchInput    = document.getElementById('searchInput');
+        const searchBtn      = document.getElementById('searchBtn');
+        const searchCloseBtn = document.getElementById('searchCloseBtn');
+        const searchResults  = document.getElementById('searchResults');
+
+        document.getElementById('searchToggleBtn').addEventListener('click', () => {
+            const open = searchPanel.classList.toggle('open');
+            document.getElementById('searchToggleBtn').classList.toggle('active', open);
+            if (open) searchInput.focus();
+        });
+        searchCloseBtn.addEventListener('click', () => {
+            searchPanel.classList.remove('open');
+            document.getElementById('searchToggleBtn').classList.remove('active');
+        });
+
+        async function doSearch() {
+            const q = searchInput.value.trim();
+            if (!q) return;
+            searchResults.innerHTML = '<span style="color:var(--c-faint, #555);">Searching…</span>';
+            try {
+                const res  = await fetch(`/api/search?q=${encodeURIComponent(q)}&top_k=10`);
+                const data = await res.json();
+                if (!data.results || data.results.length === 0) {
+                    searchResults.innerHTML = '<span style="color:var(--c-faint, #555);">No results found.</span>';
+                    return;
+                }
+                searchResults.innerHTML = data.results.map(r => {
+                    const typeClass = r.type === 'session' ? 'rt-session'
+                                    : r.type === 'client' ? 'rt-client' : 'rt-contact';
+                    const score = Math.round(r.combined_score * 100);
+                    const date  = r.date_str ? `<span class="result-date">${r.date_str}</span>` : '';
+                    return `<div class="result-item">
+                        <span class="result-score">${score}%</span>
+                        <span class="result-type ${typeClass}">${r.type}</span>
+                        <span class="result-title">${r.display_title}</span>${date}
+                        <div class="result-snippet">${r.snippet || ''}</div>
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                searchResults.innerHTML = `<span style="color:var(--c-red, #f14c4c);">Search error: ${err.message}</span>`;
+            }
+        }
+        searchBtn.addEventListener('click', doSearch);
+        searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+        // ─── Text input export ───────────────────────────────────────────────────
+        const visibilityToggle = document.getElementById('visibilityToggle');
+        const visibilityLabel  = document.getElementById('visibilityLabel');
+        visibilityToggle.addEventListener('change', () => {
+            visibilityLabel.textContent = visibilityToggle.checked ? 'Private' : 'Shared';
+            visibilityLabel.style.color = visibilityToggle.checked ? '#569cd6' : '#666';
+        });
+
+        let lastSessionId = '';
+        const obsidianBtn  = document.getElementById('obsidianBtn');
+        const exportStatus = document.getElementById('exportStatus');
+        const summaryBox   = document.getElementById('summaryBox');
+
+        document.getElementById('textSubmitBtn').addEventListener('click', async () => {
+            const text = document.getElementById('textInput').value.trim();
+            if (!text) return;
+            const btn      = document.getElementById('textSubmitBtn');
+            const statusEl = document.getElementById('textSubmitStatus');
+            btn.disabled = true;
+            statusEl.style.color = '#555';
+            statusEl.textContent = 'Exporting…';
+            try {
+                const res = await fetch('/api/sessions/text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                    body: JSON.stringify({
+                        text,
+                        title:      document.getElementById('textTitle').value.trim(),
+                        language:   document.getElementById('langSelect')?.value || 'en',
+                        visibility: visibilityToggle.checked ? 'private' : 'shared',
+                    }),
+                });
+                const d = await res.json();
+                if (d.ok) {
+                    lastSessionId = d.session_id;
+                    statusEl.style.color = '#4ec9b0';
+                    statusEl.textContent = `Session ${d.session_id} queued ✓`;
+                    document.getElementById('textInput').value = '';
+                    document.getElementById('textTitle').value = '';
+                    obsidianBtn.style.display = 'inline-block';
+                    exportStatus.style.display = 'none';
+                    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+                    refreshPipeline();
+                } else {
+                    statusEl.style.color = '#f14c4c';
+                    statusEl.textContent = d.error || 'Export failed';
+                }
+            } catch (err) {
+                statusEl.style.color = '#f14c4c';
+                statusEl.textContent = `Error: ${err.message}`;
+            } finally { btn.disabled = false; }
+        });
+
+        obsidianBtn.addEventListener('click', () => {
+            if (!lastSessionId) return;
+            promoteSession(lastSessionId, obsidianBtn, exportStatus);
+        });
+
+        async function promoteSession(sessionId, btn, statusEl) {
+            if (btn) { btn.disabled = true; btn.textContent = 'Promoting…'; }
+            if (statusEl) statusEl.style.display = 'none';
+            try {
+                const res  = await fetch(`/api/pipeline/staged/${sessionId}/promote`, { method: 'POST' });
+                const data = await res.json();
+                if (statusEl) {
+                    statusEl.style.display = 'inline-block';
+                    if (data.ok || data.already_promoted) {
+                        statusEl.className = 'export-ok';
+                        const companies = (data.entities?.companies || []).join(', ') || '—';
+                        statusEl.textContent = data.already_promoted
+                            ? 'Already promoted ✓'
+                            : `Promoted ✓  ${data.title} · ${companies}`;
+                        if (btn) btn.style.display = 'none';
+                    } else {
+                        statusEl.className = 'export-error';
+                        statusEl.textContent = `Error: ${data.error}`;
+                        if (btn) { btn.disabled = false; btn.textContent = 'Promote now ↑'; }
+                    }
+                }
+                refreshPipeline();
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.style.display = 'inline-block';
+                    statusEl.className = 'export-error';
+                    statusEl.textContent = `Network error: ${err.message}`;
+                }
+                if (btn) { btn.disabled = false; btn.textContent = 'Promote now ↑'; }
+            }
+        }
+
+        // ─── Pipeline panel ──────────────────────────────────────────────────────
+        const pipelineList     = document.getElementById('pipelineList');
+        const pipelineSubtitle = document.getElementById('pipelineSubtitle');
+        const pipelinePanel    = document.getElementById('pipelinePanel');
+        const dismissedIds     = new Set();
+
+        const STATUS_LABELS = {
+            staged:        { text: 'queued',         cls: 'ps-staged' },
+            agent_working: { text: 'agent working…', cls: 'ps-working' },
+            agent_done:    { text: 'agent done',      cls: 'ps-done' },
+            failed:        { text: 'failed',          cls: 'ps-failed' },
+            promoted:      { text: '✓ promoted',      cls: 'ps-promoted' },
+        };
+
+        function renderEntityBadges(entities) {
+            if (!entities) return '';
+            const confCls = { high: 'ec-high', medium: 'ec-med', low: 'ec-low' };
+            const parts = [];
+            for (const co of (entities.companies || [])) {
+                const name = typeof co === 'string' ? co : co.name;
+                const conf = typeof co === 'object' ? (co.confidence || 'medium') : 'medium';
+                parts.push(`<span class="ec-badge ${confCls[conf]||'ec-med'}" title="confidence: ${conf}">${name}</span>`);
+            }
+            for (const p of (entities.people || [])) {
+                const name = typeof p === 'string' ? p : p.name;
+                const conf = typeof p === 'object' ? (p.confidence || 'medium') : 'medium';
+                const role = typeof p === 'object' && p.role && p.role !== 'Unknown' ? ` · ${p.role}` : '';
+                parts.push(`<span class="ec-badge ec-person ${confCls[conf]||'ec-med'}" title="${conf}${role}">${name}${role}</span>`);
+            }
+            if (!parts.length) return '';
+            const hasLow = (entities.companies || []).some(c => (typeof c === 'object' ? c.confidence : 'high') === 'low')
+                        || (entities.people || []).some(p => (typeof p === 'object' ? p.confidence : 'high') === 'low');
+            const warn = hasLow ? ' <span class="ec-warn" title="Some entities need review">⚠</span>' : '';
+            return `<div class="ec-row">${parts.join('')}${warn}</div>`;
+        }
+
+        function renderPipeline(sessions) {
+            const visible = sessions.filter(s => !dismissedIds.has(s.session_id));
+            pipelinePanel.style.display = visible.length ? 'block' : 'none';
+            const pending = visible.filter(s => s.status !== 'promoted').length;
+            pipelineSubtitle.textContent = pending ? `${pending} pending` : '';
+
+            pipelineList.innerHTML = visible.map(s => {
+                const sl    = STATUS_LABELS[s.status] || { text: s.status, cls: 'ps-staged' };
+                const title = s.title || s.session_id;
+                const date  = s.created_at ? new Date(s.created_at).toLocaleString() : '';
+                const isPromoted = s.status === 'promoted';
+                const promoteBtn = isPromoted
+                    ? `<button class="pl-dismiss" data-id="${s.session_id}">×</button>`
+                    : `<button class="pl-promote" data-id="${s.session_id}">Promote now ↑</button>`;
+                const entityRow = (s.status === 'agent_done' || s.status === 'promoted')
+                    ? renderEntityBadges(s.entities) : '';
+                return `<div class="pl-card" id="plcard-${s.session_id}">
+                    <span class="pl-badge ${sl.cls}">${sl.text}</span>
+                    <span class="pl-title">${title}</span>
+                    <span class="pl-date">${date}</span>
+                    <span class="pl-status" id="plstatus-${s.session_id}"></span>
+                    ${promoteBtn}
+                    ${entityRow}
+                </div>`;
+            }).join('');
+
+            pipelineList.querySelectorAll('.pl-promote').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.dataset.id;
+                    const statusSpan = document.getElementById(`plstatus-${id}`);
+                    await promoteSession(id, btn, statusSpan);
+                });
+            });
+            pipelineList.querySelectorAll('.pl-dismiss').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    dismissedIds.add(btn.dataset.id);
+                    renderPipeline(lastPipelineSessions);
+                });
+            });
+        }
+
+        let lastPipelineSessions = [];
+        async function refreshPipeline() {
+            try {
+                const res  = await fetch('/api/pipeline/staged');
+                const data = await res.json();
+                lastPipelineSessions = data.sessions || [];
+                renderPipeline(lastPipelineSessions);
+            } catch (_) {}
+        }
+
+        initAuth();
+        setInterval(refreshPipeline, 15000);
+    </script>
+
+    <style>
+        .pipeline-panel {
+            display: none; margin: 0; padding: 10px 1.5rem;
+            border-top: 1px solid var(--c-line, #2a2a2a); background: #161616; flex-shrink: 0;
+        }
+        .pipeline-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+        #pipelineList { max-height: 200px; overflow-y: auto; }
+        .pipeline-title  { font-weight: 600; font-size: 0.78rem; color: var(--c-text4, #999); text-transform: uppercase; letter-spacing: .05em; }
+        .pipeline-subtitle { font-size: 0.75rem; color: var(--c-faint, #555); }
+        .pl-card {
+            display: flex; align-items: center; gap: 8px;
+            padding: 5px 0; border-bottom: 1px solid var(--c-bg, #1e1e1e); font-size: 0.8rem; flex-wrap: wrap;
+        }
+        .pl-card:last-child { border-bottom: none; }
+        .pl-badge   { padding: 1px 6px; border-radius: 3px; font-size: 0.7rem; white-space: nowrap; }
+        .ps-staged  { background: var(--c-line, #2a2a2a); color: var(--c-muted, #888); }
+        .ps-working { background: #0d2a3a; color: #5bc4f0; animation: wkpulse 1.5s infinite; }
+        .ps-done    { background: #0d2a14; color: #4ecf7e; }
+        .ps-failed  { background: #2a0d0d; color: #f07070; }
+        .ps-promoted{ background: var(--c-bg2, #1a1a1a); color: var(--c-faint, #555); }
+        @keyframes wkpulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+        .pl-title   { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text2, #ccc); }
+        .pl-date    { color: var(--c-faint, #555); font-size: 0.72rem; white-space: nowrap; }
+        .pl-status  { font-size: 0.75rem; }
+        .pl-promote { padding: 2px 8px; font-size: 0.72rem; background: #1e3a1e; color: #5fd57f; border: 1px solid #2a4a2a; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+        .pl-promote:hover { background: #264a26; }
+        .pl-dismiss { padding: 2px 6px; font-size: 0.72rem; background: transparent; color: var(--c-faint, #555); border: none; cursor: pointer; }
+        .pl-dismiss:hover { color: var(--c-muted, #888); }
+        .ec-row { width: 100%; padding: 3px 0 2px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+        .ec-badge { padding: 1px 6px; border-radius: 10px; font-size: 0.68rem; white-space: nowrap; border: 1px solid transparent; }
+        .ec-high  { background: #0d2014; color: #5fd57f; border-color: #1a3a1a; }
+        .ec-med   { background: #1a1a2a; color: #7b9ef0; border-color: #252540; }
+        .ec-low   { background: #2a1a0d; color: #c98a4a; border-color: #3a2a10; }
+        .ec-person { font-style: italic; }
+        .ec-warn  { color: #c98a4a; font-size: 0.75rem; cursor: help; }
+    </style>
+<script>
+// Ingest-only notice: without the transcribe build (INSTALL_TRANSCRIBE=1 +
+// TRANSCRIPTION_MODE=local) the server does no mic transcription — sessions
+// arrive via text ingest / the macOS app instead.
+(async () => {
+  try {
+    const t = localStorage.getItem('wk_token');
+    if (!t) return;
+    const r = await fetch('/api/status', { headers: { 'Authorization': 'Bearer ' + t } });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.transcription_mode === 'local' && d.whisper_available) return;
+    const note = document.createElement('div');
+    note.style.cssText = 'margin:0.8rem auto;max-width:900px;padding:0.6rem 0.9rem;border:1px solid var(--c-warnline, #5a4a2a);border-radius:6px;background:var(--c-warntint, #2a2418);color:var(--c-warn, #d7ba7d);font-size:0.8rem';
+    note.textContent = d.transcription_mode !== 'local'
+      ? 'Ingest-only mode: this server does not transcribe microphone audio (transcription_mode: ' + d.transcription_mode + '). Paste text below or use the companion app; for in-Docker mic transcription rebuild with INSTALL_TRANSCRIBE=1 and set TRANSCRIPTION_MODE=local.'
+      : 'Live transcription unavailable: faster-whisper is not installed in this server build (rebuild with INSTALL_TRANSCRIBE=1).';
+    document.body.prepend(note);
+  } catch (e) { /* notice only */ }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260716c">
+<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>News — Buzzowl</title>
+<script src="/static/components/navbar.js?v=20260714d"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif); font-size: 14px; line-height: 1.6; }
+
+.page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.content { flex: 1; overflow-y: auto; padding: 1.2rem 1.5rem; }
+
+/* Filter bar */
+.filter-bar {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  padding: 0.75rem 1rem; background: var(--c-bg2, #1a1a1a); border-bottom: 1px solid var(--c-linefaint, #222);
+  flex-shrink: 0;
+}
+.filter-label { font-size: 0.72rem; color: var(--c-faint, #555); flex-shrink: 0; }
+.filter-select {
+  background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-text, #d4d4d4);
+  border-radius: 4px; padding: 0.25rem 0.55rem; font-size: 0.78rem; cursor: pointer;
+}
+.filter-select:focus { outline: none; border-color: var(--c-accent, #4ec9b0); }
+
+/* Signal type chips */
+.chip-row { display: flex; gap: 0.3rem; align-items: center; }
+.type-chip {
+  padding: 0.18rem 0.55rem; border-radius: 10px; font-size: 0.68rem; font-weight: 600;
+  cursor: pointer; border: 1px solid transparent; transition: opacity 0.12s;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.type-chip.inactive { opacity: 0.35; }
+.chip-all     { background: var(--c-surface, #252526); color: var(--c-muted, #888); border-color: var(--c-line2, #333); }
+.chip-pain    { background: var(--c-redtint, #3a1010); color: var(--c-red, #f14c4c); }
+.chip-opp     { background: var(--c-postint, #0d2a1a); color: var(--c-accent, #4ec9b0); }
+.chip-risk    { background: var(--c-orangetint, #2e1a0a); color: var(--c-orange, #ce9178); }
+.chip-news    { background: var(--c-bluetint, #0d1a2e); color: var(--c-blue, #569cd6); }
+
+.filter-divider { width: 1px; height: 20px; background: var(--c-line, #2a2a2a); flex-shrink: 0; }
+
+.refresh-btn {
+  margin-left: auto; background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888);
+  border-radius: 4px; padding: 0.22rem 0.65rem; font-size: 0.72rem; cursor: pointer;
+}
+.refresh-btn:hover { color: var(--c-text, #d4d4d4); border-color: var(--c-faint, #555); }
+.signal-count { font-size: 0.72rem; color: var(--c-faint, #555); white-space: nowrap; }
+
+/* Company groups (one card per company, news items beneath) */
+.news-groups { display: flex; flex-direction: column; gap: 0.6rem; padding-top: 1rem; max-width: 1100px; margin: 0 auto; }
+
+.company-group {
+  background: var(--c-bg2, #1a1a1a); border: 1px solid #242424; border-radius: 7px; overflow: hidden;
+  border-left: 3px solid var(--c-line, #2a2a2a);
+}
+.company-group.imp-high { border-left-color: var(--c-accent, #4ec9b0); }
+.company-group.imp-mid  { border-left-color: #d7ba7d; }
+.company-group.imp-low  { border-left-color: var(--c-line3, #3a3a3a); }
+
+.company-header {
+  display: flex; align-items: center; gap: 0.55rem; padding: 0.6rem 0.85rem;
+  cursor: pointer; user-select: none; background: #1d1d1d; border-bottom: 1px solid #242424;
+}
+.company-header:hover { background: #212121; }
+.ch-toggle { color: var(--c-muted2, #666); font-size: 0.65rem; width: 0.8rem; flex-shrink: 0; }
+.company-name { font-size: 1rem; font-weight: 700; color: var(--c-texthi, #e6e6e6); letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.company-count { font-size: 0.66rem; color: var(--c-muted, #888); background: var(--c-line, #262626); border-radius: 10px; padding: 0.1rem 0.5rem; flex-shrink: 0; }
+.ch-chance { font-size: 0.64rem; color: #7ec8a0; background: #14261d; border: 1px solid #1f3a2c; border-radius: 10px; padding: 0.08rem 0.45rem; flex-shrink: 0; text-decoration: none; font-weight: 700; }
+.ch-chance:hover { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.ch-unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent, #4ec9b0); flex-shrink: 0; }
+.ch-top { margin-left: auto; flex-shrink: 0; display: flex; align-items: center; gap: 0.35rem; }
+.ch-top-label { font-size: 0.58rem; color: var(--c-faint, #555); }
+
+.company-news { display: flex; flex-direction: column; }
+.company-news.collapsed { display: none; }
+
+.news-row { padding: 0.55rem 0.85rem 0.6rem; border-top: 1px solid #202020; display: flex; flex-direction: column; gap: 0.3rem; transition: opacity 0.2s; }
+.news-row.read { opacity: 0.42; }
+
+.nr-top { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.sig-badge {
+  padding: 0.1rem 0.45rem; border-radius: 8px; font-size: 0.62rem;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0;
+}
+.sb-pain_point { background: var(--c-redtint, #3a1010); color: var(--c-red, #f14c4c); }
+.sb-opportunity { background: var(--c-postint, #0d2a1a); color: var(--c-accent, #4ec9b0); }
+.sb-risk { background: var(--c-orangetint, #2e1a0a); color: var(--c-orange, #ce9178); }
+.sb-news { background: var(--c-bluetint, #0d1a2e); color: var(--c-blue, #569cd6); }
+.sig-client { font-size: 0.62rem; color: var(--c-faint, #555); border: 1px solid var(--c-line, #2a2a2a); border-radius: 8px; padding: 0.05rem 0.35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.nr-headline { font-size: 0.82rem; color: #cdcdcd; font-weight: 600; line-height: 1.35; }
+.nr-headline a { color: inherit; text-decoration: none; }
+.nr-headline a:hover { text-decoration: underline; }
+.nr-evidence {
+  font-size: 0.7rem; color: #6a6a6a; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* Relevance gauge (5 segments, colored by importance) */
+.rel-gauge { display: inline-flex; gap: 2px; align-items: center; margin-left: auto; flex-shrink: 0; }
+.rg-seg { width: 6px; height: 11px; border-radius: 1px; background: #313131; }
+.rg-seg.on-high { background: var(--c-accent, #4ec9b0); }
+.rg-seg.on-mid  { background: #d7ba7d; }
+.rg-seg.on-low  { background: var(--c-orange, #ce9178); }
+.rel-unrated { font-size: 0.56rem; color: var(--c-faint2, #444); margin-left: auto; flex-shrink: 0; letter-spacing: 0.03em; }
+
+.card-footer { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.1rem; flex-wrap: wrap; }
+.sig-age { font-size: 0.6rem; color: var(--c-faint2, #444); }
+.card-actions { margin-left: auto; display: flex; gap: 0.3rem; }
+.card-btn {
+  background: none; border: 1px solid var(--c-line2, #333); color: var(--c-faint, #555); border-radius: 3px;
+  padding: 0.1rem 0.4rem; font-size: 0.6rem; cursor: pointer; transition: color 0.12s, border-color 0.12s;
+}
+.card-btn:hover { color: var(--c-text, #d4d4d4); border-color: var(--c-faint, #555); }
+.card-btn.ask { border-color: var(--c-accenttint, #1a3a2e); color: var(--c-accent, #4ec9b0); }
+.card-btn.ask:hover { background: var(--c-accenttint, #1a3a2e); }
+.card-btn.mark-read:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Show-more within a company */
+.show-more-row { padding: 0.35rem 0.85rem 0.6rem; border-top: 1px solid #202020; }
+.show-more-btn { background: none; border: none; color: var(--c-blue, #6a9ec9); font-size: 0.7rem; cursor: pointer; padding: 0.1rem 0; }
+.show-more-btn:hover { text-decoration: underline; }
+
+/* Load more */
+.load-more-row { text-align: center; padding: 1.5rem 0; }
+.load-more-btn {
+  background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); color: var(--c-muted, #888); border-radius: 4px;
+  padding: 0.4rem 1.2rem; font-size: 0.78rem; cursor: pointer;
+}
+.load-more-btn:hover { color: var(--c-text, #d4d4d4); border-color: var(--c-faint, #555); }
+.load-more-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Empty / loading states */
+.empty-state { text-align: center; padding: 3rem 1rem; color: var(--c-faint, #555); }
+.empty-state a { color: var(--c-accent, #4ec9b0); }
+.loading-text { color: var(--c-faint2, #444); font-size: 0.82rem; padding: 2rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="main-nav"></nav>
+
+  <!-- Filter bar -->
+  <div class="filter-bar">
+    <span class="filter-label">Show</span>
+    <select class="filter-select" id="scopeFilter">
+      <option value="client">Client news</option>
+      <option value="market">Market / Industry</option>
+      <option value="">Everything</option>
+    </select>
+
+    <div class="filter-divider"></div>
+
+    <span class="filter-label">Client</span>
+    <select class="filter-select" id="clientFilter">
+      <option value="">All clients</option>
+    </select>
+
+    <div class="filter-divider"></div>
+
+    <span class="filter-label">Type</span>
+    <div class="chip-row">
+      <span class="type-chip chip-all" data-type="" onclick="toggleType(this)">All</span>
+      <span class="type-chip chip-pain" data-type="pain_point" onclick="toggleType(this)">Pain</span>
+      <span class="type-chip chip-opp" data-type="opportunity" onclick="toggleType(this)">Opportunity</span>
+      <span class="type-chip chip-risk" data-type="risk" onclick="toggleType(this)">Risk</span>
+      <span class="type-chip chip-news" data-type="news" onclick="toggleType(this)">News</span>
+    </div>
+
+    <div class="filter-divider"></div>
+
+    <span class="filter-label">Relevance</span>
+    <select class="filter-select" id="relFilter">
+      <option value="">All</option>
+      <option value="3">3+</option>
+      <option value="4">4+</option>
+      <option value="5">5 only</option>
+    </select>
+
+    <div class="filter-divider"></div>
+
+    <span class="filter-label">Period</span>
+    <select class="filter-select" id="daysFilter">
+      <option value="7">Last 7 days</option>
+      <option value="30" selected>Last 30 days</option>
+      <option value="90">Last 90 days</option>
+      <option value="0">All time</option>
+    </select>
+
+    <span class="signal-count" id="sigCount"></span>
+    <button class="refresh-btn" id="toggleAllBtn" onclick="toggleAll()" style="margin-left:auto">⤢ Expand all</button>
+    <button class="refresh-btn" onclick="resetAndLoad()" style="margin-left:0.4rem">↻ Refresh</button>
+    <button class="refresh-btn" id="mktSourcesBtn" onclick="openMktSources()" style="display:none" title="Manage the economics/industry pages the market monitor watches">⚙ Market sources</button>
+  </div>
+
+  <!-- Market sources modal (admin) -->
+  <div id="mktSourcesModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:50;align-items:center;justify-content:center">
+    <div style="background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);border-radius:8px;padding:1.4rem;width:min(640px,92vw);max-height:86vh;overflow:auto">
+      <h3 style="margin:0 0 0.3rem;font-size:0.95rem;color:var(--c-text, #d4d4d4)">Market news sources</h3>
+      <p style="margin:0 0 0.8rem;color:var(--c-muted, #888);font-size:0.78rem">One source per line as <code>Label | https://url</code>. The monitor fingerprints these daily and researches what changed.</p>
+      <textarea id="mktSourcesText" spellcheck="false" style="width:100%;height:220px;background:var(--c-surface, #252526);border:1px solid var(--c-line2, #333);color:#ddd;border-radius:5px;padding:0.6rem;font-family:var(--c-font-mono, monospace);font-size:0.8rem;resize:vertical"></textarea>
+      <div id="mktSourcesStatus" style="color:var(--c-muted, #888);font-size:0.74rem;margin-top:0.4rem;min-height:1.1em"></div>
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.8rem">
+        <button class="refresh-btn" onclick="loadMktDefaults()" title="Insert the suggested defaults" style="margin-right:auto">+ Defaults</button>
+        <button class="refresh-btn" onclick="closeMktSources()">Cancel</button>
+        <button class="refresh-btn" style="border-color:#2e7d32;color:#9ec99e" onclick="saveMktSources()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="content">
+    <div class="news-groups" id="cardsGrid"></div>
+    <div id="loadMoreRow" class="load-more-row" style="display:none">
+      <button class="load-more-btn" id="loadMoreBtn" onclick="loadMore()">Load more</button>
+    </div>
+    <div class="empty-state" id="emptyState" style="display:none">
+      No signals found. Agent runs will surface signals automatically.<br>
+      <a href="/agents">Open Agents dashboard →</a>
+    </div>
+    <div class="loading-text" id="loadingText">Loading…</div>
+  </div>
+</div>
+
+<script>
+initNavbar({ active: 'news' });
+
+const TOKEN_KEY = 'wk_token';
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const H = () => {
+  const t = getToken();
+  return t ? { 'Authorization': `Bearer ${t}` } : {};
+};
+
+const BADGE_LABELS = { pain_point: 'Pain', opportunity: 'Opportunity', risk: 'Risk', news: 'News' };
+const BADGE_CLASSES = { pain_point: 'sb-pain_point', opportunity: 'sb-opportunity', risk: 'sb-risk', news: 'sb-news' };
+
+let currentPage = 0;
+const PAGE_SIZE = 60;          // larger batch so a company's signals arrive together
+const PER_COMPANY = 5;         // items shown per company before "show more"
+let selectedType = '';
+let totalLoaded = 0;
+let hasMore = true;
+let allSignals = [];           // accumulator across pages — grouping re-renders from this
+let _oppScores = {};           // { clientNameLower: winPropensityScore } from /api/ranking
+let _oppRequested = false;     // fetch opportunity scores once, after signals first paint
+const collapsedCompanies = new Set();
+const expandedCompanies = new Set();
+const seenCompanies = new Set();   // companies start collapsed by default the first time they appear
+
+// ── Auth check ──────────────────────────────────────────────────────────────
+if (!getToken()) {
+  window.location.href = '/knowledge';
+}
+
+// ── Filters ─────────────────────────────────────────────────────────────────
+document.getElementById('clientFilter').addEventListener('change', resetAndLoad);
+document.getElementById('relFilter').addEventListener('change', resetAndLoad);
+document.getElementById('daysFilter').addEventListener('change', resetAndLoad);
+document.getElementById('scopeFilter').addEventListener('change', () => { updateMktBtn(); resetAndLoad(); });
+
+// ── Market sources admin panel ───────────────────────────────────────────────
+let _isAdmin = false, _mktDefaults = [];
+(async () => {
+  try {
+    const r = await fetch('/api/auth/me', { headers: H() });
+    if (r.ok) { _isAdmin = (await r.json()).user?.role === 'admin'; updateMktBtn(); }
+  } catch (_) {}
+})();
+function updateMktBtn() {
+  const btn = document.getElementById('mktSourcesBtn');
+  btn.style.display = (_isAdmin && document.getElementById('scopeFilter').value === 'market') ? '' : 'none';
+}
+function _fmtSources(sources) {
+  return (sources || []).map(s => `${s.label || s.url} | ${s.url}`).join('\n');
+}
+async function openMktSources() {
+  const status = document.getElementById('mktSourcesStatus');
+  status.textContent = 'Loading…';
+  document.getElementById('mktSourcesModal').style.display = 'flex';
+  try {
+    const r = await fetch('/api/market/sources', { headers: H() });
+    const d = await r.json();
+    _mktDefaults = d.defaults || [];
+    document.getElementById('mktSourcesText').value = _fmtSources(d.sources);
+    status.textContent = (d.sources || []).length ? '' : 'No sources yet — add some or click + Defaults.';
+  } catch (_) { status.textContent = 'Could not load.'; }
+}
+function closeMktSources() { document.getElementById('mktSourcesModal').style.display = 'none'; }
+function loadMktDefaults() {
+  const ta = document.getElementById('mktSourcesText');
+  const existing = ta.value.trim();
+  ta.value = (existing ? existing + '\n' : '') + _fmtSources(_mktDefaults);
+}
+async function saveMktSources() {
+  const status = document.getElementById('mktSourcesStatus');
+  const lines = document.getElementById('mktSourcesText').value.split('\n').map(l => l.trim()).filter(Boolean);
+  const sources = [];
+  for (const line of lines) {
+    const i = line.lastIndexOf('|');
+    let label = '', url = line;
+    if (i !== -1) { label = line.slice(0, i).trim(); url = line.slice(i + 1).trim(); }
+    if (url.startsWith('http')) sources.push({ label: label || url, url });
+  }
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/market/sources', { method: 'PUT', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify({ sources }) });
+    if (!r.ok) { status.textContent = r.status === 403 ? 'Admin only.' : 'Save failed.'; return; }
+    const d = await r.json();
+    status.textContent = `Saved ${(d.sources || []).length} source(s).`;
+    setTimeout(closeMktSources, 700);
+  } catch (_) { status.textContent = 'Save failed.'; }
+}
+
+function toggleType(el) {
+  selectedType = el.dataset.type;
+  document.querySelectorAll('.type-chip').forEach(c => {
+    c.classList.toggle('inactive', c.dataset.type !== selectedType && !(selectedType === '' && c.dataset.type === ''));
+  });
+  resetAndLoad();
+}
+
+function resetAndLoad() {
+  currentPage = 0;
+  totalLoaded = 0;
+  hasMore = true;
+  allSignals = [];
+  collapsedCompanies.clear();
+  expandedCompanies.clear();
+  seenCompanies.clear();
+  document.getElementById('cardsGrid').innerHTML = '';
+  document.getElementById('loadMoreRow').style.display = 'none';
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('loadingText').style.display = 'block';
+  loadSignals();
+}
+
+// ── Load clients ─────────────────────────────────────────────────────────────
+async function loadClients() {
+  try {
+    const r = await fetch('/api/clients', { headers: H() });
+    if (!r.ok) return;
+    const data = await r.json();
+    const sel = document.getElementById('clientFilter');
+    (data.clients || []).forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    });
+  } catch (e) { /* ignore */ }
+}
+
+// ── Load win-propensity scores (to order companies by opportunity) ────────────
+async function loadOppScores() {
+  try {
+    const r = await fetch('/api/ranking?scope=all&limit=200', { headers: H() });
+    if (!r.ok) return;
+    const d = await r.json();
+    const m = {};
+    (d.items || []).forEach(it => { if (it.client) m[String(it.client).toLowerCase()] = it.score; });
+    _oppScores = m;
+    if (allSignals.length) renderGroups();   // re-order once the scores arrive
+  } catch (e) { /* ignore — falls back to news-importance ordering */ }
+}
+
+// ── Load signals ─────────────────────────────────────────────────────────────
+async function loadSignals() {
+  const client = document.getElementById('clientFilter').value;
+  const minRel = document.getElementById('relFilter').value;
+  const days = document.getElementById('daysFilter').value;
+  const scope = document.getElementById('scopeFilter').value;
+
+  const params = new URLSearchParams({ page: currentPage, limit: PAGE_SIZE, days: days || 0 });
+  if (client) params.set('client_name', client);
+  if (selectedType) params.set('signal_type', selectedType);
+  if (minRel) params.set('min_relevance', minRel);
+  if (scope) params.set('scope', scope);
+
+  try {
+    const r = await fetch('/api/signals?' + params, { headers: H() });
+    if (r.status === 401) { window.location.href = '/knowledge'; return; }
+    if (!r.ok) { document.getElementById('loadingText').textContent = 'Failed to load signals.'; return; }
+    const data = await r.json();
+    const signals = data.signals || [];
+    document.getElementById('loadingText').style.display = 'none';
+
+    if (signals.length === 0 && currentPage === 0) {
+      document.getElementById('emptyState').style.display = 'block';
+      document.getElementById('sigCount').textContent = '0 signals';
+      return;
+    }
+
+    allSignals = allSignals.concat(signals);
+    totalLoaded = allSignals.length;
+    hasMore = signals.length === PAGE_SIZE;
+    renderGroups();
+
+    // Fetch win-propensity scores once, AFTER the first signal paint, so the
+    // (heavier) ranking call never delays the news list itself.
+    if (!_oppRequested) { _oppRequested = true; loadOppScores(); }
+
+    const companyCount = new Set(allSignals.map(companyKey)).size;
+    document.getElementById('sigCount').textContent =
+      `${companyCount} ${companyCount === 1 ? 'company' : 'companies'} · ${totalLoaded}${hasMore ? '+' : ''} signals`;
+    document.getElementById('loadMoreRow').style.display = hasMore ? 'block' : 'none';
+  } catch (e) {
+    document.getElementById('loadingText').textContent = 'Error: ' + e.message;
+  }
+}
+
+function loadMore() {
+  currentPage++;
+  document.getElementById('loadMoreBtn').disabled = true;
+  document.getElementById('loadMoreBtn').textContent = 'Loading…';
+  loadSignals().then(() => {
+    document.getElementById('loadMoreBtn').disabled = false;
+    document.getElementById('loadMoreBtn').textContent = 'Load more';
+  });
+}
+
+// ── Render grouped-by-company view ───────────────────────────────────────────
+function companyKey(s) {
+  const meta = s.metadata || {};
+  return meta.subject || (meta.scope === 'market' ? (meta.industry || 'Industry') : 'Other');
+}
+
+function relTier(score) {
+  if (score >= 4) return 'high';   // major / strategic
+  if (score === 3) return 'mid';   // notable
+  return 'low';                    // 1–2 minor
+}
+
+// A 5-segment gauge coloured by importance; a neutral "unrated" tag when there's no score.
+function relGauge(score) {
+  const n = Number(score) || 0;
+  if (!n) return `<span class="rel-unrated" title="No relevance score">· unrated</span>`;
+  const tier = relTier(n);
+  let segs = '';
+  for (let i = 1; i <= 5; i++) segs += `<span class="rg-seg ${i <= n ? 'on-' + tier : ''}"></span>`;
+  return `<span class="rel-gauge" title="Relevance ${n}/5">${segs}</span>`;
+}
+
+function newsRowHtml(s) {
+  const meta = s.metadata || {};
+  const stype = meta.signal_type || 'news';
+  const isRead = !!meta.read;
+  const isMarket = meta.scope === 'market';
+  const fromMarket = !!meta.from_market;
+  const label = isMarket ? '🌐 Market' : (BADGE_LABELS[stype] || 'News');
+  const badgeCls = isMarket ? 'sb-news' : (BADGE_CLASSES[stype] || 'sb-news');
+  const subject = companyKey(s);
+  const sourceUrl = meta.source_url || '';
+  const age = relativeAge(s.created_at);
+  const docId = s.doc_id || '';
+
+  const headline = sourceUrl
+    ? `<a href="${esc(sourceUrl)}" target="_blank" rel="noopener" title="Read the article">${esc(s.title || '')}</a>`
+    : esc(s.title || '');
+
+  const primaryLink = sourceUrl
+    ? `<a class="card-btn" style="border-color:#1e3a6e;color:#7ec8e3;text-decoration:none" href="${esc(sourceUrl)}" target="_blank" rel="noopener">📰 Read article →</a>`
+    : `<a class="card-btn" style="border-color:#3a3a1e;color:#c8b87e;text-decoration:none" href="/client/${encodeURIComponent(subject)}#documents" title="Inferred from research — open the client's research">🔎 View in research →</a>`;
+
+  return `
+    <div class="news-row ${isRead ? 'read' : ''}" id="sig-${escId(docId)}">
+      <div class="nr-top">
+        <span class="sig-badge ${badgeCls}">${esc(label)}</span>
+        ${fromMarket ? `<span class="sig-client" style="border-color:#3a3a5e;color:#9090c8" title="Surfaced from a market/industry development">🌐 market</span>` : ''}
+        ${relGauge(meta.relevance_score)}
+      </div>
+      <div class="nr-headline">${headline}</div>
+      ${s.content ? `<div class="nr-evidence">${esc(s.content)}</div>` : ''}
+      <div class="card-footer">
+        <span class="sig-age">${esc(age)}</span>
+        <div class="card-actions">
+          ${primaryLink}
+          <button class="card-btn ask" data-act="ask" data-title="${esc(s.title || '')}" data-client="${esc(subject)}">Ask AI →</button>
+          <button class="card-btn mark-read" data-act="read" data-doc="${esc(docId)}" ${isRead ? 'disabled' : ''}>✓ Read</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderGroups() {
+  const grid = document.getElementById('cardsGrid');
+
+  // Bucket signals by company.
+  const groups = new Map();
+  allSignals.forEach(s => {
+    const key = companyKey(s);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  });
+
+  const relOf = s => Number((s.metadata || {}).relevance_score) || 0;
+  const timeOf = s => new Date(s.created_at || 0).getTime();
+  const oppOf = key => { const v = _oppScores[key.toLowerCase()]; return (v === undefined ? null : v); };
+  const arr = [...groups.entries()].map(([key, items]) => {
+    // Within a company: most important first, then most recent.
+    items.sort((a, b) => relOf(b) - relOf(a) || timeOf(b) - timeOf(a));
+    return {
+      key, items, opp: oppOf(key),
+      maxRel: Math.max(0, ...items.map(relOf)),
+      newest: Math.max(0, ...items.map(timeOf)),
+      unread: items.some(s => !(s.metadata || {}).read),
+    };
+  });
+  // Order companies by win-propensity ("chance") score so the best sales targets
+  // surface first; companies without a score fall back to news importance, then recency.
+  arr.sort((a, b) => (b.opp ?? -1) - (a.opp ?? -1) || b.maxRel - a.maxRel || b.newest - a.newest);
+
+  // Collapse each company by default the first time it appears; the user's manual
+  // toggles are preserved on later re-renders (Load more, score re-order).
+  arr.forEach(g => { if (!seenCompanies.has(g.key)) { seenCompanies.add(g.key); collapsedCompanies.add(g.key); } });
+
+  grid.innerHTML = arr.map(g => {
+    const impCls = g.maxRel >= 4 ? 'imp-high' : (g.maxRel === 3 ? 'imp-mid' : 'imp-low');
+    const collapsed = collapsedCompanies.has(g.key);
+    const expanded = expandedCompanies.has(g.key);
+    const shown = expanded ? g.items : g.items.slice(0, PER_COMPANY);
+    const extra = g.items.length - shown.length;
+    const rowsHtml = shown.map(newsRowHtml).join('');
+    const moreRow = extra > 0
+      ? `<div class="show-more-row"><button class="show-more-btn" data-act="expand" data-key="${esc(g.key)}">▾ Show ${extra} more from ${esc(g.key)}</button></div>`
+      : '';
+    return `
+      <div class="company-group ${impCls}">
+        <div class="company-header" data-act="toggle" data-key="${esc(g.key)}">
+          <span class="ch-toggle">${collapsed ? '▶' : '▼'}</span>
+          <span class="company-name">${esc(g.key)}</span>
+          <span class="company-count">${g.items.length} news</span>
+          ${g.opp != null ? `<a class="ch-chance" href="/ranking" title="Win-propensity (opportunity) score — click to open the Ranking page">🎯 ${g.opp}</a>` : ''}
+          ${g.unread ? '<span class="ch-unread-dot" title="Has unread news"></span>' : ''}
+          <span class="ch-top"><span class="ch-top-label">top</span>${relGauge(g.maxRel)}</span>
+        </div>
+        <div class="company-news ${collapsed ? 'collapsed' : ''}">
+          ${rowsHtml}${moreRow}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// Expand / collapse every company at once.
+function toggleAll() {
+  const keys = [...seenCompanies];
+  const anyCollapsed = keys.some(k => collapsedCompanies.has(k));
+  if (anyCollapsed) keys.forEach(k => collapsedCompanies.delete(k));   // expand all
+  else keys.forEach(k => collapsedCompanies.add(k));                   // collapse all
+  const btn = document.getElementById('toggleAllBtn');
+  if (btn) btn.textContent = anyCollapsed ? '⤡ Collapse all' : '⤢ Expand all';
+  renderGroups();
+}
+
+// Delegated interactions (robust vs. per-item inline handlers).
+document.getElementById('cardsGrid').addEventListener('click', (e) => {
+  if (e.target.closest('a')) return;   // let links (chance chip, headlines) navigate — don't also toggle
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const act = el.dataset.act;
+  if (act === 'toggle') {
+    const key = el.dataset.key;
+    if (collapsedCompanies.has(key)) collapsedCompanies.delete(key); else collapsedCompanies.add(key);
+    renderGroups();
+  } else if (act === 'expand') {
+    expandedCompanies.add(el.dataset.key);
+    renderGroups();
+  } else if (act === 'ask') {
+    askAbout(el.dataset.title, el.dataset.client);
+  } else if (act === 'read') {
+    markRead(el.dataset.doc, el);
+  }
+});
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+async function markRead(docId, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/signals/${encodeURIComponent(docId)}/read`, { method: 'PATCH', headers: H() });
+    if (r.ok) {
+      // Persist into the accumulator so re-renders (Load more / collapse) keep it read.
+      const sig = allSignals.find(s => (s.doc_id || '') === docId);
+      if (sig) { sig.metadata = sig.metadata || {}; sig.metadata.read = true; }
+      const row = document.getElementById('sig-' + escId(docId));
+      if (row) row.classList.add('read');
+    } else if (btn) {
+      btn.disabled = false;
+    }
+  } catch (e) {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function askAbout(headline, client) {
+  const q = encodeURIComponent('Tell me more about: ' + headline);
+  const c = encodeURIComponent(client);
+  window.location.href = `/knowledge?client=${c}&q=${q}`;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function escId(str) {
+  return String(str).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function relativeAge(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 2) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  if (d < 30) return d + 'd ago';
+  return Math.floor(d / 30) + 'mo ago';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadClients();
+loadSignals();   // loadOppScores() fires after the first signal paint (see loadSignals)
+</script>
+</body>
+</html>
