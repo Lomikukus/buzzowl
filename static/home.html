@@ -136,6 +136,14 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 .task-snz.open .task-snz-menu { display:block; }
 .task-snz-menu button { display:block; width:100%; text-align:left; background:none; border:none; color:var(--c-text2, #ccc); font-size:0.74rem; padding:0.28rem 0.5rem; border-radius:3px; cursor:pointer; font-family:inherit; }
 .task-snz-menu button:hover { background:var(--c-linefaint, #222); color:var(--c-accent, #4ec9b0); }
+.inv-row { display:flex; align-items:center; gap:0.5rem; padding:0.45rem 0; border-bottom:1px solid #1f1f1f; }
+.inv-row:last-child { border-bottom:none; }
+.inv-main { flex:1; min-width:0; }
+.inv-title { color:var(--c-text, #d4d4d4); font-size:0.82rem; }
+.inv-meta { color:var(--c-muted2, #777); font-size:0.7rem; }
+.inv-btn { background:none; border:1px solid var(--c-line3, #3a3a3a); color:var(--c-muted, #888); border-radius:4px; padding:0.15rem 0.5rem; font-size:0.7rem; cursor:pointer; font-family:inherit; }
+.inv-btn.ok { border-color:var(--c-accent, #4ec9b0); color:var(--c-accent, #4ec9b0); }
+.inv-btn:hover { color:var(--c-text, #d4d4d4); }
 .task-del { background:none; border:none; color:var(--c-faint, #555); cursor:pointer; font-size:0.8rem; flex-shrink:0; }
 .task-del:hover { color:var(--c-red, #f14c4c); }
 
@@ -174,6 +182,10 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
           <div class="card">
             <h2><a href="/clients?filter=mine" style="color:inherit;text-decoration:none" title="View all your clients">My clients</a> <a href="/clients">All clients →</a></h2>
             <div id="homeMyClients"><div class="empty">Loading…</div></div>
+          </div>
+          <div class="card" id="shareInvitesCard" style="display:none">
+            <h2>🤝 Shared with you</h2>
+            <div id="shareInvites"></div>
           </div>
           <div class="card">
             <h2>✅ My tasks</h2>
@@ -508,6 +520,38 @@ loadNba();
 loadOverlooked();
 loadNews();
 loadHomeRest();
+loadShareInvites();
+
+// ── Shared clients: incoming invitations (Phase 6a) ─────────────────────────
+async function loadShareInvites(){
+  const card=document.getElementById('shareInvitesCard'), el=document.getElementById('shareInvites');
+  let inv=[];
+  try{ const r=await fetch('/api/sharing/invites?direction=incoming',{headers:H(),cache:'no-store'}); if(r.ok) inv=(await r.json()).invites||[]; }catch(_){}
+  if(!inv.length){ card.style.display='none'; return; }
+  card.style.display='';
+  el.innerHTML=inv.map(i=>`<div class="inv-row">
+    <div class="inv-main">
+      <div class="inv-title"><b>${esc(i.from_user_name||i.from_org_name)}</b> (${esc(i.from_org_name)}) wants to share <b>${esc(i.client_name)}</b> with you</div>
+      <div class="inv-meta">You'd both research &amp; monitor it; research, findings, signals and profile sync both ways — your contacts, notes, mails and deals stay private.${i.message?' · “'+esc(i.message)+'”':''}</div>
+    </div>
+    <button class="inv-btn ok" onclick="acceptShare(${i.id},this)">Accept</button>
+    <button class="inv-btn" onclick="declineShare(${i.id})">Decline</button>
+  </div>`).join('');
+}
+async function acceptShare(id, btn){
+  btn.disabled=true; btn.textContent='Syncing…';
+  try{
+    const r=await fetch('/api/sharing/invites/'+id+'/accept',{method:'POST',headers:{'Content-Type':'application/json',...H()},body:JSON.stringify({})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){ alert('Could not accept: '+(d.detail||r.status)); btn.disabled=false; btn.textContent='Accept'; return; }
+    btn.textContent='Accepted';
+    setTimeout(()=>{ location.href='/client/'+encodeURIComponent(d.client_name); }, 600);
+  }catch(e){ btn.disabled=false; btn.textContent='Accept'; }
+}
+async function declineShare(id){
+  try{ await fetch('/api/sharing/invites/'+id+'/decline',{method:'POST',headers:H()}); }catch(_){}
+  loadShareInvites();
+}
 loadLastContacted();
 loadTasks();
 </script>

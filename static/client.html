@@ -134,6 +134,17 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 .dt-finding  { background: #2e1a3a; color: var(--c-purple, #c586c0); }
 .dt-signal   { background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); }
 .dt-note     { background: var(--c-line, #2a2a2a); color: var(--c-muted, #888); }
+.shared-chip { font-size: 0.6rem; padding: 0.06rem 0.3rem; border-radius: 3px; border: 1px solid #2e1a3a; color: var(--c-purple, #c586c0); background: #2e1a3a; white-space: nowrap; }
+.share-row { display: flex; align-items: center; gap: 0.45rem; padding: 0.3rem 0; border-bottom: 1px solid var(--c-linefaint, #222); font-size: 0.76rem; }
+.share-row:last-child { border-bottom: none; }
+.share-row .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-row .tag { font-size: 0.6rem; color: var(--c-muted, #888); border: 1px solid var(--c-line3, #3a3a3a); border-radius: 3px; padding: 0 0.3rem; }
+.share-row .tag.mon { color: var(--c-accent, #4ec9b0); border-color: var(--c-accent, #4ec9b0); }
+.share-hit { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.4rem; border: 1px solid var(--c-line2, #333); border-radius: 4px; margin-top: 0.25rem; font-size: 0.74rem; cursor: pointer; }
+.share-hit:hover { border-color: var(--c-accent, #4ec9b0); }
+.share-btn { background: none; border: 1px solid var(--c-line3, #3a3a3a); color: var(--c-muted, #888); border-radius: 4px; padding: 0.05rem 0.35rem; font-size: 0.64rem; cursor: pointer; }
+.share-btn:hover { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+.share-btn.danger:hover { border-color: var(--c-red, #f14c4c); color: var(--c-red, #f14c4c); }
 .doc-row-info { flex: 1; min-width: 0; }
 .doc-row-title { font-size: 0.8rem; color: var(--c-text2, #ccc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .doc-row-sub { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.1rem; }
@@ -273,6 +284,20 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
           <button onclick="addSource()" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.5rem;font-size:0.7rem;cursor:pointer">+ Add</button>
         </div>
         <div id="sourcesStatus" style="font-size:0.68rem;color:var(--c-muted2, #666);margin-top:0.3rem"></div>
+      </div>
+      <div id="sharingBox">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
+          <h3 style="margin-bottom:0">Shared with</h3>
+          <button onclick="toggleShareForm()" title="Share this client with someone on another Buzzowl org — you then research and monitor it together" style="background:none;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888);border-radius:4px;padding:0.15rem 0.4rem;font-size:0.68rem;cursor:pointer;transition:all 0.15s" onmouseover="this.style.borderColor='#4ec9b0';this.style.color='#4ec9b0'" onmouseout="this.style.borderColor='#3a3a3a';this.style.color='#888'">+ Share</button>
+        </div>
+        <div id="sharingList"><span class="empty-state" style="padding:0.4rem 0;text-align:left">Not shared — only you see this client.</span></div>
+        <div id="shareForm" style="display:none;margin-top:0.45rem">
+          <input id="shareQuery" type="text" placeholder="email or name of the other person…" oninput="lookupShare(this.value)"
+                 style="width:100%;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.28rem 0.5rem;font-size:0.72rem">
+          <div id="shareHits" style="margin-top:0.3rem"></div>
+          <div style="font-size:0.66rem;color:var(--c-muted2, #666);margin-top:0.35rem">Shared: research, OSINT, findings, signals, profile &amp; monitored sources. <b>Never</b> shared: contacts, notes, meetings, mails, deals, tasks.</div>
+        </div>
+        <div id="sharingStatus" style="font-size:0.68rem;color:var(--c-muted2, #666);margin-top:0.3rem"></div>
       </div>
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
@@ -513,6 +538,7 @@ async function loadClient() {
     const client = await r.json();
     const meta = safeMeta(client.metadata);
     _clientId = client.id;
+    loadSharing();
 
     document.title = `${client.name} — Buzzowl`;
     const subtitleEl = document.getElementById('navSubtitle');
@@ -1207,6 +1233,99 @@ async function saveNewDoc() {
     switchTab('documents');
 }
 
+// ── Sharing (Phase 6a) ────────────────────────────────────────────────────
+let _sharing = null;
+async function loadSharing() {
+    if (!_clientId) return;
+    const el = document.getElementById('sharingList');
+    try {
+        const r = await fetch(`/api/clients/${_clientId}/sharing`, { headers: authHeaders(), cache: 'no-store' });
+        if (!r.ok) return;
+        _sharing = await r.json();
+    } catch (_) { return; }
+    const g = _sharing.group;
+    if (!g) {
+        el.innerHTML = '<span class="empty-state" style="padding:0.4rem 0;text-align:left">Not shared — only you see this client.</span>';
+        return;
+    }
+    const members = (_sharing.members || []).filter(m => !m.left_at);
+    let html = members.map(m => {
+        const me = m.org_id === _sharing.my_org_id;
+        const mon = g.monitor_org_id === m.org_id;
+        return `<div class="share-row">
+            <span class="who" title="${esc(m.org_name)} · client “${esc(m.client_name)}”">${me ? 'You' : esc(m.org_name)}${m.joined_by_name && !me ? ` <span style="color:var(--c-muted2,#666)">(${esc(m.joined_by_name)})</span>` : ''}</span>
+            ${mon ? '<span class="tag mon" title="This org runs research heartbeats and source monitoring; the others receive the results">monitors</span>' : ''}
+            ${m.role === 'owner' ? '<span class="tag">owner</span>' : ''}
+        </div>`;
+    }).join('');
+    html += (_sharing.invites || []).map(i => `<div class="share-row" style="opacity:0.7">
+        <span class="who">${esc(i.to_user_name || i.to_email || i.to_org_name || 'invited')}</span>
+        <span class="tag">invited</span>
+        <button class="share-btn" onclick="revokeShareInvite(${i.id})" title="Withdraw invitation">✕</button>
+    </div>`).join('');
+    const scope = g.scope || {};
+    html += `<div style="display:flex;gap:0.3rem;flex-wrap:wrap;margin-top:0.4rem">
+        ${g.monitor_org_id !== _sharing.my_org_id ? `<button class="share-btn" onclick="takeMonitor()" title="Run research & monitoring for this client from your side">Take over monitoring</button>` : ''}
+        <button class="share-btn" onclick="resyncShare()" title="Re-send everything shareable to all members">Re-sync</button>
+        <button class="share-btn danger" onclick="leaveShare()">Leave sharing</button>
+    </div>
+    <div style="font-size:0.64rem;color:var(--c-muted2,#666);margin-top:0.3rem">Scope: ${esc((scope.doc_types||[]).join(', '))}${scope.profile ? ', profile' : ''}${scope.sources ? ', sources' : ''} · never contacts/notes/mails/deals</div>`;
+    el.innerHTML = html;
+}
+function toggleShareForm() {
+    const f = document.getElementById('shareForm');
+    f.style.display = f.style.display === 'block' ? 'none' : 'block';
+    if (f.style.display === 'block') document.getElementById('shareQuery').focus();
+}
+let _lookupTimer = null;
+function lookupShare(q) {
+    clearTimeout(_lookupTimer);
+    const box = document.getElementById('shareHits');
+    if ((q || '').trim().length < 3) { box.innerHTML = ''; return; }
+    _lookupTimer = setTimeout(async () => {
+        const r = await fetch(`/api/sharing/lookup?q=${encodeURIComponent(q.trim())}`, { headers: authHeaders() });
+        const d = r.ok ? await r.json() : { users: [] };
+        const isEmail = /.+@.+\..+/.test(q.trim());
+        box.innerHTML = (d.users || []).map(u => `<div class="share-hit" onclick="sendShareInvite(${u.user_id}, null)">
+                <span style="flex:1"><b>${esc(u.display_name)}</b> <span style="color:var(--c-muted2,#666)">· ${esc(u.org_name)}</span></span><span class="share-btn">Invite</span></div>`).join('')
+            + (!d.users.length && isEmail ? `<div class="share-hit" onclick="sendShareInvite(null, ${JSON.stringify(q.trim())})"><span style="flex:1">Invite <b>${esc(q.trim())}</b> (they claim it after signing up)</span><span class="share-btn">Invite</span></div>` : '')
+            + (!d.users.length && !isEmail ? '<div style="font-size:0.7rem;color:var(--c-muted2,#666)">No match — try their email address.</div>' : '');
+    }, 250);
+}
+async function sendShareInvite(userId, email) {
+    const st = document.getElementById('sharingStatus'); st.textContent = 'Sending…';
+    const r = await fetch(`/api/clients/${_clientId}/share`, { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(userId ? { to_user_id: userId } : { to_email: email }) });
+    const d = await r.json().catch(() => ({}));
+    st.textContent = r.ok ? 'Invitation sent — sharing starts when they accept.' : ('Could not invite: ' + (d.detail || r.status));
+    if (r.ok) { document.getElementById('shareForm').style.display = 'none'; document.getElementById('shareQuery').value = ''; document.getElementById('shareHits').innerHTML = ''; }
+    loadSharing();
+}
+async function revokeShareInvite(id) {
+    await fetch(`/api/sharing/invites/${id}/revoke`, { method: 'POST', headers: authHeaders() }); loadSharing();
+}
+async function takeMonitor() {
+    if (!_sharing?.group) return;
+    await fetch(`/api/sharing/groups/${_sharing.group.id}/monitor`, { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    loadSharing();
+}
+async function resyncShare() {
+    if (!_sharing?.group) return;
+    const st = document.getElementById('sharingStatus'); st.textContent = 'Syncing…';
+    const r = await fetch(`/api/sharing/groups/${_sharing.group.id}/sync`, { method: 'POST', headers: authHeaders() });
+    const d = await r.json().catch(() => ({}));
+    st.textContent = r.ok ? `Re-sync queued ${d.queued}, applied ${d.sync?.applied ?? 0}.` : 'Re-sync failed';
+    if (_docsLoaded) loadDocumentsTab();
+}
+async function leaveShare() {
+    if (!_sharing?.group) return;
+    const del = confirm('Leave sharing for this client?\n\nOK = also delete the copies you received from partners.\nCancel = keep them (they stop updating).');
+    const r = await fetch(`/api/sharing/groups/${_sharing.group.id}/leave`, { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ delete_copies: del }) });
+    const d = await r.json().catch(() => ({}));
+    document.getElementById('sharingStatus').textContent = r.ok ? `Left sharing (${d.copies_affected} copies ${del ? 'deleted' : 'kept'}).` : 'Could not leave';
+    loadSharing(); if (_docsLoaded) loadDocumentsTab();
+}
+
 // ── Timeline ──────────────────────────────────────────────────────────────
 async function loadTimeline() {
     _tlLoaded = true;
@@ -1314,6 +1433,7 @@ function renderDocuments() {
                     <div class="doc-row-title" title="${esc(d.title)}">${esc(d.title)}</div>
                     <div class="doc-row-sub">
                         ${date ? `<span class="doc-row-date">${date}</span>` : ''}
+                        ${meta.shared_from ? `<span class="shared-chip" title="Replicated from a partner org via sharing (${esc(meta.shared_from.synced_at||'')})">shared by ${esc(meta.shared_from.origin_org_name||'partner')}</span>` : ''}
                         ${outreachSel}
                         ${srcUrl ? `<a class="source-chip" href="${esc(srcUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${esc(srcUrl)}">${esc(srcUrl.replace(/^https?:\/\//,'').split('/')[0])}</a>` : ''}
                     </div>
