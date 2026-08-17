@@ -1,7 +1,7 @@
 import { Agent } from '@earendil-works/pi-agent-core';
 import { getModel } from '@earendil-works/pi-ai';
 import { getGitHubCopilotBaseUrl, normalizeDomain } from '@earendil-works/pi-ai/oauth';
-import { config, resolveProvider } from './config.js';
+import { config, resolveProvider, resolveProviderForOrg } from './config.js';
 import { getOAuthAuth, isSubscriptionProvider } from './oauth.js';
 import type { OAuthCredentials, SubscriptionProvider } from './oauth.js';
 import { buildTools } from './tools.js';
@@ -472,7 +472,7 @@ interface BuiltModel {
  *                     Anthropic blocks third-party subscription OAuth
  *                     server-side since Jan 2026.)
  */
-async function buildModel(providerName: string, modelId: string): Promise<BuiltModel> {
+async function buildModel(providerName: string, modelId: string, orgId?: number): Promise<BuiltModel> {
   // Subscription-OAuth providers first — they cannot work with plain API keys,
   // so when no credentials are connected a clear error beats falling through
   // to the generic openai-compat path. All other provider paths are untouched.
@@ -486,7 +486,7 @@ async function buildModel(providerName: string, modelId: string): Promise<BuiltM
     return buildOAuthModel(providerName, modelId, auth.apiKey, auth.credentials);
   }
 
-  const p = resolveProvider(providerName);
+  const p = await resolveProviderForOrg(providerName, orgId, db.getOrgLlmOverlay);
 
   if (p.kind === 'anthropic') {
     // getModel accepts a union of known model IDs; cast for runtime strings.
@@ -626,7 +626,7 @@ export async function runPiAgent(opts: RunAgentOptions): Promise<void> {
   const tools = allTools.filter(t => allowlist.has(t.name));
 
   const systemPrompt = buildSystemPrompt(opts.agentType);
-  const { model: agentModel, apiKey } = await buildModel(opts.provider, opts.model);
+  const { model: agentModel, apiKey } = await buildModel(opts.provider, opts.model, opts.orgId);
 
   // Agent constructor is typed with ConstructorParameters — use unknown cast for tools
   // since our tool shape matches at runtime even if the types don't perfectly overlap
@@ -652,7 +652,15 @@ export async function runPiAgent(opts: RunAgentOptions): Promise<void> {
     } catch { /* ignore */ }
   });
 
-  await agent.prompt(opts.task);
+  // Usage metering (Phase 6a): sum token usage over the run → one llm_usage_events row
+  const usage = usageCollector(opts.orgId, opts.provider, opts.model, `agent:${opts.agentType}`, opts.agentRunId);
+  try { (agent as any).subscribe?.((event: any) => usage.onEvent(event)); } catch { /* optional */ }
+
+  try {
+    await agent.prompt(opts.task);
+  } finally {
+    await usage.flush();
+  }
 
   // Force a final document if the model did tool calls but never wrote one
   if (opts.toolCallLog.length > 0) {
@@ -793,9 +801,10 @@ export async function runPiComplete(opts: {
   model: string;
   messages: Array<{ role: string; content: string }>;
   maxTokens?: number;
-}): Promise<string> {
+  orgId?: number;
+}): Promise<{ text: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
   const { completeSimple } = await import('@earendil-works/pi-ai');
-  const { model, apiKey } = await buildModel(opts.provider, opts.model);
+  const { model, apiKey } = await buildModel(opts.provider, opts.model, opts.orgId);
   const systemPrompt = opts.messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
   const turns = opts.messages
     .filter(m => m.role !== 'system')
@@ -815,7 +824,25 @@ export async function runPiComplete(opts: {
     .map((c: { text?: string }) => c.text ?? '')
     .join('')
     .trim();
-  return text;
+  const u = result?.usage;
+  // usage is returned to the caller (Python llm.py records it for /complete) — not inserted here
+  return { text, usage: u ? { prompt_tokens: Number(u.input) || 0, completion_tokens: Number(u.output) || 0 } : undefined };
+}
+
+/** Sum pi-ai Usage objects seen on an agent's assistant messages → one usage row per run. */
+export function usageCollector(orgId: number, provider: string, model: string, surface: string, agentRunId?: number) {
+  let prompt = 0, completion = 0, cost = 0, seen = 0;
+  return {
+    onEvent(event: any) {
+      const u = event?.type === 'message_end' ? event?.message?.usage ?? event?.assistantMessage?.usage : undefined;
+      if (u && typeof u.input === 'number') { prompt += u.input; completion += u.output || 0; cost += Number(u.cost?.total) || 0; seen++; }
+    },
+    async flush() {
+      if (!seen) return;
+      await db.recordLlmUsage(orgId, { provider, model, promptTokens: prompt, completionTokens: completion,
+        costUsd: cost > 0 ? cost : null, surface, agentRunId });
+    },
+  };
 }
 
 
@@ -855,7 +882,7 @@ export async function runPiChat(opts: ChatOptions): Promise<ChatResult> {
   const orgLine = opts.orgName ? `You are assisting the sales team at ${opts.orgName}.\n` : '';
   const systemPrompt = `${orgLine}${CHAT_PROMPT}${scopeLine}${rosterLines}`;
 
-  const { model: agentModel, apiKey } = await buildModel(opts.provider, opts.model);
+  const { model: agentModel, apiKey } = await buildModel(opts.provider, opts.model, opts.orgId);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const agent = new (Agent as any)({
@@ -870,11 +897,13 @@ export async function runPiChat(opts: ChatOptions): Promise<ChatResult> {
     try { (agent as unknown as { abort?: () => void }).abort?.(); } catch { /* ignore */ }
   });
 
+  const chatUsage = usageCollector(opts.orgId, opts.provider, opts.model, 'chat');
   // Surface agent lifecycle as readable progress events for the UI
   if (opts.onEvent) {
     const emit = opts.onEvent;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (agent as any).subscribe((event: { type?: string; toolName?: string; args?: unknown }) => {
+      chatUsage.onEvent(event);
       try {
         if (event.type === 'tool_execution_start' && event.toolName) {
           emit(describeToolCall(event.toolName, (event.args ?? {}) as Record<string, unknown>));
@@ -894,7 +923,11 @@ export async function runPiChat(opts: ChatOptions): Promise<ChatResult> {
     }));
   }
 
-  await agent.prompt(opts.message);
+  try {
+    await agent.prompt(opts.message);
+  } finally {
+    await chatUsage.flush();
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const agentState = (agent as any).state as { messages: Array<{role?: string; content?: Array<{type?: string; text?: string}>}>; errorMessage?: string };

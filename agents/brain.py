@@ -55,14 +55,15 @@ class OpenAICompatibleBrain:
     matching the raise-through behavior of the other brains.
     """
 
-    def __init__(self, role: str = "default", model: str | None = None):
+    def __init__(self, role: str = "default", model: str | None = None, org_id: int | None = None):
+        self.org_id = org_id
         self.role = role
         self.model = model  # None → the role's configured model
 
     async def think(self, messages: list[dict], tools: list["Tool"]) -> BrainResponse:
         import llm  # lazy — keeps brain.py importable without pulling provider config at import time
 
-        result = await llm.achat(messages, tools, role=self.role, model=self.model)
+        result = await llm.achat(messages, tools, role=self.role, model=self.model, org_id=self.org_id, surface="agent")
         return BrainResponse(
             content=result.get("content") or "",
             tool_calls=result.get("tool_calls") or [],

@@ -68,11 +68,11 @@ def _load_worker_config() -> tuple[str, str, int, int, Optional[Path]]:
     return brain, model, num_ctx, threshold, vault_path
 
 
-async def _synthesize(prompt: str, model: str, num_ctx: int, brain: str = "openrouter") -> str:
+async def _synthesize(prompt: str, model: str, num_ctx: int, brain: str = "openrouter", org_id: Optional[int] = None) -> str:
     """Research-role LLM call via llm.py. Returns "" on failure — workers
     treat a missing synthesis as a soft skip."""
     try:
-        return await llm.acomplete(prompt, role="research", model=model, timeout=120)
+        return await llm.acomplete(prompt, role="research", model=model, timeout=120, org_id=org_id)
     except Exception as exc:
         logger.warning("LLM synthesis failed (model=%s): %s", model, exc)
         return ""
@@ -338,7 +338,7 @@ async def _extract_signals(
         subject=_display_subject(subject),
         report=report[:4000],
     )
-    response = await _synthesize(prompt, model, num_ctx, brain)
+    response = await _synthesize(prompt, model, num_ctx, brain, org_id=org_id)
 
     signals: list = []
     m = re.search(r"\[.*\]", response, re.DOTALL)
@@ -533,7 +533,7 @@ async def run_page_reader(
         f"Respond with ONLY the integer score and one sentence explaining why.\n\n"
         f"Subject: {_disp}\nContent: {page_text[:800]}"
     )
-    score_response = await _synthesize(score_prompt, model, num_ctx, brain)
+    score_response = await _synthesize(score_prompt, model, num_ctx, brain, org_id=org_id)
 
     score = 3  # default if Ollama offline or parse fails
     m = re.search(r"\b([1-5])\b", score_response)
@@ -658,7 +658,7 @@ async def run_content_analyzer(
         url=url,
         content=content[:1000],
     )
-    response = await _synthesize(prompt, model, num_ctx, brain)
+    response = await _synthesize(prompt, model, num_ctx, brain, org_id=org_id)
 
     # Parse JSON from response
     analysis: dict = {}
@@ -818,7 +818,7 @@ async def run_company_aggregator(
         total_chars += len(entry)
 
     prompt = _COMPANY_AGGREGATOR_PROMPT.format(subject=_display_subject(subject), findings_block=findings_block)
-    synthesized = await _synthesize(prompt, model, num_ctx, brain)
+    synthesized = await _synthesize(prompt, model, num_ctx, brain, org_id=org_id)
 
     if not synthesized:
         synthesized = findings_block
@@ -1031,7 +1031,7 @@ async def run_person_aggregator(
         total_chars += len(entry)
 
     prompt = _PERSON_AGGREGATOR_PROMPT.format(subject=_display_subject(subject), findings_block=findings_block)
-    synthesized = await _synthesize(prompt, model, num_ctx, brain)
+    synthesized = await _synthesize(prompt, model, num_ctx, brain, org_id=org_id)
 
     if not synthesized:
         synthesized = findings_block
@@ -1221,7 +1221,7 @@ async def run_industry_aggregator(
         total_chars += len(entry)
 
     prompt = _INDUSTRY_AGGREGATOR_PROMPT.format(industry=subject, findings_block=findings_block)
-    synthesized = await _synthesize(prompt, model, num_ctx, brain)
+    synthesized = await _synthesize(prompt, model, num_ctx, brain, org_id=org_id)
     if not synthesized:
         synthesized = findings_block
 

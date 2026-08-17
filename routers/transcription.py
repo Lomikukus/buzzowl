@@ -325,6 +325,7 @@ async def _stream_summary(
     language: str,
     loop: asyncio.AbstractEventLoop,
     output_path: Path,
+    org_id: Optional[int] = None,
 ) -> None:
     """Stream a structured summary (llm role 'summary') to the client, save to disk.
 
@@ -354,7 +355,7 @@ async def _stream_summary(
         tokens: list[str] = []
         try:
             # llm.stream raises fast (no retry) so we can degrade gracefully here
-            for token in llm.stream(prompt, role="summary", model=model or None,
+            for token in llm.stream(prompt, role="summary", model=model or None, org_id=org_id,
                                     timeout=120):
                 if token:
                     tokens.append(token)
@@ -868,7 +869,8 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                         summary_path = staged_dir / "summary.md"
                         console.print(f"[bold]Summarizing with {ollama_model}...[/bold]")
                         await _stream_summary(
-                            ws, segments, ollama_model, detected_language, loop, summary_path
+                            ws, segments, ollama_model, detected_language, loop, summary_path,
+                            org_id=ws_org_id,
                         )
                         org_id = ws_org_id if ws_org_id is not None else await _default_org_id()
                         asyncio.create_task(_trigger_enrichment(session_id, org_id))
@@ -881,7 +883,8 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                         summary_path = staged_dir / "summary.md"
                         console.print(f"[bold]Re-summarizing with {model}...[/bold]")
                         await _stream_summary(
-                            ws, last_segments, model, detected_language, loop, summary_path
+                            ws, last_segments, model, detected_language, loop, summary_path,
+                            org_id=ws_org_id,
                         )
                         meta = _read_session_metadata(last_session_id)
                         if not meta or meta.get("status") != "promoted":

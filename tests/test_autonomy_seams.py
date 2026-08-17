@@ -11,6 +11,7 @@ import pytest
 import autonomy
 import context
 from routers import pipeline
+import routers.knowledge  # noqa: F401 — bind its db_module to the real module BEFORE tests swap context.db_module
 
 NOW = datetime.now(timezone.utc)
 
@@ -257,7 +258,7 @@ async def test_nba_level2_llm_can_override_within_bounds(monkeypatch):
     monkeypatch.setattr(_today, "db_module", MagicMock(index_document=idx))
     reply = ('[{"client":"HasDraft","action":"mail","reason":"hot signal, mail first"},'
              ' {"client":"NoDraft","action":"send_draft","reason":"send it"}]')
-    monkeypatch.setattr("routers.knowledge._call_brain_sync", lambda p: reply)
+    monkeypatch.setattr("routers.knowledge._call_brain_sync", lambda p, **kw: reply)
 
     snap = await _today.compute_nba_queue(1)
     q = {e["client"]: e for e in snap["queue"]}
@@ -280,7 +281,7 @@ async def test_nba_level0_never_changes_action(monkeypatch):
     monkeypatch.setattr(context, "db_module", db)
     monkeypatch.setattr(_today, "db_module", MagicMock(index_document=AsyncMock()))
     captured = {}
-    def brain(p):
+    def brain(p, **kw):
         captured["prompt"] = p
         return '[{"client":"A","action":"mail","reason":"r"}]'
     monkeypatch.setattr("routers.knowledge._call_brain_sync", brain)

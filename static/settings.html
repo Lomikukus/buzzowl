@@ -258,6 +258,44 @@ tr:hover td { background: var(--c-linefaint, #222); }
       </div>
     </div>
 
+    <!-- Plan & usage (admin) — Phase 6a hosted plans -->
+    <div class="section" id="planSection">
+      <h2>Plan &amp; usage</h2>
+      <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
+        <b>Light</b> = this workspace brings its own LLM key (configured below, encrypted at rest, never shown again).
+        <b>Premium</b> = the platform's providers, metered against a monthly budget. Every LLM call —
+        chat, research agents, pipeline, summaries — is counted per workspace.
+      </p>
+      <div id="planBox" style="display:grid;grid-template-columns:auto 1fr;gap:0.5rem 1rem;max-width:720px;align-items:center;font-size:0.8rem">
+        <span>Plan</span>
+        <span><span id="planBadge" style="font-size:0.7rem;padding:0.1rem 0.5rem;border-radius:3px;border:1px solid var(--c-accent, #4ec9b0);color:var(--c-accent, #4ec9b0);text-transform:uppercase;letter-spacing:0.05em">—</span>
+              <span id="planNote" style="color:var(--c-muted2, #666);margin-left:0.5rem"></span>
+              <span id="planSwitch" style="margin-left:0.6rem"></span></span>
+        <span>This month</span>
+        <span id="planUsage">—</span>
+        <span>Budget</span>
+        <span><div style="display:flex;align-items:center;gap:0.6rem"><div style="flex:1;max-width:320px;height:8px;background:var(--c-line, #2a2a2a);border-radius:4px;overflow:hidden"><div id="planBar" style="height:100%;width:0;background:var(--c-accent, #4ec9b0)"></div></div><span id="planBudget" style="color:var(--c-muted2, #666)">—</span></div></span>
+      </div>
+      <div id="planModels" style="margin-top:0.8rem;font-size:0.74rem;color:var(--c-muted, #888)"></div>
+
+      <div id="orgLlmBox" style="margin-top:1.1rem">
+        <h3 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-muted, #888);margin-bottom:0.4rem">This workspace's own LLM provider (light plan)</h3>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:0.45rem 1rem;max-width:720px;align-items:center;font-size:0.8rem">
+          <label>Provider name</label><input id="olName" placeholder="openrouter" style="max-width:220px">
+          <label>Kind</label><select id="olKind" style="max-width:220px"><option value="openai-compat">openai-compat (OpenRouter, OpenAI, Ollama, LM Studio…)</option><option value="anthropic">anthropic</option></select>
+          <label>Base URL</label><input id="olBase" placeholder="https://openrouter.ai/api/v1" style="max-width:420px">
+          <label>API key</label><input id="olKey" type="password" placeholder="leave empty to keep the stored key" style="max-width:420px" autocomplete="new-password">
+          <label>Default model</label><input id="olModel" placeholder="e.g. openai/gpt-4o-mini" style="max-width:320px">
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.55rem;flex-wrap:wrap">
+          <button class="btn" onclick="saveOrgLlm()">Save provider</button>
+          <button class="btn" onclick="testOrgLlm()">Test</button>
+          <button class="btn" onclick="clearOrgLlm()" style="color:var(--c-danger, #e06c75)">Remove</button>
+          <span id="orgLlmStatus" style="font-size:0.74rem;color:var(--c-muted2, #666)"></span>
+        </div>
+      </div>
+    </div>
+
     <!-- LLM Providers (admin) -->
     <div class="section">
       <h2>LLM Providers</h2>
@@ -499,7 +537,84 @@ async function init() {
     loadLlmConfig();
     loadAutonomySettings();
     loadOutreachSettings();
+    loadPlan();
   }
+}
+
+// ── Plan & usage (admin, Phase 6a) ────────────────────────────────────────
+let _plan = null;
+function _money(v) { return v == null ? '—' : ('$' + Number(v).toFixed(v < 1 ? 3 : 2)); }
+async function loadPlan() {
+  let r;
+  try { r = await fetch('/api/org/plan', { headers: H(), cache: 'no-store' }); } catch (_) { return; }
+  if (!r.ok) return;
+  _plan = await r.json();
+  const b = document.getElementById('planBadge'); b.textContent = _plan.plan;
+  b.style.borderColor = b.style.color = _plan.plan === 'premium' ? 'var(--c-purple, #c586c0)' : 'var(--c-accent, #4ec9b0)';
+  const note = document.getElementById('planNote');
+  note.textContent = _plan.plan === 'light'
+    ? (_plan.has_own_providers ? 'using this workspace\'s own LLM key' : (_plan.enforce_plans ? 'no own key yet — LLM calls will be refused until you add one below' : 'no own key yet — falling back to the platform providers'))
+    : 'platform providers, metered';
+  const m = _plan.usage?.month || {};
+  document.getElementById('planUsage').textContent =
+    `${(m.calls||0).toLocaleString()} calls · ${((m.prompt_tokens||0)+(m.completion_tokens||0)).toLocaleString()} tokens · ${_money(m.cost_usd||0)}` + (m.unpriced_calls ? ` (${m.unpriced_calls} calls without a known price)` : '');
+  const bar = document.getElementById('planBar');
+  if (_plan.budget_usd) {
+    const pct = Math.min(100, _plan.budget_used_pct || 0);
+    bar.style.width = pct + '%'; bar.style.background = pct >= 90 ? 'var(--c-danger, #e06c75)' : pct >= 70 ? 'var(--c-warn, #d7ba7d)' : 'var(--c-accent, #4ec9b0)';
+    document.getElementById('planBudget').textContent = `${_money(_plan.month_cost_usd)} of ${_money(_plan.budget_usd)} (${pct}%)`;
+  } else { bar.style.width = '0'; document.getElementById('planBudget').textContent = 'no cap on this plan'; }
+  const models = _plan.usage?.by_model || [];
+  document.getElementById('planModels').innerHTML = models.length
+    ? '<table style="border-collapse:collapse;font-size:0.72rem"><tr style="color:var(--c-muted2,#666)"><th style="text-align:left;padding:0.15rem 0.6rem 0.15rem 0">provider / model</th><th style="text-align:right;padding:0.15rem 0.6rem">calls</th><th style="text-align:right;padding:0.15rem 0.6rem">tokens</th><th style="text-align:right;padding:0.15rem 0.6rem">est. cost</th><th style="padding:0.15rem 0.6rem">via</th></tr>'
+      + models.map(x => `<tr><td style="padding:0.15rem 0.6rem 0.15rem 0">${_llmEsc(x.provider)} / ${_llmEsc(x.model)}</td><td style="text-align:right;padding:0.15rem 0.6rem">${x.calls}</td><td style="text-align:right;padding:0.15rem 0.6rem">${x.tokens.toLocaleString()}</td><td style="text-align:right;padding:0.15rem 0.6rem">${_money(x.cost_usd)}</td><td style="padding:0.15rem 0.6rem;color:var(--c-muted2,#666)">${_llmEsc(x.source)}</td></tr>`).join('') + '</table>'
+    : 'No LLM usage recorded this month yet.';
+  const sw = document.getElementById('planSwitch');
+  sw.innerHTML = _plan.hosted_mode
+    ? '<span style="color:var(--c-muted2,#666)">plan changes are handled by the operator</span>'
+    : `<button class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem" onclick="switchPlan('${_plan.plan === 'light' ? 'premium' : 'light'}')">switch to ${_plan.plan === 'light' ? 'premium' : 'light'}</button>`;
+  // own provider form
+  try {
+    const rr = await fetch('/api/org/llm', { headers: H(), cache: 'no-store' });
+    if (rr.ok) {
+      const d = await rr.json(); const provs = d.llm?.providers || {}; const first = Object.keys(provs)[0];
+      if (first) {
+        const p = provs[first];
+        document.getElementById('olName').value = first; document.getElementById('olKind').value = p.kind || 'openai-compat';
+        document.getElementById('olBase').value = p.base_url || ''; document.getElementById('olKey').placeholder = p.has_key ? 'stored — leave empty to keep' : 'sk-…';
+        document.getElementById('olModel').value = (d.llm.roles?.default || {}).model || '';
+      }
+    }
+  } catch (_) {}
+}
+async function switchPlan(plan) {
+  const r = await fetch('/api/org/plan', { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) });
+  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.detail || 'could not change plan'); }
+  loadPlan();
+}
+async function saveOrgLlm() {
+  const name = document.getElementById('olName').value.trim() || 'own';
+  const body = { providers: { [name]: { kind: document.getElementById('olKind').value, base_url: document.getElementById('olBase').value.trim(), api_key: document.getElementById('olKey').value } },
+                 roles: { default: { provider: name, model: document.getElementById('olModel').value.trim() } } };
+  const st = document.getElementById('orgLlmStatus'); st.textContent = 'Saving…';
+  const r = await fetch('/api/org/llm', { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  st.textContent = r.ok ? 'Saved (key encrypted at rest).' : ('Error: ' + (d.detail || r.status));
+  document.getElementById('olKey').value = '';
+  loadPlan();
+}
+async function testOrgLlm() {
+  const st = document.getElementById('orgLlmStatus'); st.textContent = 'Testing…';
+  const r = await fetch('/api/org/llm/test', { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify({ role: 'default' }) });
+  const d = await r.json().catch(() => ({}));
+  st.textContent = d.ok ? `OK via ${d.provider} / ${d.model}: “${d.reply}”` : ('Failed: ' + (d.error || d.detail || r.status));
+  loadPlan();
+}
+async function clearOrgLlm() {
+  if (!confirm('Remove this workspace\'s own LLM provider?')) return;
+  await fetch('/api/org/llm', { method: 'DELETE', headers: H() });
+  ['olName','olBase','olKey','olModel'].forEach(id => document.getElementById(id).value = '');
+  loadPlan();
 }
 
 // ── LLM Providers (admin) ─────────────────────────────────────────────────

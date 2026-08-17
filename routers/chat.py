@@ -258,10 +258,10 @@ class ChatRequest(BaseModel):
 # Cloud chat helpers (llm.py "chat" role)
 # ---------------------------------------------------------------------------
 
-def _call_cloud_sync(model: str, system: str, user_msg: str) -> Optional[str]:
+def _call_cloud_sync(model: str, system: str, user_msg: str, org_id: Optional[int] = None) -> Optional[str]:
     """One-shot cloud call (no tools). Returns answer string or None."""
     try:
-        answer = llm.complete(
+        answer = llm.complete(org_id=org_id, surface="chat", 
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_msg},
@@ -670,7 +670,7 @@ async def _run_tool_loop(
     all_sources: list[dict] = []
 
     for round_num in range(max_rounds):
-        data = await llm.achat(list(messages), CHAT_TOOLS,
+        data = await llm.achat(list(messages), CHAT_TOOLS, org_id=org_id, surface="chat",
                                role="chat", model=model, timeout=120)
 
         tool_calls = data.get("tool_calls") or []
@@ -707,7 +707,7 @@ async def _run_tool_loop(
         "role": "user",
         "content": f"Based on all the search results above, please answer this question concisely: {user_msg}",
     })
-    data = await llm.achat(list(messages), None, role="chat", model=model, timeout=120)
+    data = await llm.achat(list(messages), None, role="chat", model=model, timeout=120, org_id=org_id, surface="chat")
     return (data.get("content") or "").strip(), all_sources
 
 
@@ -1017,7 +1017,7 @@ async def chat_endpoint(request: Request, body: ChatRequest, user: dict = Depend
                 fallback_ctx += f"\n\nSEARCH RESULTS:\n{docs_ctx}"
         try:
             answer = await loop.run_in_executor(
-                None, lambda: _call_cloud_sync(model, fallback_ctx, body.message)
+                None, lambda: _call_cloud_sync(model, fallback_ctx, body.message, org_id=user["org_id"])
             )
         except Exception:
             answer = None

@@ -625,7 +625,7 @@ Respond with JSON only, no explanation outside the JSON:
   "client_pairs":  [{{"a": "Name A", "b": "Name B", "verdict": "confirmed|possible|false_positive", "reason": "one sentence"}}]
 }}"""
 
-    raw = await llm.acomplete(prompt, role="default", model=model, timeout=180)
+    raw = await llm.acomplete(prompt, role="default", model=model, timeout=180, org_id=org_id)
     logger.info("LLM dedup raw: %s", raw[:300])
     return _parse_json_response(raw)
 
@@ -681,7 +681,7 @@ Respond with JSON only:
 }}"""
 
         try:
-            raw = await llm.acomplete(prompt, role="default", model=model, timeout=180)
+            raw = await llm.acomplete(prompt, role="default", model=model, timeout=180, org_id=org_id)
             logger.info("LLM orphan batch %d raw: %s", batch_start, raw[:200])
             data = _parse_json_response(raw)
             all_links.extend(data.get("links", []))

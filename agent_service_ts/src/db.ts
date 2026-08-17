@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config.js';
+import { decryptSecret } from './secrets.js';
 
 const { Pool } = pg;
 
@@ -405,3 +406,61 @@ export async function updateAgentRun(id: number, patch: {
   vals.push(id);
   await pool.query(`UPDATE agent_runs SET ${sets.join(', ')} WHERE id = $${i}`, vals);
 }
+
+// -- Per-org LLM overlay + usage metering (Phase 6a hosted plans) ---------------
+
+export interface OrgLlmOverlay {
+  plan: 'light' | 'premium';
+  providers: Record<string, { kind: string; base_url?: string; api_key?: string; headers?: Record<string, string> }>;
+  roles: Record<string, { provider: string; model?: string }>;
+  enforce: boolean;
+}
+
+const _overlayCache = new Map<number, { expires: number; value: OrgLlmOverlay | null }>();
+const OVERLAY_TTL_MS = 60_000;
+
+/** orgs.settings.llm with keys decrypted — cached 60 s. null when the org has no override. */
+export async function getOrgLlmOverlay(orgId: number): Promise<OrgLlmOverlay | null> {
+  const hit = _overlayCache.get(orgId);
+  if (hit && hit.expires > Date.now()) return hit.value;
+  let value: OrgLlmOverlay | null = null;
+  try {
+    const { rows } = await pool.query<{ settings: any }>('SELECT settings FROM orgs WHERE id = $1', [orgId]);
+    const settings = rows[0]?.settings ?? {};
+    const llm = settings.llm ?? {};
+    const providers: OrgLlmOverlay['providers'] = {};
+    for (const [name, raw] of Object.entries<any>(llm.providers ?? {})) {
+      providers[name] = { ...raw, api_key: raw?.api_key ? decryptSecret(raw.api_key) : '' };
+    }
+    const plan = settings.plan === 'premium' ? 'premium' : 'light';
+    value = { plan, providers, roles: llm.roles ?? {}, enforce: !!(config.hostedEnforcePlans) };
+  } catch (err) {
+    console.warn('[db] getOrgLlmOverlay failed:', String(err));
+    value = null;
+  }
+  _overlayCache.set(orgId, { expires: Date.now() + OVERLAY_TTL_MS, value });
+  return value;
+}
+
+export function invalidateOrgLlmOverlay(orgId?: number): void {
+  if (orgId === undefined) _overlayCache.clear(); else _overlayCache.delete(orgId);
+}
+
+export async function recordLlmUsage(orgId: number, u: {
+  provider: string; model: string; promptTokens: number; completionTokens: number;
+  costUsd?: number | null; surface?: string; role?: string; agentRunId?: number | null;
+}): Promise<void> {
+  if (!orgId) return;
+  try {
+    await pool.query(
+      `INSERT INTO llm_usage_events (org_id, surface, role, provider, model, prompt_tokens, completion_tokens,
+                                     total_tokens, cost_usd, source, agent_run_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pi',$10)`,
+      [orgId, u.surface ?? null, u.role ?? null, u.provider, u.model, u.promptTokens | 0, u.completionTokens | 0,
+       (u.promptTokens | 0) + (u.completionTokens | 0), u.costUsd ?? null,
+       u.agentRunId && u.agentRunId > 0 ? u.agentRunId : null]);
+  } catch (err) {
+    console.warn('[db] recordLlmUsage failed:', String(err));
+  }
+}
+

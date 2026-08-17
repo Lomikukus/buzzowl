@@ -176,14 +176,140 @@ def _get_provider(name: str) -> ProviderConfig:
     )
 
 
-def resolve(role: str = "default", model: Optional[str] = None) -> tuple[ProviderConfig, str]:
-    """Resolve a role to (provider, model). Unknown roles fall back to default."""
+# ---------------------------------------------------------------------------
+# Per-org overlay (Phase 6a hosted plans). The overlay is loaded ASYNC by the
+# a* wrappers / callers via ensure_org_overlay(org_id) and cached here so the
+# synchronous chat/complete/stream path stays synchronous.
+# ---------------------------------------------------------------------------
+_ORG_OVERLAY_TTL = 60.0
+_org_overlays: dict = {}   # org_id -> (expires_monotonic, {"plan","providers","roles","budget","month_cost","enforce"})
+
+
+async def ensure_org_overlay(org_id: Optional[int], force: bool = False) -> Optional[dict]:
+    """Load (or refresh) an org's plan/LLM overlay into the in-process cache."""
+    if not org_id:
+        return None
+    import time as _t
+    now = _t.monotonic()
+    hit = _org_overlays.get(org_id)
+    if hit and not force and hit[0] > now:
+        return hit[1]
+    try:
+        import plans as _plans
+        db = context.db_module
+        settings = await db.get_org_settings(org_id) if (context.DB_AVAILABLE and db) else {}
+        month_cost = await db.llm_usage_month_cost(org_id) if (context.DB_AVAILABLE and db) else 0.0
+        ov = {
+            "plan": _plans.plan_of(settings),
+            **_plans.overlay_for_llm(settings.get("llm") or {}),
+            "budget": _plans.budget_usd(settings, context.config),
+            "month_cost": float(month_cost or 0.0),
+            "enforce": _plans.enforce_plans(context.config),
+        }
+    except Exception as exc:  # DB hiccup → behave like a single-tenant install
+        logger.debug("org overlay unavailable for %s: %s", org_id, exc)
+        ov = None
+    _org_overlays[org_id] = (now + _ORG_OVERLAY_TTL, ov)
+    return ov
+
+
+def invalidate_org_overlay(org_id: Optional[int] = None) -> None:
+    if org_id is None:
+        _org_overlays.clear()
+    else:
+        _org_overlays.pop(org_id, None)
+
+
+def _org_overlay_sync(org_id: Optional[int]) -> Optional[dict]:
+    hit = _org_overlays.get(org_id) if org_id else None
+    return hit[1] if hit else None
+
+
+def _get_provider_from(block: dict, name: str) -> ProviderConfig:
+    raw = (block.get("providers") or {}).get(name)
+    if not raw:
+        raise LLMError(f"LLM provider {name!r} is not configured")
+    return ProviderConfig(
+        name=name,
+        kind=raw.get("kind", "openai-compat"),
+        base_url=(raw.get("base_url") or "").rstrip("/"),
+        api_key=raw.get("api_key", "") or "",
+        api_key_env=raw.get("api_key_env", "") or "",
+        headers=raw.get("headers") or {},
+    )
+
+
+def resolve(role: str = "default", model: Optional[str] = None,
+            org_id: Optional[int] = None) -> tuple[ProviderConfig, str]:
+    """Resolve a role to (provider, model). Unknown roles fall back to default.
+
+    With org_id (multi-tenant): a 'light' org that configured its own providers
+    is served from those; a 'premium' org uses the platform providers but is
+    stopped when its monthly budget is exhausted; with hosted.enforce_plans a
+    light org WITHOUT own providers is refused (no platform spend for it)."""
+    if not isinstance(org_id, int) or isinstance(org_id, bool):
+        org_id = None            # never trust a stray value in the org slot
+    ov = _org_overlay_sync(org_id)
+    if ov:
+        if ov.get("plan") == "premium":
+            b = ov.get("budget")
+            if b is not None and ov.get("month_cost", 0.0) >= b:
+                raise LLMError(f"monthly LLM budget of ${b:.2f} exhausted for this org — "
+                               f"raise the budget or wait for the next month")
+        elif ov.get("providers"):
+            roles = ov.get("roles") or {}
+            entry = roles.get(role) or roles.get("default") or {}
+            pname = entry.get("provider") or next(iter(ov["providers"]))
+            if pname in ov["providers"]:
+                return _get_provider_from(ov, pname), (model or entry.get("model") or _FALLBACK_MODEL)
+        elif ov.get("enforce"):
+            raise LLMError("this workspace has no LLM provider configured — add your own key under "
+                           "Settings › LLM (light plan) or upgrade to premium")
     block = _effective_config()
     roles = block.get("roles") or {}
     entry = roles.get(role) or roles.get("default") or {}
     provider_name = entry.get("provider") or _FALLBACK_PROVIDER
     resolved_model = model or entry.get("model") or _FALLBACK_MODEL
     return _get_provider(provider_name), resolved_model
+
+
+# ---------------------------------------------------------------------------
+# Usage metering (Phase 6a): every adapter reports prompt/completion tokens;
+# recorded fire-and-forget on the main loop (llm.chat runs in executor threads).
+# ---------------------------------------------------------------------------
+
+def _record_usage(org_id: Optional[int], role: str, provider: ProviderConfig, model: str,
+                  usage: Optional[dict], surface: Optional[str] = None) -> None:
+    if not isinstance(org_id, int) or isinstance(org_id, bool) or not org_id or not usage:
+        return
+    try:
+        import plans as _plans
+        db = context.db_module
+        if not (context.DB_AVAILABLE and db):
+            return
+        pt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        ct = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        cost = _plans.estimate_cost(model, pt, ct, context.config)
+        coro = db.record_llm_usage(org_id, provider=provider.name, model=model, prompt_tokens=pt,
+                                   completion_tokens=ct, cost_usd=cost, role=role,
+                                   surface=surface or role, source="python")
+        loop = getattr(db, "_main_loop", None)
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is not None:
+            running.create_task(coro)
+        elif loop is not None:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        else:
+            coro.close()
+        # keep the cached month cost roughly current so budgets bite without a refetch
+        hit = _org_overlays.get(org_id)
+        if hit and hit[1] and cost:
+            hit[1]["month_cost"] = hit[1].get("month_cost", 0.0) + cost
+    except Exception as exc:
+        logger.debug("usage record skipped: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +533,9 @@ def _anthropic_chat(provider: ProviderConfig, model: str, messages: list[dict],
             content = block.text
         elif block.type == "tool_use":
             tool_calls.append({"id": block.id, "name": block.name, "arguments": block.input})
-    return {"content": content, "tool_calls": tool_calls}
+    u = getattr(response, "usage", None)
+    usage = {"prompt_tokens": getattr(u, "input_tokens", 0), "completion_tokens": getattr(u, "output_tokens", 0)} if u else None
+    return {"content": content, "tool_calls": tool_calls, "_usage": usage}
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +547,7 @@ def _anthropic_chat(provider: ProviderConfig, model: str, messages: list[dict],
 # ---------------------------------------------------------------------------
 
 def _pi_complete(provider: ProviderConfig, model: str, messages: list[dict],
-                 max_tokens: int, timeout: int) -> dict:
+                 max_tokens: int, timeout: int, org_id: Optional[int] = None) -> dict:
     cfg = context.config
     base = (provider.base_url or cfg.get("agent_service_url_pi")
             or cfg.get("agent_service_url") or "http://localhost:8001").rstrip("/")
@@ -431,6 +559,7 @@ def _pi_complete(provider: ProviderConfig, model: str, messages: list[dict],
     payload = {
         "provider": pi_provider or provider.name,
         "model": model,
+        "org_id": org_id,
         "messages": [{"role": m["role"], "content": m.get("content") or ""} for m in messages
                      if m.get("role") in ("system", "user", "assistant")],
         "max_tokens": max_tokens,
@@ -439,10 +568,11 @@ def _pi_complete(provider: ProviderConfig, model: str, messages: list[dict],
     if resp.status_code == 429 or resp.status_code >= 500:
         raise requests.HTTPError(f"HTTP {resp.status_code}: {resp.text[:200]}")
     resp.raise_for_status()
-    text = (resp.json() or {}).get("text") or ""
+    data = resp.json() or {}
+    text = data.get("text") or ""
     if not text:
         raise ValueError("null content from Pi /complete")
-    return {"content": text, "tool_calls": []}
+    return {"content": text, "tool_calls": [], "_usage": data.get("usage")}
 
 
 # ---------------------------------------------------------------------------
@@ -452,73 +582,85 @@ def _pi_complete(provider: ProviderConfig, model: str, messages: list[dict],
 def chat(messages: Optional[list] = None, tools: Optional[list] = None, *,
          prompt: Optional[str] = None, role: str = "default",
          model: Optional[str] = None, max_tokens: int = 4096,
-         timeout: int = 180) -> dict:
+         timeout: int = 180, org_id: Optional[int] = None,
+         surface: Optional[str] = None) -> dict:
     """Chat completion with optional tool calling.
 
     Returns {"content": str, "tool_calls": [{"id","name","arguments"}]}.
+    org_id (multi-tenant) selects the org's own providers / plan budget and
+    meters the call; surface labels the usage row (defaults to role).
     """
-    provider, resolved_model = resolve(role, model)
+    provider, resolved_model = resolve(role, model, org_id)
     msgs = _ensure_messages(prompt, messages)
     tool_defs = _normalize_tools(tools)
 
+    def _done(res: dict) -> dict:
+        _record_usage(org_id, role, provider, resolved_model, res.pop("_usage", None), surface)
+        return res
+
     if provider.kind == "anthropic":
-        return _with_retry(
+        return _done(_with_retry(
             partial(_anthropic_chat, provider, resolved_model, msgs, tool_defs,
                     max_tokens, timeout),
             what=f"LLM chat ({provider.name}/{resolved_model})",
-        )
+        ))
 
     if provider.kind == "pi":
         if tool_defs:
             raise LLMError("provider kind 'pi' is text-only (no tool calling) — "
                            "use it for triage/summary/reason roles, not chat tool loops")
-        return _with_retry(
-            partial(_pi_complete, provider, resolved_model, msgs, max_tokens, timeout),
+        return _done(_with_retry(
+            partial(_pi_complete, provider, resolved_model, msgs, max_tokens, timeout, org_id),
             what=f"LLM complete via Pi ({provider.name}/{resolved_model})",
-        )
+        ))
 
     def _call() -> dict:
         wire_msgs = _to_openai_messages(msgs)
         resp = _openai_chat(provider, resolved_model, wire_msgs, tool_defs,
                             max_tokens, timeout)
-        choice = (resp.json().get("choices") or [{}])[0]
+        data = resp.json()
+        choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message", {})
         content = msg.get("content") or ""
         tool_calls = _parse_openai_tool_calls(msg.get("tool_calls"))
         if not content and not tool_calls:
             finish = choice.get("finish_reason", "unknown")
             raise ValueError(f"null content (finish_reason={finish})")
-        return {"content": content, "tool_calls": tool_calls}
+        return {"content": content, "tool_calls": tool_calls, "_usage": data.get("usage")}
 
-    return _with_retry(_call, what=f"LLM chat ({provider.name}/{resolved_model})")
+    return _done(_with_retry(_call, what=f"LLM chat ({provider.name}/{resolved_model})"))
 
 
 def complete(prompt: Optional[str] = None, *, messages: Optional[list] = None,
              role: str = "default", model: Optional[str] = None,
-             max_tokens: int = 4096, timeout: int = 180) -> str:
+             max_tokens: int = 4096, timeout: int = 180,
+             org_id: Optional[int] = None, surface: Optional[str] = None) -> str:
     """Plain text completion (no tools). Returns the stripped response text."""
     result = chat(messages, None, prompt=prompt, role=role, model=model,
-                  max_tokens=max_tokens, timeout=timeout)
+                  max_tokens=max_tokens, timeout=timeout, org_id=org_id, surface=surface)
     return (result["content"] or "").strip()
 
 
 async def achat(messages: Optional[list] = None, tools: Optional[list] = None,
                 **kwargs) -> dict:
+    await ensure_org_overlay(kwargs.get("org_id"))
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, partial(chat, messages, tools, **kwargs))
 
 
 async def acomplete(prompt: Optional[str] = None, **kwargs) -> str:
+    await ensure_org_overlay(kwargs.get("org_id"))
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, partial(complete, prompt, **kwargs))
 
 
 def stream(prompt: Optional[str] = None, *, messages: Optional[list] = None,
            role: str = "default", model: Optional[str] = None,
-           max_tokens: int = 2048, timeout: int = 300) -> Iterator[str]:
+           max_tokens: int = 2048, timeout: int = 300,
+           org_id: Optional[int] = None) -> Iterator[str]:
     """Stream response text chunks. No retry — a stream either runs or raises
     fast so the caller can degrade gracefully (e.g. skip the live summary)."""
-    provider, resolved_model = resolve(role, model)
+    provider, resolved_model = resolve(role, model, org_id)
     msgs = _ensure_messages(prompt, messages)
 
     if provider.kind == "pi":

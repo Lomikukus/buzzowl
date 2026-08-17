@@ -229,6 +229,14 @@ nba_weights:
 hosted:
   signup_enabled: false      # true → POST /api/auth/register works without a registration key
   default_plan: light        # plan for self-signed-up orgs: light (own LLM key) | premium (billed)
+  enforce_plans: false       # true → a light org WITHOUT its own LLM provider is refused (no platform spend);
+                             #        false (self-host default) → falls back to the llm: block above
+  premium_monthly_budget_usd: 20   # default monthly cap for premium orgs (per-org override in org settings)
+  # operator_key: ""         # required for plan/budget changes when signup_enabled (or env HOSTED_OPERATOR_KEY)
+# Per-org LLM keys are stored encrypted (AES-256-GCM) with a key derived from env
+# BUZZOWL_SECRET_KEY (falls back to AGENT_SERVICE_TOKEN). Set BUZZOWL_SECRET_KEY on
+# hosted deployments and never rotate it without re-entering keys.
+# llm_prices: { "gpt-4o-mini": [0.15, 0.60] }   # USD per 1M tokens (in, out) — overrides plans.py defaults
 
 # Web search
 # SearXNG (primary): self-hosted metasearch engine — docker compose up -d starts it at :8080

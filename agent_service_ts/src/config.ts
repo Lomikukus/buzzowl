@@ -27,6 +27,8 @@ interface LlmYaml {
 // Top-level embed_dim from the same mounted config.yaml (captured while
 // scanning for the llm: block). undefined = not found in any candidate.
 let yamlEmbedDim: number | undefined;
+// hosted: block from config.yaml (Phase 6a) — only enforce_plans matters here.
+let yamlHostedEnforce = false;
 
 function loadLlmBlock(): LlmYaml {
   const candidates = [
@@ -42,6 +44,8 @@ function loadLlmBlock(): LlmYaml {
         const dim = Number(parsed?.embed_dim);
         if (Number.isInteger(dim) && dim > 0) yamlEmbedDim = dim;
       }
+      const hosted = parsed?.hosted as { enforce_plans?: boolean } | undefined;
+      if (hosted && typeof hosted === 'object') yamlHostedEnforce = !!hosted.enforce_plans;
       const llm = parsed?.llm as LlmYaml | undefined;
       if (llm && typeof llm === 'object') return llm;
     } catch { /* unreadable or invalid — try the next candidate */ }
@@ -117,6 +121,37 @@ export function resolveProvider(name: string): ResolvedProvider {
   return { name: key, kind, baseUrl, apiKey };
 }
 
+/**
+ * Per-org override (Phase 6a): if the org stored its own provider of that name
+ * (light plan, keys decrypted from orgs.settings), use it; else the platform
+ * config. A light org WITHOUT its own providers is refused when the operator
+ * enforces plans (no platform spend for it) — mirrors llm.resolve() in Python.
+ */
+export async function resolveProviderForOrg(name: string, orgId?: number,
+                                            overlayLoader?: (id: number) => Promise<import('./db.js').OrgLlmOverlay | null>)
+  : Promise<ResolvedProvider & { fromOrg?: boolean }> {
+  if (!orgId || !overlayLoader) return resolveProvider(name);
+  const ov = await overlayLoader(orgId);
+  if (!ov) return resolveProvider(name);
+  const key = brainToProvider(name);
+  const own = ov.providers?.[key];
+  if (ov.plan !== 'premium' && own) {
+    const kind: ProviderKind = own.kind === 'anthropic' ? 'anthropic' : 'openai-compat';
+    return { name: key, kind, baseUrl: (own.base_url ?? '').replace(/\/$/, ''), apiKey: own.api_key || 'local', fromOrg: true };
+  }
+  if (ov.plan !== 'premium' && Object.keys(ov.providers ?? {}).length > 0) {
+    // the org configured providers but not this one → its first provider owns every role
+    const first = Object.keys(ov.providers)[0];
+    const p = ov.providers[first];
+    const kind: ProviderKind = p.kind === 'anthropic' ? 'anthropic' : 'openai-compat';
+    return { name: first, kind, baseUrl: (p.base_url ?? '').replace(/\/$/, ''), apiKey: p.api_key || 'local', fromOrg: true };
+  }
+  if (ov.plan !== 'premium' && ov.enforce) {
+    throw new Error('this workspace has no LLM provider configured — add your own key under Settings › LLM (light plan) or upgrade to premium');
+  }
+  return resolveProvider(name);
+}
+
 export const config = {
   port: parseInt(process.env.AGENT_SERVICE_PORT ?? '8001', 10),
   dbUrl: process.env.DATABASE_URL ?? 'postgresql://whisper:whisper@localhost:5432/whisper',
@@ -131,6 +166,7 @@ export const config = {
   // Camofox (anti-bot Firefox) — permanent part of Pi's production setup
   camofoxUrl: (process.env.CAMOFOX_URL ?? '').replace(/\/$/, ''),
   serviceToken: process.env.AGENT_SERVICE_TOKEN ?? '',
+  hostedEnforcePlans: yamlHostedEnforce,
   mainServerUrl: (process.env.MAIN_SERVER_URL ?? 'http://host.docker.internal:8000').replace(/\/$/, ''),
   // Embeddings — must match the main server's backend/model or vectors won't align.
   // When embedUrl is OpenRouter, the OpenRouter key is reused automatically.

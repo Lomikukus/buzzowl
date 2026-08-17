@@ -238,7 +238,7 @@ class TestBulkMailFailureModes:
         """Event invitation details are included in the LLM prompt."""
         captured_prompts = []
 
-        def _capture_prompt(prompt):
+        def _capture_prompt(prompt, **kw):
             captured_prompts.append(prompt)
             return GOOD_EMAIL
 
@@ -386,7 +386,7 @@ class TestMultiMailFailureModes:
         """Multi-mail prompt includes all selected products."""
         captured = []
 
-        def _capture(prompt):
+        def _capture(prompt, **kw):
             captured.append(prompt)
             return GOOD_EMAIL
 
@@ -491,7 +491,7 @@ class TestBrainDispatch:
         with patch("routers.knowledge.llm.complete", return_value="hello") as complete:
             out = knowledge._call_brain_sync("prompt")
         assert out == "hello"
-        complete.assert_called_once_with("prompt", role="research", timeout=180)
+        complete.assert_called_once_with("prompt", role="research", timeout=180, org_id=None)
 
     def test_call_brain_sync_propagates_llm_error(self):
         import llm as llm_module

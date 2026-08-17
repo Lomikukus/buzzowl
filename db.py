@@ -4128,3 +4128,65 @@ async def sharing_non_monitor_client_ids(org_id: int) -> set:
                   AND sc.monitor_org_id IS NOT NULL AND sc.monitor_org_id <> $1""",
             org_id)
     return {r["client_id"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# LLM usage metering (Phase 6a)
+# ---------------------------------------------------------------------------
+
+async def record_llm_usage(org_id: int, *, provider: str, model: str, prompt_tokens: int = 0,
+                           completion_tokens: int = 0, cost_usd: Optional[float] = None,
+                           role: Optional[str] = None, surface: Optional[str] = None,
+                           source: str = "python", user_id: Optional[int] = None,
+                           agent_run_id: Optional[int] = None) -> None:
+    if not _pool:
+        return
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO llm_usage_events (org_id, user_id, surface, role, provider, model,
+                        prompt_tokens, completion_tokens, total_tokens, cost_usd, source, agent_run_id)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+                org_id, user_id, surface, role, provider, model, int(prompt_tokens or 0),
+                int(completion_tokens or 0), int(prompt_tokens or 0) + int(completion_tokens or 0),
+                cost_usd, source, agent_run_id)
+    except Exception as exc:
+        logger.debug("record_llm_usage failed: %s", exc)
+
+
+async def llm_usage_month_cost(org_id: int) -> float:
+    if not _pool:
+        return 0.0
+    async with _pool.acquire() as conn:
+        v = await conn.fetchval(
+            """SELECT COALESCE(SUM(cost_usd), 0) FROM llm_usage_events
+                WHERE org_id = $1 AND created_at >= date_trunc('month', NOW())""", org_id)
+    return float(v or 0)
+
+
+async def llm_usage_summary(org_id: int, days: int = 31) -> dict:
+    """Month-to-date totals + per-day + per-model breakdown for the org's usage view."""
+    if not _pool:
+        return {"month": {}, "by_day": [], "by_model": []}
+    async with _pool.acquire() as conn:
+        month = await conn.fetchrow(
+            """SELECT COUNT(*) AS calls, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens,
+                      COALESCE(SUM(completion_tokens),0) AS completion_tokens,
+                      COALESCE(SUM(cost_usd),0) AS cost_usd,
+                      COUNT(*) FILTER (WHERE cost_usd IS NULL) AS unpriced_calls
+                 FROM llm_usage_events WHERE org_id = $1 AND created_at >= date_trunc('month', NOW())""", org_id)
+        by_day = await conn.fetch(
+            """SELECT date_trunc('day', created_at)::date AS day, COUNT(*) AS calls,
+                      COALESCE(SUM(total_tokens),0) AS tokens, COALESCE(SUM(cost_usd),0) AS cost_usd
+                 FROM llm_usage_events WHERE org_id = $1 AND created_at >= NOW() - ($2 || ' days')::interval
+                GROUP BY 1 ORDER BY 1""", org_id, str(int(days)))
+        by_model = await conn.fetch(
+            """SELECT provider, model, source, COUNT(*) AS calls, COALESCE(SUM(total_tokens),0) AS tokens,
+                      COALESCE(SUM(cost_usd),0) AS cost_usd
+                 FROM llm_usage_events WHERE org_id = $1 AND created_at >= date_trunc('month', NOW())
+                GROUP BY 1,2,3 ORDER BY cost_usd DESC, tokens DESC LIMIT 20""", org_id)
+    return {"month": {k: (float(v) if k == "cost_usd" else int(v)) for k, v in dict(month).items()},
+            "by_day": [{"day": r["day"].isoformat(), "calls": int(r["calls"]), "tokens": int(r["tokens"]),
+                        "cost_usd": float(r["cost_usd"])} for r in by_day],
+            "by_model": [{**dict(r), "calls": int(r["calls"]), "tokens": int(r["tokens"]),
+                          "cost_usd": float(r["cost_usd"])} for r in by_model]}

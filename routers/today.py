@@ -634,7 +634,7 @@ async def compute_nba_queue(
             from routers.knowledge import _call_brain_sync
             prompt = _build_reason_prompt(entries, choose_action=choose_action)
             loop = asyncio.get_running_loop()
-            text = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+            text = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
             picks = _parse_reason_action_json(text)
             llm_used = bool(picks)
         except Exception as exc:

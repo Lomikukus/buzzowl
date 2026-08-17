@@ -92,6 +92,8 @@ services:
       - CAMOFOX_URL=http://camofox:9377
       - TRANSCRIPTION_MODE=${TRANSCRIPTION_MODE:-app}
       - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
+      - BUZZOWL_SECRET_KEY=${BUZZOWL_SECRET_KEY:-}
+      - HOSTED_OPERATOR_KEY=${HOSTED_OPERATOR_KEY:-}
       - HFTOKEN=${HFTOKEN:-}
       - TELEGRAMBOT=${TELEGRAMBOT:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
@@ -198,6 +200,8 @@ services:
       - AGENT_MAX_CONCURRENT=${AGENT_MAX_CONCURRENT:-2}
       - MAIN_SERVER_URL=http://server:8000
       - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
+      - BUZZOWL_SECRET_KEY=${BUZZOWL_SECRET_KEY:-}
+      - HOSTED_OPERATOR_KEY=${HOSTED_OPERATOR_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # No hard dependency on camofox/browser-service: their URLs are env-configured

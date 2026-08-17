@@ -22,7 +22,7 @@ from agents.tools import build_tools
 logger = logging.getLogger("whisper.agents.runner")
 
 
-def _load_brain(orchestrator: bool = False, brain_override: str = "", model_override: str = ""):
+def _load_brain(orchestrator: bool = False, brain_override: str = "", model_override: str = "", org_id: int | None = None):
     """Build a Brain instance from config (context.config — same live source llm.py reads).
 
     brain_override / model_override: if set, take precedence over config
@@ -60,7 +60,7 @@ def _load_brain(orchestrator: bool = False, brain_override: str = "", model_over
     # llm: block present → its default role owns the model choice; the legacy
     # agent_model key is only honored when synthesizing (no llm: block).
     model = model_override or (None if has_llm_block else cfg.get("agent_model"))
-    return OpenAICompatibleBrain(role="default", model=model)
+    return OpenAICompatibleBrain(role="default", model=model, org_id=org_id)
 
 
 async def run_agent(
@@ -91,7 +91,7 @@ async def run_agent(
             logger.info("Org agent run %d done", run_id)
             return result
 
-        brain = _load_brain()
+        brain = _load_brain(org_id=org_id)
         tools = build_tools(org_id, agent_run_id=run_id)
         instructions = AGENT_INSTRUCTIONS.get(agent_type, DEFAULT_INSTRUCTIONS)
 

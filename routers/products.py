@@ -710,7 +710,7 @@ async def product_chat_endpoint(product_id: int, body: dict, user: dict = Depend
     try:
         # Provider/model come from the llm.py "chat" role (legacy pi_chat_* /
         # agent_service_* keys); an explicit model from the request wins.
-        answer = await llm.acomplete(
+        answer = await llm.acomplete(org_id=user["org_id"], surface="product_chat", 
             messages=messages, role="chat", model=body.get("model") or None, timeout=90,
         )
     except Exception as exc:
@@ -892,7 +892,7 @@ async def bulk_mail_for_product(
                         context=context,
                     )
 
-                    generated = await loop.run_in_executor(None, lambda p=prompt: _call_brain_sync(p))
+                    generated = await loop.run_in_executor(None, lambda p=prompt: _call_brain_sync(p, org_id=user["org_id"]))
 
                     if '---SOURCES---' in generated:
                         _parts = generated.split('---SOURCES---', 1)
@@ -1063,7 +1063,7 @@ async def multi_product_mail(body: dict, user: dict = Depends(current_user)):
                         mode_block=mode_block,
                         context=context,
                     )
-                    generated = await loop.run_in_executor(None, lambda p=prompt: _call_brain_sync(p))
+                    generated = await loop.run_in_executor(None, lambda p=prompt: _call_brain_sync(p, org_id=user["org_id"]))
 
                     if '---SOURCES---' in generated:
                         _parts = generated.split('---SOURCES---', 1)

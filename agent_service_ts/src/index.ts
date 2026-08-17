@@ -110,7 +110,7 @@ app.post('/complete', async (req, reply) => {
   const body = req.body as {
     provider?: string; brain?: string; model?: string;
     messages?: Array<{ role: string; content: string }>;
-    max_tokens?: number;
+    max_tokens?: number; org_id?: number;
   };
   if (!Array.isArray(body.messages) || !body.messages.length) {
     return reply.code(400).send({ error: 'messages[] required' });
@@ -119,10 +119,11 @@ app.post('/complete', async (req, reply) => {
     ?? (body.brain ? brainToProvider(body.brain) : config.defaultProvider);
   const model = body.model ?? config.defaultModel;
   try {
-    const text = await runPiComplete({
+    const res = await runPiComplete({
       provider, model, messages: body.messages, maxTokens: body.max_tokens,
+      orgId: typeof body.org_id === 'number' ? body.org_id : undefined,
     });
-    return { text, provider, model };
+    return { text: res.text, usage: res.usage, provider, model };
   } catch (err) {
     req.log.error({ err }, 'complete failed');
     return reply.code(502).send({ error: String((err as Error)?.message ?? err) });

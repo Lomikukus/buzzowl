@@ -103,7 +103,7 @@ def _prompt_followup(
 
 # ── Brain call (llm.py research role) ─────────────────────────────────────────
 
-def _call_brain_sync(model: str, user_msg: str, brain: str = "ollama") -> str:
+def _call_brain_sync(model: str, user_msg: str, brain: str = "ollama", org_id: Optional[int] = None) -> str:
     """Call the research brain for plain text (no tool-calling). Returns response text.
 
     Provider selection lives in llm.py's "research" role config; the brain
@@ -113,7 +113,7 @@ def _call_brain_sync(model: str, user_msg: str, brain: str = "ollama") -> str:
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": user_msg},
     ]
-    return llm.complete(messages=messages, role="research", model=model, timeout=180)
+    return llm.complete(messages=messages, role="research", model=model, timeout=180, org_id=org_id)
 
 
 async def _call_brain(model: str, user_msg: str, brain: str = "ollama") -> str:

@@ -215,7 +215,7 @@ def _normalise_confidence(raw: str) -> str:
     return v if v in ("high", "medium", "low") else "medium"
 
 
-def _call_pipeline_brain(prompt: str) -> str:
+def _call_pipeline_brain(prompt: str, org_id: Optional[int] = None) -> str:
     """Call the configured pipeline brain with a plain-text prompt. Returns the text response.
 
     Provider/model come from the llm.py "pipeline" role (config llm: block, or
@@ -223,13 +223,13 @@ def _call_pipeline_brain(prompt: str) -> str:
     Returns empty string on failure — pipeline callers handle missing output gracefully.
     """
     try:
-        return llm.complete(prompt, role="pipeline", timeout=120)
+        return llm.complete(prompt, role="pipeline", timeout=120, org_id=org_id)
     except Exception as e:
         console.print(f"[yellow]Pipeline brain failed: {e}[/yellow]")
         return ""
 
 
-def extract_entities(transcript: str) -> dict:
+def extract_entities(transcript: str, org_id: Optional[int] = None) -> dict:
     """Call Ollama to extract companies, people, and topics from a transcript.
 
     Companies are returned as [{"name": str, "confidence": str}].
@@ -238,7 +238,7 @@ def extract_entities(transcript: str) -> dict:
     """
     prompt = ENTITY_EXTRACTION_PROMPT.format(transcript=transcript)
     try:
-        raw = _call_pipeline_brain(prompt) or "{}"
+        raw = _call_pipeline_brain(prompt, org_id) or "{}"
         m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
         raw = m.group(0) if m else "{}"
         data = json.loads(raw)
@@ -271,7 +271,7 @@ def extract_entities(transcript: str) -> dict:
         return {"companies": [], "people": [], "topics": []}
 
 
-def _generate_summary(transcript: str, language: str) -> str:
+def _generate_summary(transcript: str, language: str, org_id: Optional[int] = None) -> str:
     """Generate a structured summary for a transcript via the configured pipeline brain."""
     prompt = (
         "You are a meeting and lecture summarizer. "
@@ -283,7 +283,7 @@ def _generate_summary(transcript: str, language: str) -> str:
         "**Action Items** (bullet points, write 'None' if there are none)\n\n"
         f"Transcript:\n{transcript}"
     )
-    result = _call_pipeline_brain(prompt)
+    result = _call_pipeline_brain(prompt, org_id)
     if result:
         return result
     return "**Title**\nUntitled\n\n**TL;DR**\nSummary unavailable.\n\n**Key Takeaways**\n- (none)\n\n**Action Items**\n- None"
@@ -324,7 +324,7 @@ def _promote_session(session_id: str) -> dict:
     if entities_meta and (entities_meta.get("companies") or entities_meta.get("topics")):
         entities = entities_meta
     else:
-        entities = extract_entities(transcript_text)
+        entities = extract_entities(transcript_text, (meta or {}).get("org_id"))
 
     # Duration: prefer metadata; fall back to parsing the last timestamp in the transcript
     duration_s = (meta or {}).get("duration_s") or 0
@@ -486,12 +486,12 @@ async def _trigger_enrichment(session_id: str, org_id: Optional[int]) -> None:
         transcript_text = transcript_path.read_text(encoding="utf-8")
         if not summary_path.exists():
             lang = (_read_session_metadata(session_id) or {}).get("language", "en") or "en"
-            summary_text = _generate_summary(transcript_text, lang)
+            summary_text = _generate_summary(transcript_text, lang, org_id)
             summary_path.write_text(summary_text, encoding="utf-8")
         else:
             summary_text = summary_path.read_text(encoding="utf-8")
         title    = extract_title_from_summary(summary_text) if summary_text else "Untitled"
-        entities = extract_entities(transcript_text)
+        entities = extract_entities(transcript_text, org_id)
         _update_session_metadata(session_id, title=title, entities=entities)
 
     try:
@@ -927,7 +927,7 @@ def _result_domain(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
-async def _openrouter_pick_website(client_name: str, candidates: list[dict]) -> str:
+async def _openrouter_pick_website(client_name: str, candidates: list[dict], org_id: Optional[int] = None) -> str:
     """LLM fallback: pick the official website from SearXNG candidates.
     Returns a domain that MUST be among the candidates, or '' — the model can
     only choose from presented options, never invent a domain."""
@@ -948,7 +948,7 @@ async def _openrouter_pick_website(client_name: str, candidates: list[dict]) -> 
         "company's website — when in doubt, answer NONE. No explanation."
     )
     try:
-        answer = (await llm.acomplete(prompt, role="pipeline", timeout=30)).lower()
+        answer = (await llm.acomplete(prompt, role="pipeline", timeout=30, org_id=org_id)).lower()
     except Exception as exc:
         console.print(f"[yellow]website resolver: LLM fallback failed for '{client_name}': {exc}[/yellow]")
         return ""
@@ -1025,7 +1025,7 @@ async def _resolve_client_website(org_id: int, client: dict) -> Optional[str]:
 
     if not website:
         ordered = partial + [c for c in candidates if c not in partial]
-        domain = await _openrouter_pick_website(name, ordered[:8])
+        domain = await _openrouter_pick_website(name, ordered[:8], org_id)
         if domain:
             website = f"https://{domain}"
             source = "llm"
@@ -1399,7 +1399,7 @@ async def _apply_market_signals(org_id: int) -> int:
                         for c in shortlist)
         )
         try:
-            reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+            reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
             matches = _parse_json_list(reply)
         except Exception as exc:
             console.print(f"[yellow]market apply LLM failed: {exc}[/yellow]")
@@ -1609,7 +1609,7 @@ async def _discover_careers_url(org_id: int, client: dict) -> str:
         f"or 'none' if none qualify.\n\n{listing}"
     )
     try:
-        reply = (await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))).strip()
+        reply = (await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))).strip()
         m = re.search(r"https?://\S+", reply)
         if m:
             picked = m.group(0).rstrip(").,>\"'")
@@ -1803,7 +1803,7 @@ async def _map_needs_to_products(org_id: int, client_name: str, needs: list) -> 
         "Include only products that truly fit; use an empty products list if none fit."
     )
     try:
-        reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+        reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
         raw = _parse_json_list(reply)
     except Exception as exc:
         console.print(f"[yellow]need→product map failed for {client_name}: {exc}[/yellow]")
@@ -2283,7 +2283,7 @@ async def _triage_selection(org_id: int, candidates: list[dict], agent_type: str
         f'ONLY a JSON array of client names: ["<name>", ...]\n\nCANDIDATES:\n'
         + json.dumps(items, ensure_ascii=False)
     )
-    text = await llm.acomplete(prompt, role="triage", max_tokens=400, timeout=60)
+    text = await llm.acomplete(prompt, role="triage", max_tokens=400, timeout=60, org_id=org_id)
     m = re.search(r"\[.*\]", text or "", re.S)
     if not m:
         return candidates, {"applied": False, "reason": "unparseable"}

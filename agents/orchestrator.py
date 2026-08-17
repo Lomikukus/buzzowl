@@ -284,7 +284,7 @@ async def run_orchestrator(
             logger.warning("Could not set assigned_agent_run_id: %s", exc)
 
     try:
-        brain = _load_brain(orchestrator=True, brain_override=brain_override, model_override=model_override)
+        brain = _load_brain(orchestrator=True, brain_override=brain_override, model_override=model_override, org_id=org_id)
         logger.info(
             "Orchestrator brain=%s model=%s subject=%r",
             brain_override or "ollama", model_override or "default", subject,

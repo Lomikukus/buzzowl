@@ -232,7 +232,7 @@ async def decide(org_id: int, ctx: DecisionContext, *, record: bool = True) -> D
         allowed=", ".join(allowed),
     )
     try:
-        text = await llm.acomplete(prompt, role="triage", max_tokens=300, timeout=60)
+        text = await llm.acomplete(prompt, role="triage", max_tokens=300, timeout=60, org_id=org_id)
         decision = _parse_decision(text, allowed, ctx.fallback_action)
     except Exception as exc:
         logger.warning("autonomy triage LLM failed for %r: %s — using fallback", ctx.client_name, exc)

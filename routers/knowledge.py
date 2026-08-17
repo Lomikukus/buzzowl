@@ -1038,14 +1038,14 @@ def _load_config_brief() -> dict:
     return cfg
 
 
-def _call_brain_sync(prompt: str) -> str:
+def _call_brain_sync(prompt: str, org_id: Optional[int] = None) -> str:
     """Call the configured research brain (cloud) synchronously, with retry.
 
     The retry/backoff (now inside llm.py) is what makes bulk mail survive
     >10 clients: without it, the first OpenRouter rate-limit (429) on a later
     client failed that email outright.
     """
-    return llm.complete(prompt, role="research", timeout=180)
+    return llm.complete(prompt, role="research", timeout=180, org_id=org_id)
 
 
 async def _fetch_event_context(event_link: str) -> str:
@@ -1463,7 +1463,7 @@ async def _auto_generate_brief(org_id: int, client_name: str) -> bool:
         context = await _build_brief_context(org_id, client)
         loop = asyncio.get_event_loop()
         prompt = _BRIEF_PROMPT.format(today=today, context=context)
-        brief_content = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+        brief_content = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
         if not brief_content:
             return False
         doc_id_str = f"brief-{hashlib.sha256(client_name.encode()).hexdigest()[:12]}-{today}"
@@ -1505,7 +1505,7 @@ async def generate_client_brief(name: str, user: dict = Depends(current_user)):
     loop = asyncio.get_event_loop()
     try:
         prompt = _BRIEF_PROMPT.format(today=today, context=context)
-        brief_content = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+        brief_content = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=user["org_id"]))
     except Exception as exc:
         logger.error("Brief generation failed for %s: %s", name, exc)
         raise HTTPException(status_code=502, detail=f"AI call failed: {exc}")
@@ -1704,7 +1704,7 @@ async def generate_client_meeting_prep(name: str, user: dict = Depends(current_u
     loop = asyncio.get_event_loop()
     try:
         prompt = _MEETING_PREP_PROMPT.format(client_name=name, today=today, context=ctx)
-        brief_content = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+        brief_content = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=user["org_id"]))
     except Exception as exc:
         logger.error("Meeting prep generation failed for %s: %s", name, exc)
         raise HTTPException(status_code=502, detail=f"AI call failed: {exc}")
@@ -2018,7 +2018,7 @@ async def _build_presentation_prompt_context(org_id: int, client: dict, product:
         top_finding=top_finding_text or "(no research findings)",
     )
     try:
-        fit_paragraph = await loop.run_in_executor(None, lambda: _call_brain_sync(synthesis_prompt))
+        fit_paragraph = await loop.run_in_executor(None, lambda: _call_brain_sync(synthesis_prompt, org_id=org_id))
     except Exception as exc:
         logger.warning("Presentation prompt fit synthesis failed: %s", exc)
 
@@ -2296,7 +2296,7 @@ async def generate_mail_template(
     )
 
     try:
-        generated = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+        generated = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=user["org_id"]))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM call failed: {exc}") from exc
 
@@ -2491,7 +2491,7 @@ CRITICAL INSTRUCTIONS — follow these before answering:
         prompt = f"You are a sales advisor preparing for a meeting with {name}.\n\n{context_block}\n\nQuestion: {question}\n\nAnswer directly using all available context."
         loop = asyncio.get_event_loop()
         try:
-            answer = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+            answer = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=user["org_id"]))
         except Exception as exc2:
             logger.error("Meeting prep fallback also failed for %s: %s", name, exc2)
             raise HTTPException(status_code=502, detail=f"AI call failed: {exc2}")
