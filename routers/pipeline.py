@@ -2195,6 +2195,14 @@ async def _select_heartbeat_clients(org_id: int, agent_type: str) -> tuple[list[
     news_gate = bool(context.config.get("news_change_detection", True)) and agent_type == "osint"
 
     all_clients = await db_module.list_clients(org_id)
+    # Shared clients (Phase 6a): only the monitor org researches/monitors a shared
+    # client; the other members receive the results through the share sync.
+    try:
+        skip_shared = await db_module.sharing_non_monitor_client_ids(org_id)
+    except Exception:
+        skip_shared = set()
+    if skip_shared:
+        all_clients = [c for c in all_clients if c.get("id") not in skip_shared]
     focus = [c for c in all_clients if (c.get("metadata") or {}).get("is_focus")]
 
     selected: list[dict] = []
@@ -2480,8 +2488,14 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             # auto-research focus clients on change, badge the rest.
             import notifications as _notify
             clients = await db_module.list_clients(org_id)
+            try:
+                skip_shared = await db_module.sharing_non_monitor_client_ids(org_id)
+            except Exception:
+                skip_shared = set()
             summaries = []
             for c in clients:
+                if c.get("id") in skip_shared:
+                    continue   # another org monitors this shared client
                 try:
                     summaries.append(await _monitor_client(org_id, c))
                 except Exception as exc:
@@ -2685,6 +2699,14 @@ async def _start_heartbeat_scheduler() -> None:
         job_count += 1
     except Exception as exc:
         console.print(f"  [yellow]IMAP sync not scheduled: {exc}[/yellow]")
+    # Shared clients (Phase 6a): drain the sync outbox filled by DB triggers.
+    try:
+        import sharing as _sharing
+        context._scheduler.add_job(_sharing.process_outbox, "interval", id="sharing_outbox",
+                                   seconds=20, misfire_grace_time=30, coalesce=True, max_instances=1)
+        job_count += 1
+    except Exception as exc:
+        console.print(f"  [yellow]Sharing outbox worker not scheduled: {exc}[/yellow]")
 
     context._scheduler.start()
     console.print(f"  Heartbeat scheduler: [green]{job_count} job(s) loaded[/green]")

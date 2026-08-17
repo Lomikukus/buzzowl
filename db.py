@@ -3734,3 +3734,395 @@ async def list_reminder_tasks(org_id: int) -> list[dict]:
             org_id,
         )
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Shared clients (Phase 6a) — see sharing.py for the rules
+# ---------------------------------------------------------------------------
+
+async def get_org(org_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT id, name, slug, created_at FROM orgs WHERE id = $1", org_id)
+        return dict(row) if row else None
+
+
+async def find_users_global(query: str, exclude_org_id: Optional[int] = None, limit: int = 5) -> list[dict]:
+    """Invite lookup across orgs: exact email or username/display-name prefix.
+    Returns the minimum needed to pick a person (no emails unless matched exactly)."""
+    if not _pool or not (query or "").strip():
+        return []
+    q = query.strip()
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT u.id, u.org_id, u.username, u.display_name,
+                      CASE WHEN lower(u.email) = lower($1) THEN u.email END AS email,
+                      o.name AS org_name
+                 FROM users u JOIN orgs o ON o.id = u.org_id
+                WHERE ($2::bigint IS NULL OR u.org_id <> $2)
+                  AND (lower(u.email) = lower($1) OR lower(u.username) LIKE lower($1) || '%'
+                       OR lower(u.display_name) LIKE lower($1) || '%')
+                ORDER BY (lower(u.email) = lower($1)) DESC, u.display_name
+                LIMIT $3""",
+            q, exclude_org_id, limit,
+        )
+        return [dict(r) for r in rows]
+
+
+def _grp(r) -> dict:
+    d = dict(r)
+    if isinstance(d.get("scope"), str):
+        try:
+            d["scope"] = json.loads(d["scope"])
+        except json.JSONDecodeError:
+            d["scope"] = {}
+    if d.get("key") is not None:
+        d["key"] = str(d["key"])
+    return d
+
+
+async def sharing_create_group(org_id: int, client_id: int, user_id: Optional[int], name: str,
+                               scope: Optional[dict] = None) -> dict:
+    """Create a share group with this org's client as the owner member. The owner
+    also monitors by default."""
+    if not _pool:
+        raise RuntimeError("DB unavailable")
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO shared_clients (name, created_by_org, created_by_user, monitor_org_id, scope)
+                   VALUES ($1, $2, $3, $2, COALESCE($4::jsonb, '{"doc_types": ["research","osint","finding","signal"], "profile": true, "sources": true, "contacts": false}'::jsonb))
+                   RETURNING *""",
+                name, org_id, user_id, scope)
+            await conn.execute(
+                """INSERT INTO shared_client_members (shared_client_id, org_id, client_id, role, joined_by)
+                   VALUES ($1, $2, $3, 'owner', $4)""",
+                row["id"], org_id, client_id, user_id)
+    return _grp(row)
+
+
+async def sharing_get_group(group_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM shared_clients WHERE id = $1", group_id)
+    return _grp(row) if row else None
+
+
+async def sharing_group_for_client(client_id: int) -> Optional[dict]:
+    """Active share group of a client row (or None)."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT sc.*, scm.role AS my_role, scm.org_id AS member_org_id
+                 FROM shared_client_members scm JOIN shared_clients sc ON sc.id = scm.shared_client_id
+                WHERE scm.client_id = $1 AND scm.left_at IS NULL AND sc.status = 'active'""",
+            client_id)
+    return _grp(row) if row else None
+
+
+async def sharing_list_members(group_id: int) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT scm.*, o.name AS org_name, c.name AS client_name, u.display_name AS joined_by_name
+                 FROM shared_client_members scm
+                 JOIN orgs o ON o.id = scm.org_id
+                 JOIN clients c ON c.id = scm.client_id
+                 LEFT JOIN users u ON u.id = scm.joined_by
+                WHERE scm.shared_client_id = $1
+                ORDER BY scm.joined_at""",
+            group_id)
+    return [dict(r) for r in rows]
+
+
+async def sharing_list_for_org(org_id: int) -> list[dict]:
+    """All active share groups this org belongs to, with members."""
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT sc.*, scm.client_id AS my_client_id, scm.role AS my_role
+                 FROM shared_client_members scm JOIN shared_clients sc ON sc.id = scm.shared_client_id
+                WHERE scm.org_id = $1 AND scm.left_at IS NULL AND sc.status = 'active'
+                ORDER BY sc.created_at DESC""",
+            org_id)
+    out = []
+    for r in rows:
+        g = _grp(r)
+        g["members"] = await sharing_list_members(g["id"])
+        out.append(g)
+    return out
+
+
+async def sharing_add_member(group_id: int, org_id: int, client_id: int, user_id: Optional[int],
+                             role: str = "member") -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO shared_client_members (shared_client_id, org_id, client_id, role, joined_by)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (shared_client_id, org_id) DO UPDATE
+                  SET client_id = EXCLUDED.client_id, joined_by = EXCLUDED.joined_by,
+                      joined_at = NOW(), left_at = NULL, role = EXCLUDED.role""",
+            group_id, org_id, client_id, role, user_id)
+
+
+async def sharing_leave(group_id: int, org_id: int) -> dict:
+    """Mark the org as left; hand monitoring over; close the group when nobody is left."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE shared_client_members SET left_at = NOW() WHERE shared_client_id = $1 AND org_id = $2 AND left_at IS NULL",
+                group_id, org_id)
+            remaining = await conn.fetch(
+                "SELECT org_id FROM shared_client_members WHERE shared_client_id = $1 AND left_at IS NULL ORDER BY joined_at",
+                group_id)
+            if not remaining:
+                await conn.execute("UPDATE shared_clients SET status = 'closed', updated_at = NOW() WHERE id = $1", group_id)
+                return {"closed": True, "monitor_org_id": None}
+            g = await conn.fetchrow("SELECT monitor_org_id FROM shared_clients WHERE id = $1", group_id)
+            new_monitor = g["monitor_org_id"]
+            if new_monitor == org_id or new_monitor not in [r["org_id"] for r in remaining]:
+                new_monitor = remaining[0]["org_id"]
+                await conn.execute("UPDATE shared_clients SET monitor_org_id = $2, updated_at = NOW() WHERE id = $1",
+                                   group_id, new_monitor)
+            return {"closed": False, "monitor_org_id": new_monitor}
+
+
+async def sharing_set_monitor(group_id: int, org_id: int) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("UPDATE shared_clients SET monitor_org_id = $2, updated_at = NOW() WHERE id = $1",
+                           group_id, org_id)
+
+
+async def sharing_update_scope(group_id: int, scope: dict) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("UPDATE shared_clients SET scope = $2, updated_at = NOW() WHERE id = $1", group_id, scope)
+
+
+# --- invites ---------------------------------------------------------------
+
+async def sharing_create_invite(group_id: int, from_org_id: int, from_user_id: Optional[int], *,
+                                to_user_id: Optional[int] = None, to_org_id: Optional[int] = None,
+                                to_email: Optional[str] = None, message: str = "") -> dict:
+    if not _pool:
+        raise RuntimeError("DB unavailable")
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO share_invites (shared_client_id, from_org_id, from_user_id, to_org_id, to_user_id, to_email, message)
+               VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *""",
+            group_id, from_org_id, from_user_id, to_org_id, to_user_id, (to_email or None), (message or None))
+    return dict(row)
+
+
+async def sharing_get_invite(invite_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT i.*, sc.name AS client_name, sc.key AS group_key, sc.scope, sc.status AS group_status,
+                      fo.name AS from_org_name, fu.display_name AS from_user_name, tu.display_name AS to_user_name
+                 FROM share_invites i
+                 JOIN shared_clients sc ON sc.id = i.shared_client_id
+                 JOIN orgs fo ON fo.id = i.from_org_id
+                 LEFT JOIN users fu ON fu.id = i.from_user_id
+                 LEFT JOIN users tu ON tu.id = i.to_user_id
+                WHERE i.id = $1""",
+            invite_id)
+    return _grp(row) if row else None
+
+
+async def sharing_list_invites(org_id: int, direction: str = "incoming", status: str = "pending") -> list[dict]:
+    if not _pool:
+        return []
+    col = "i.to_org_id" if direction == "incoming" else "i.from_org_id"
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""SELECT i.*, sc.name AS client_name, sc.key AS group_key, sc.scope,
+                       fo.name AS from_org_name, fu.display_name AS from_user_name,
+                       tou.name AS to_org_name, tu.display_name AS to_user_name
+                  FROM share_invites i
+                  JOIN shared_clients sc ON sc.id = i.shared_client_id
+                  JOIN orgs fo ON fo.id = i.from_org_id
+                  LEFT JOIN orgs tou ON tou.id = i.to_org_id
+                  LEFT JOIN users fu ON fu.id = i.from_user_id
+                  LEFT JOIN users tu ON tu.id = i.to_user_id
+                 WHERE {col} = $1 AND ($2 = 'all' OR i.status = $2)
+                 ORDER BY i.created_at DESC LIMIT 200""",
+            org_id, status)
+    return [_grp(r) for r in rows]
+
+
+async def sharing_respond_invite(invite_id: int, status: str) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("UPDATE share_invites SET status = $2, responded_at = NOW() WHERE id = $1", invite_id, status)
+
+
+# --- outbox + apply (LocalTransport) ----------------------------------------
+
+async def sharing_pending_outbox(limit: int = 200) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM share_outbox WHERE processed_at IS NULL AND attempts < 5 ORDER BY id LIMIT $1", limit)
+    return [dict(r) for r in rows]
+
+
+async def sharing_mark_outbox(outbox_id: int, error: Optional[str]) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        if error is None:
+            await conn.execute("UPDATE share_outbox SET processed_at = NOW(), attempts = attempts + 1, error = NULL WHERE id = $1", outbox_id)
+        else:
+            await conn.execute("UPDATE share_outbox SET attempts = attempts + 1, error = $2 WHERE id = $1", outbox_id, error)
+
+
+async def sharing_get_document(document_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, org_id, doc_id, type, title, content, metadata, visibility, source,
+                      created_at, updated_at, embedding
+                 FROM documents WHERE id = $1""",
+            document_id)
+    if not row:
+        return None
+    d = dict(row)
+    if isinstance(d.get("metadata"), str):
+        try:
+            d["metadata"] = json.loads(d["metadata"])
+        except json.JSONDecodeError:
+            d["metadata"] = {}
+    return d
+
+
+async def sharing_enqueue_client(group_id: int, origin_org_id: int, client_id: int, doc_types: list[str]) -> int:
+    """Full sync of one member's client: every shareable linked doc + the profile."""
+    if not _pool:
+        return 0
+    async with _pool.acquire() as conn:
+        n = await conn.fetchval(
+            """WITH ins AS (
+                   INSERT INTO share_outbox (shared_client_id, origin_org_id, kind, ref_id, payload)
+                   SELECT $1, $2, 'document', d.id, jsonb_build_object('client_id', $3::bigint)
+                     FROM document_links dl JOIN documents d ON d.id = dl.document_id
+                    WHERE dl.entity_type = 'client' AND dl.entity_id = $3
+                      AND d.org_id = $2 AND d.source <> 'shared' AND d.type = ANY($4::text[])
+                   RETURNING 1)
+               SELECT COUNT(*) FROM ins""",
+            group_id, origin_org_id, client_id, doc_types)
+        await conn.execute(
+            "INSERT INTO share_outbox (shared_client_id, origin_org_id, kind, ref_id) VALUES ($1, $2, 'profile', $3)",
+            group_id, origin_org_id, client_id)
+    return int(n or 0) + 1
+
+
+async def sharing_apply_document(target_org_id: int, target_client_id: int, doc: dict, provenance: dict) -> None:
+    """Upsert the replicated copy in the member org and link it to their client.
+    Runs with buzzowl.sync='on' so the triggers stay silent."""
+    if not _pool:
+        return
+    meta = dict(doc.get("metadata") or {})
+    meta["shared_from"] = provenance
+    meta.pop("owner_ids", None)
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('buzzowl.sync', 'on', true)")
+            row = await conn.fetchrow(
+                """INSERT INTO documents (org_id, doc_id, type, title, content, metadata, visibility, source, embedding)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 'shared', $8)
+                   ON CONFLICT (org_id, doc_id) DO UPDATE
+                      SET title = EXCLUDED.title, content = EXCLUDED.content, metadata = EXCLUDED.metadata,
+                          type = EXCLUDED.type, embedding = EXCLUDED.embedding, updated_at = NOW()
+                   RETURNING id""",
+                target_org_id, doc["shared_doc_id"], doc["type"], doc["title"], doc.get("content") or "",
+                meta, doc.get("visibility") or "shared", doc.get("embedding"))
+            await conn.execute(
+                """INSERT INTO document_links (document_id, entity_type, entity_id) VALUES ($1, 'client', $2)
+                   ON CONFLICT DO NOTHING""",
+                row["id"], target_client_id)
+
+
+async def sharing_delete_document(target_org_id: int, shared_doc_id_: str) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('buzzowl.sync', 'on', true)")
+            await conn.execute("DELETE FROM documents WHERE org_id = $1 AND doc_id = $2 AND source = 'shared'",
+                               target_org_id, shared_doc_id_)
+
+
+async def sharing_apply_profile(target_org_id: int, target_client_id: int, patch: dict, provenance: dict) -> None:
+    if not _pool or not patch:
+        return
+    merged = dict(patch)
+    merged["shared_profile_from"] = provenance
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('buzzowl.sync', 'on', true)")
+            await conn.execute("UPDATE clients SET metadata = metadata || $3 WHERE org_id = $1 AND id = $2",
+                               target_org_id, target_client_id, merged)
+
+
+async def sharing_leave_cleanup(target_org_id: int, group_key: str, delete_copies: bool) -> int:
+    """After leaving: either delete the replicated copies or just flag them as detached."""
+    if not _pool:
+        return 0
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('buzzowl.sync', 'on', true)")
+            if delete_copies:
+                res = await conn.execute(
+                    "DELETE FROM documents WHERE org_id = $1 AND source = 'shared' AND doc_id LIKE $2",
+                    target_org_id, f"shared:{group_key}:%")
+            else:
+                res = await conn.execute(
+                    """UPDATE documents SET metadata = metadata || '{"shared_detached": true}'::jsonb
+                        WHERE org_id = $1 AND source = 'shared' AND doc_id LIKE $2""",
+                    target_org_id, f"shared:{group_key}:%")
+    try:
+        return int(res.split()[-1])
+    except Exception:
+        return 0
+
+
+async def get_user_by_id(user_id: int) -> Optional[dict]:
+    """Cross-org lookup by id (used to address share invites); no password hash."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, org_id, username, display_name, email, role FROM users WHERE id = $1", user_id)
+        return dict(row) if row else None
+
+
+async def sharing_non_monitor_client_ids(org_id: int) -> set:
+    """Client ids of this org that sit in an active share group where ANOTHER org
+    runs the monitoring — heartbeats/monitor skip these (results arrive via sync)."""
+    if not _pool:
+        return set()
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT scm.client_id
+                 FROM shared_client_members scm JOIN shared_clients sc ON sc.id = scm.shared_client_id
+                WHERE scm.org_id = $1 AND scm.left_at IS NULL AND sc.status = 'active'
+                  AND sc.monitor_org_id IS NOT NULL AND sc.monitor_org_id <> $1""",
+            org_id)
+    return {r["client_id"] for r in rows}
