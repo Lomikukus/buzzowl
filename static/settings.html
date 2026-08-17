@@ -341,6 +341,39 @@ tr:hover td { background: var(--c-linefaint, #222); }
       </div>
     </div>
 
+    <!-- Outreach guardrails (admin) -->
+    <div class="section">
+      <h2>Outreach Sending</h2>
+      <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
+        Approved mails are sent by a background worker under these guardrails (org SMTP is the transport;
+        each rep's name and reply-to come from their profile). Sending is <strong>off by default</strong> —
+        approved mails wait in the <a href="/outreach" style="color:var(--c-accent, #4ec9b0)">Outreach queue</a> until you enable it.
+      </p>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:0.55rem 1rem;max-width:640px;align-items:center;font-size:0.8rem">
+        <label for="orEnabled">Sending enabled</label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:var(--c-muted, #888)">
+          <input type="checkbox" id="orEnabled"> worker may deliver approved mails
+        </label>
+        <label for="orCap">Max sends / day (org)</label>
+        <input class="form-input" id="orCap" type="number" min="0" style="width:7rem">
+        <label for="orFloor">Min days between mails to the same address</label>
+        <input class="form-input" id="orFloor" type="number" min="0" style="width:7rem">
+        <label for="orQuietStart">Quiet hours (UTC)</label>
+        <div style="display:flex;gap:0.4rem;align-items:center;font-size:0.78rem;color:var(--c-muted, #888)">
+          from <input class="form-input" id="orQuietStart" type="number" min="0" max="24" style="width:4.5rem"> to
+          <input class="form-input" id="orQuietEnd" type="number" min="0" max="24" style="width:4.5rem"> h — no sends inside
+        </div>
+        <label for="orKill">Kill switch</label>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:var(--c-muted, #888)">
+          <input type="checkbox" id="orKill"> stop all sending immediately (queue keeps its state)
+        </label>
+      </div>
+      <div style="margin-top:0.7rem;display:flex;gap:0.6rem;align-items:center">
+        <button class="btn primary" id="orSaveBtn">Save outreach settings</button>
+        <span id="orMsg" style="font-size:0.76rem;color:var(--c-muted, #888)"></span>
+      </div>
+    </div>
+
     </div><!-- /adminSections -->
 
     <!-- Scheduled Jobs (all users) -->
@@ -465,6 +498,7 @@ async function init() {
     loadPrompts();
     loadLlmConfig();
     loadAutonomySettings();
+    loadOutreachSettings();
   }
 }
 
@@ -714,6 +748,42 @@ async function saveAutonomySettings() {
   } catch (e) { msg.textContent = 'Save failed: ' + e.message; }
 }
 document.getElementById('autoSaveBtn').addEventListener('click', saveAutonomySettings);
+
+// ── Outreach guardrails (admin) — same org settings endpoint ──────────────
+async function loadOutreachSettings() {
+  try {
+    const r = await fetch('/api/org/settings', { headers: H() });
+    if (!r.ok) return;
+    const s = await r.json();
+    document.getElementById('orEnabled').checked = !!s.outreach_enabled;
+    document.getElementById('orCap').value = s.outreach_max_per_day ?? 25;
+    document.getElementById('orFloor').value = s.outreach_contact_floor_days ?? 7;
+    const q = s.outreach_quiet_hours || [20, 7];
+    document.getElementById('orQuietStart').value = q[0];
+    document.getElementById('orQuietEnd').value = q[1];
+    document.getElementById('orKill').checked = !!s.outreach_kill_switch;
+  } catch (e) { /* defaults stay */ }
+}
+async function saveOutreachSettings() {
+  const msg = document.getElementById('orMsg');
+  msg.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/org/settings', {
+      method: 'POST', headers: H(),
+      body: JSON.stringify({
+        outreach_enabled: document.getElementById('orEnabled').checked,
+        outreach_max_per_day: parseInt(document.getElementById('orCap').value, 10),
+        outreach_contact_floor_days: parseInt(document.getElementById('orFloor').value, 10),
+        outreach_quiet_hours: [parseInt(document.getElementById('orQuietStart').value, 10), parseInt(document.getElementById('orQuietEnd').value, 10)],
+        outreach_kill_switch: document.getElementById('orKill').checked,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = 'Error: ' + (d.detail || r.status); return; }
+    msg.textContent = 'Saved — sending ' + (d.outreach_enabled && !d.outreach_kill_switch ? 'ON' : 'OFF') + '.';
+  } catch (e) { msg.textContent = 'Save failed: ' + e.message; }
+}
+document.getElementById('orSaveBtn').addEventListener('click', saveOutreachSettings);
 
 document.getElementById('llmConnectOrBtn').addEventListener('click', connectOpenRouter);
 // OpenRouter redirects back to /settings?code=… — finish the handshake

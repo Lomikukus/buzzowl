@@ -108,6 +108,11 @@ def load_config() -> dict:
         ("smtp_pass",                "SMTP_PASS"),
         ("smtp_from",                "SMTP_FROM"),
         ("smtp_from_name",           "SMTP_FROM_NAME"),
+        ("imap_host",                "IMAP_HOST"),
+        ("imap_port",                "IMAP_PORT"),
+        ("imap_user",                "IMAP_USER"),
+        ("imap_pass",                "IMAP_PASS"),
+        ("imap_folder",              "IMAP_FOLDER"),
         ("openrouter_api_key",       "OPENROUTER_API_KEY"),
         ("anthropic_api_key",        "ANTHROPIC_API_KEY"),
     ]:

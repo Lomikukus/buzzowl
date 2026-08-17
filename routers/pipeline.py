@@ -2678,6 +2678,13 @@ async def _start_heartbeat_scheduler() -> None:
         job_count += 1
     except Exception as exc:
         console.print(f"  [yellow]Outreach worker not scheduled: {exc}[/yellow]")
+    try:
+        import imap_sync as _imap
+        context._scheduler.add_job(_imap.poll_once, "interval", id="imap_sync",
+                                   minutes=5, misfire_grace_time=60, coalesce=True)
+        job_count += 1
+    except Exception as exc:
+        console.print(f"  [yellow]IMAP sync not scheduled: {exc}[/yellow]")
 
     context._scheduler.start()
     console.print(f"  Heartbeat scheduler: [green]{job_count} job(s) loaded[/green]")

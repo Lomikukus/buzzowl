@@ -260,3 +260,13 @@ smtp_pass: ""        # SMTP password               (SMTP_PASS)
 smtp_from: ""        # From address, e.g. noreply@your-domain.de  (SMTP_FROM)
 smtp_from_name: "Buzzowl"   # From display name  (SMTP_FROM_NAME)
 digest_auto_send: false   # when true, the rep_digest heartbeat emails reps automatically (default: admin sends manually)
+
+# IMAP — reply/bounce ingestion for supervised outreach (Phase 3). Point this at
+# the mailbox that receives replies to outreach (the smtp_from inbox or the
+# reps' shared reply-to). Read-only polling every 5 min; matches In-Reply-To /
+# References against the Message-IDs Buzzowl issued. Leave blank to disable.
+imap_host: ""        # e.g. imap.your-domain.de   (IMAP_HOST)
+imap_port: 993       #                            (IMAP_PORT)
+imap_user: ""        #                            (IMAP_USER)
+imap_pass: ""        #                            (IMAP_PASS)
+imap_folder: "INBOX" #                            (IMAP_FOLDER)
