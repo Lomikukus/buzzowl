@@ -226,7 +226,39 @@ services:
       server:
         condition: service_started
 
+  # ---------------------------------------------------------------------------
+  # Optional: bundled Matrix homeserver for sharing clients with other installs
+  # (Phase 5b). `docker compose --profile federation up -d`. Buzzowl reaches it
+  # at http://synapse:8008 (set federation.homeserver_url in config.yaml and
+  # federation.registration_shared_secret = SYNAPSE_REGISTRATION_SHARED_SECRET).
+  # For OTHER installs to reach this homeserver, SYNAPSE_SERVER_NAME must be a
+  # public DNS name with TLS in front (reverse proxy on 443/8448) — see
+  # docs/federation.md. On one shared homeserver no TLS federation is needed.
+  # ---------------------------------------------------------------------------
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: buzzowl_synapse
+    profiles: ["federation"]
+    restart: unless-stopped
+    entrypoint: ["/buzzowl-entrypoint.sh"]
+    environment:
+      SYNAPSE_SERVER_NAME: ${SYNAPSE_SERVER_NAME:-synapse}
+      SYNAPSE_REPORT_STATS: "no"
+      SYNAPSE_REGISTRATION_SHARED_SECRET: ${SYNAPSE_REGISTRATION_SHARED_SECRET:-change-me}
+    volumes:
+      - synapse_data:/data
+      - ./docker/synapse/entrypoint.sh:/buzzowl-entrypoint.sh:ro
+    ports:
+      - "127.0.0.1:8008:8008"     # client API on the host (reverse-proxy this for partners)
+    mem_limit: 700m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8008/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
 volumes:
+  synapse_data:
   buzzowl_pgdata:
     driver: local
   pi_oauth:

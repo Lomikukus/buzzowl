@@ -58,6 +58,17 @@ async def lookup(q: str = "", user: dict = Depends(current_user)):
                       for r in rows]}
 
 
+@router.get("/api/sharing/partners")
+async def list_share_partners(user: dict = Depends(current_user)):
+    """Verified federation partners (other installs) any member may share with."""
+    _require_db()
+    try:
+        rows = await db_module.fed_list_partners(user["org_id"], statuses=["active"])
+    except Exception:
+        rows = []
+    return {"partners": [{"id": p["id"], "partner_mxid": p["partner_mxid"], "partner_name": p.get("partner_name")} for p in rows]}
+
+
 @router.post("/api/clients/{client_id}/share")
 async def share_client(client_id: int, body: dict, user: dict = Depends(current_user)):
     """Invite a person from another org to share this client. Creates the share

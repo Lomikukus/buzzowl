@@ -37,6 +37,14 @@ read and write the same knowledge base.
 - **MCP server** — the knowledge base is usable as a tool server by any
   MCP-compatible agent
 - **Multi-tenant** — organizations, users, roles, and invite keys built in
+- **CRM essentials** — deals with stage history, a per-client activity
+  timeline, recurring reminders, a pipeline board, CSV import/export
+- **Shared clients** — two reps (in one deployment or on separate installs)
+  share a client and research it together; research, findings, signals and the
+  profile sync, contacts/notes/mails/deals stay private. Across installs the
+  sync runs end-to-end encrypted over Matrix — see `docs/federation.md`
+- **Hosted plans** — light (bring your own LLM key, encrypted at rest) or
+  premium (platform providers, metered against a monthly budget)
 
 ## Quickstart (Docker)
 

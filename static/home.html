@@ -531,7 +531,7 @@ async function loadShareInvites(){
   card.style.display='';
   el.innerHTML=inv.map(i=>`<div class="inv-row">
     <div class="inv-main">
-      <div class="inv-title"><b>${esc(i.from_user_name||i.from_org_name)}</b> (${esc(i.from_org_name)}) wants to share <b>${esc(i.client_name)}</b> with you</div>
+      <div class="inv-title"><b>${esc(i.from_user_name||i.from_org_name||i.from_partner_name||i.from_partner_mxid)}</b> (${esc(i.from_org_name||(i.from_partner_name?i.from_partner_name+' · other Buzzowl install':'other install'))}) wants to share <b>${esc(i.client_name)}</b> with you</div>
       <div class="inv-meta">You'd both research &amp; monitor it; research, findings, signals and profile sync both ways — your contacts, notes, mails and deals stay private.${i.message?' · “'+esc(i.message)+'”':''}</div>
     </div>
     <button class="inv-btn ok" onclick="acceptShare(${i.id},this)">Accept</button>

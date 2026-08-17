@@ -292,6 +292,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
         </div>
         <div id="sharingList"><span class="empty-state" style="padding:0.4rem 0;text-align:left">Not shared — only you see this client.</span></div>
         <div id="shareForm" style="display:none;margin-top:0.45rem">
+          <div id="sharePartners"></div>
           <input id="shareQuery" type="text" placeholder="email or name of the other person…" oninput="lookupShare(this.value)"
                  style="width:100%;background:var(--c-bg, #1e1e1e);border:1px solid var(--c-line2, #333);color:var(--c-text, #d4d4d4);border-radius:4px;padding:0.28rem 0.5rem;font-size:0.72rem">
           <div id="shareHits" style="margin-top:0.3rem"></div>
@@ -1258,24 +1259,54 @@ async function loadSharing() {
             ${m.role === 'owner' ? '<span class="tag">owner</span>' : ''}
         </div>`;
     }).join('');
+    html += (_sharing.remote_members || []).map(m => `<div class="share-row">
+        <span class="who" title="${esc(m.partner_mxid)} — another Buzzowl install (Matrix, end-to-end encrypted)">${esc(m.partner_name || m.partner_mxid)} <span style="color:var(--c-muted2,#666)">(other install)</span></span>
+        ${g.monitor_partner_id === m.partner_id ? '<span class="tag mon" title="This partner runs monitoring">monitors</span>' : ''}
+        ${m.role === 'owner' ? '<span class="tag">owner</span>' : ''}
+        ${m.partner_status !== 'active' ? `<span class="tag" style="color:var(--c-warn,#d7ba7d);border-color:var(--c-warn,#d7ba7d)">${esc(m.partner_status)}</span>` : ''}
+    </div>`).join('');
     html += (_sharing.invites || []).map(i => `<div class="share-row" style="opacity:0.7">
-        <span class="who">${esc(i.to_user_name || i.to_email || i.to_org_name || 'invited')}</span>
+        <span class="who">${esc(i.to_partner_name || i.to_partner_mxid || i.to_user_name || i.to_email || i.to_org_name || 'invited')}</span>
         <span class="tag">invited</span>
         <button class="share-btn" onclick="revokeShareInvite(${i.id})" title="Withdraw invitation">✕</button>
     </div>`).join('');
     const scope = g.scope || {};
     html += `<div style="display:flex;gap:0.3rem;flex-wrap:wrap;margin-top:0.4rem">
-        ${g.monitor_org_id !== _sharing.my_org_id ? `<button class="share-btn" onclick="takeMonitor()" title="Run research & monitoring for this client from your side">Take over monitoring</button>` : ''}
+        ${(g.monitor_org_id !== _sharing.my_org_id || g.monitor_partner_id) ? `<button class="share-btn" onclick="takeMonitor()" title="Run research & monitoring for this client from your side">Take over monitoring</button>` : ''}
         <button class="share-btn" onclick="resyncShare()" title="Re-send everything shareable to all members">Re-sync</button>
         <button class="share-btn danger" onclick="leaveShare()">Leave sharing</button>
     </div>
     <div style="font-size:0.64rem;color:var(--c-muted2,#666);margin-top:0.3rem">Scope: ${esc((scope.doc_types||[]).join(', '))}${scope.profile ? ', profile' : ''}${scope.sources ? ', sources' : ''} · never contacts/notes/mails/deals</div>`;
     el.innerHTML = html;
 }
-function toggleShareForm() {
+async function toggleShareForm() {
     const f = document.getElementById('shareForm');
     f.style.display = f.style.display === 'block' ? 'none' : 'block';
-    if (f.style.display === 'block') document.getElementById('shareQuery').focus();
+    if (f.style.display === 'block') { document.getElementById('shareQuery').focus(); loadSharePartners(); }
+}
+// Verified federation partners (other Buzzowl installs) — admins pair them under Settings.
+async function loadSharePartners() {
+    const box = document.getElementById('sharePartners');
+    try {
+        const r = await fetch('/api/sharing/partners', { headers: authHeaders(), cache: 'no-store' });
+        if (!r.ok) { box.innerHTML = ''; return; }
+        const d = await r.json();
+        const ps = (d.partners || []);
+        box.innerHTML = ps.length
+            ? `<div style="font-size:0.66rem;color:var(--c-muted2,#666);margin:0.15rem 0">Other Buzzowl installs (verified partners):</div>` +
+              ps.map(p => `<div class="share-hit" onclick="sendSharePartner(${p.id})"><span style="flex:1"><b>${esc(p.partner_name || p.partner_mxid)}</b> <span style="color:var(--c-muted2,#666)">· ${esc(p.partner_mxid)}</span></span><span class="share-btn">Invite</span></div>`).join('') +
+              `<div style="font-size:0.66rem;color:var(--c-muted2,#666);margin:0.35rem 0 0.15rem">…or someone on this install:</div>`
+            : '';
+    } catch (_) { box.innerHTML = ''; }
+}
+async function sendSharePartner(partnerId) {
+    const st = document.getElementById('sharingStatus'); st.textContent = 'Sending…';
+    const r = await fetch(`/api/clients/${_clientId}/share`, { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to_partner_id: partnerId }) });
+    const d = await r.json().catch(() => ({}));
+    st.textContent = r.ok ? 'Invitation sent to the partner install — sharing starts when they accept.' : ('Could not invite: ' + (d.detail || r.status));
+    if (r.ok) document.getElementById('shareForm').style.display = 'none';
+    loadSharing();
 }
 let _lookupTimer = null;
 function lookupShare(q) {

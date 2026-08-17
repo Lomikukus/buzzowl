@@ -258,6 +258,49 @@ tr:hover td { background: var(--c-linefaint, #222); }
       </div>
     </div>
 
+    <!-- Federation (admin) — Phase 5b: share clients with reps on OTHER Buzzowl installs -->
+    <div class="section" id="fedSection">
+      <h2>Sharing with other Buzzowl installs</h2>
+      <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
+        Reps on their own Buzzowl can share clients with you: research, findings, signals and the company profile
+        sync <b>end-to-end encrypted over Matrix</b> — contacts, notes, mails and deals never leave an install.
+        Step 1: give this workspace a Matrix identity. Step 2: pair with a partner by their Matrix ID.
+        Step 3: compare device fingerprints on a call and verify. Only then can clients be shared.
+      </p>
+      <div id="fedIdentityBox" style="font-size:0.8rem">
+        <div id="fedIdentityView" style="display:none;margin-bottom:0.6rem">
+          <div><b id="fedMxid">—</b> <span id="fedOnline" style="font-size:0.7rem;padding:0.05rem 0.4rem;border-radius:3px;border:1px solid var(--c-line3, #3a3a3a);color:var(--c-muted, #888)">offline</span></div>
+          <div style="color:var(--c-muted2, #666);font-size:0.72rem">homeserver <span id="fedHs"></span> · device <span id="fedDevice"></span></div>
+          <div style="margin-top:0.35rem;font-size:0.72rem">Your fingerprint (read this to partners): <code id="fedFp" style="background:#111;border:1px solid #333;border-radius:4px;padding:0.15rem 0.4rem;letter-spacing:0.05em">—</code></div>
+          <div id="fedIdentityErr" style="color:var(--c-danger, #e06c75);font-size:0.72rem;margin-top:0.25rem"></div>
+          <button class="btn" onclick="fedRemoveIdentity()" style="margin-top:0.45rem;font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--c-danger, #e06c75)">Remove identity</button>
+        </div>
+        <div id="fedIdentityForm" style="display:none">
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:0.45rem 1rem;max-width:720px;align-items:center">
+            <label>Homeserver URL</label><input id="fedHsIn" placeholder="https://matrix.example  (bundled: http://synapse:8008)" style="max-width:420px">
+            <label>Bot username</label><input id="fedUserIn" placeholder="buzzowl-acme" style="max-width:260px">
+            <label>Password</label><input id="fedPassIn" type="password" placeholder="••••••••" style="max-width:260px" autocomplete="new-password">
+            <label></label><label style="font-size:0.76rem"><input type="checkbox" id="fedRegister" checked> create the account (open registration or the operator's shared secret) — untick to log into an existing one</label>
+          </div>
+          <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.55rem">
+            <button class="btn" onclick="fedSetupIdentity()">Connect</button>
+            <span id="fedIdentityStatus" style="font-size:0.74rem;color:var(--c-muted2, #666)"></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="fedPartnersBox" style="margin-top:1.1rem;display:none">
+        <h3 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-muted, #888);margin-bottom:0.4rem">Partners</h3>
+        <div id="fedPartners" style="font-size:0.78rem"></div>
+        <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.55rem;flex-wrap:wrap">
+          <input id="fedInviteMxid" placeholder="@buzzowl:their-homeserver.example" style="max-width:360px">
+          <button class="btn" onclick="fedInvite()">Invite partner</button>
+          <span id="fedPartnerStatus" style="font-size:0.74rem;color:var(--c-muted2, #666)"></span>
+        </div>
+        <p style="font-size:0.7rem;color:var(--c-muted2, #666);margin-top:0.4rem">Inviting shares nothing yet. After they accept, both admins compare fingerprints (phone/video) and click <b>Verify</b>. A partner whose bot shows a new device drops back to <i>reverify</i> until you confirm again.</p>
+      </div>
+    </div>
+
     <!-- Plan & usage (admin) — Phase 6a hosted plans -->
     <div class="section" id="planSection">
       <h2>Plan &amp; usage</h2>
@@ -538,8 +581,88 @@ async function init() {
     loadAutonomySettings();
     loadOutreachSettings();
     loadPlan();
+    loadFederation();
   }
 }
+
+// ── Federation (admin, Phase 5b) ──────────────────────────────────────────
+let _fedTimer = null;
+async function loadFederation() {
+  let st;
+  try { const r = await fetch('/api/federation/status', { headers: H(), cache: 'no-store' }); if (!r.ok) return; st = await r.json(); } catch (_) { return; }
+  const view = document.getElementById('fedIdentityView'), form = document.getElementById('fedIdentityForm');
+  if (st.identity) {
+    view.style.display = ''; form.style.display = 'none';
+    document.getElementById('fedMxid').textContent = st.identity.mxid;
+    document.getElementById('fedHs').textContent = st.identity.homeserver_url;
+    document.getElementById('fedDevice').textContent = st.identity.device_id || '—';
+    document.getElementById('fedFp').textContent = st.own_fingerprint || st.identity.fingerprint || '(syncing…)';
+    const on = document.getElementById('fedOnline'); on.textContent = st.online ? 'online' : (st.identity.status || 'offline');
+    on.style.color = on.style.borderColor = st.online ? 'var(--c-accent, #4ec9b0)' : 'var(--c-warn, #d7ba7d)';
+    document.getElementById('fedIdentityErr').textContent = st.identity.last_error || st.last_error || '';
+    document.getElementById('fedPartnersBox').style.display = '';
+    loadFedPartners();
+  } else {
+    view.style.display = 'none'; form.style.display = '';
+    if (st.config?.default_homeserver && !document.getElementById('fedHsIn').value) document.getElementById('fedHsIn').value = st.config.default_homeserver;
+    document.getElementById('fedPartnersBox').style.display = 'none';
+  }
+}
+async function fedSetupIdentity() {
+  const st = document.getElementById('fedIdentityStatus'); st.textContent = 'Connecting…';
+  const body = { homeserver_url: document.getElementById('fedHsIn').value.trim(), username: document.getElementById('fedUserIn').value.trim(),
+                 password: document.getElementById('fedPassIn').value, register: document.getElementById('fedRegister').checked };
+  const r = await fetch('/api/federation/identity', { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  st.textContent = r.ok ? 'Connected.' : ('Error: ' + (d.detail || r.status));
+  document.getElementById('fedPassIn').value = '';
+  setTimeout(loadFederation, 1500);
+}
+async function fedRemoveIdentity() {
+  if (!confirm('Remove this workspace\'s Matrix identity? Partners will stop receiving updates.')) return;
+  await fetch('/api/federation/identity', { method: 'DELETE', headers: H() }); loadFederation();
+}
+function _fedBadge(status) {
+  const c = { active: 'var(--c-accent, #4ec9b0)', pending: 'var(--c-warn, #d7ba7d)', reverify: 'var(--c-warn, #d7ba7d)', blocked: 'var(--c-danger, #e06c75)', left: 'var(--c-muted, #888)' }[status] || 'var(--c-muted, #888)';
+  return `<span style="font-size:0.66rem;padding:0.05rem 0.4rem;border-radius:3px;border:1px solid ${c};color:${c};text-transform:uppercase;letter-spacing:0.05em">${_llmEsc(status)}</span>`;
+}
+async function loadFedPartners() {
+  const box = document.getElementById('fedPartners');
+  let d; try { const r = await fetch('/api/federation/partners', { headers: H(), cache: 'no-store' }); if (!r.ok) return; d = await r.json(); } catch (_) { return; }
+  const ps = d.partners || [];
+  if (!ps.length) { box.innerHTML = '<div style="color:var(--c-muted2,#666)">No partners yet.</div>'; return; }
+  box.innerHTML = ps.map(p => {
+    const devs = (p.devices || []).map(x => `<div style="font-family:ui-monospace,Menlo,monospace;font-size:0.72rem;margin-top:0.2rem">${x.device_id} · <span style="letter-spacing:0.05em">${_llmEsc(x.fingerprint)}</span>${x.verified ? ' <span style="color:var(--c-accent,#4ec9b0)">✓ pinned</span>' : ''} ${(!x.verified && p.status !== 'left') ? `<button class="btn" style="font-size:0.66rem;padding:0.05rem 0.4rem;margin-left:0.4rem" onclick="fedVerify(${p.id},'${_llmEsc(x.device_id)}')">Verify this device</button>` : ''}</div>`).join('');
+    const actions = [];
+    if (p.direction === 'incoming' && p.status === 'pending' && !p.room_id_joined) actions.push(`<button class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem" onclick="fedAccept(${p.id})">Accept invitation</button>`);
+    if (p.status !== 'left') actions.push(`<button class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem;color:var(--c-danger,#e06c75)" onclick="fedDisconnect(${p.id})">Disconnect</button>`);
+    else actions.push(`<button class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem" onclick="fedForget(${p.id})">Forget</button>`);
+    return `<div style="border:1px solid var(--c-line, #2a2a2a);border-radius:6px;padding:0.5rem 0.7rem;margin-bottom:0.45rem">
+      <div><b>${_llmEsc(p.partner_name || p.partner_mxid)}</b> ${_fedBadge(p.status)} <span style="color:var(--c-muted2,#666);font-size:0.72rem">${_llmEsc(p.partner_mxid)} · ${p.direction}</span></div>
+      ${p.status === 'pending' && p.direction === 'outgoing' ? '<div style="font-size:0.72rem;color:var(--c-muted2,#666)">waiting for the partner to accept…</div>' : ''}
+      ${p.status === 'pending' && p.direction === 'incoming' ? '<div style="font-size:0.72rem;color:var(--c-warn,#d7ba7d)">They invited you. Accept, then compare fingerprints and verify.</div>' : ''}
+      ${p.status === 'reverify' ? `<div style="font-size:0.72rem;color:var(--c-warn,#d7ba7d)">${_llmEsc(p.last_error || 'verify again')}</div>` : ''}
+      ${p.status === 'blocked' ? `<div style="font-size:0.72rem;color:var(--c-danger,#e06c75)">${_llmEsc(p.last_error || 'blocked')}</div>` : ''}
+      ${devs || '<div style="font-size:0.72rem;color:var(--c-muted2,#666)">no device seen yet — becomes visible once they joined</div>'}
+      <div style="display:flex;gap:0.4rem;margin-top:0.4rem">${actions.join('')}</div>
+    </div>`;
+  }).join('');
+}
+async function fedInvite() {
+  const mxid = document.getElementById('fedInviteMxid').value.trim(); const st = document.getElementById('fedPartnerStatus');
+  if (!mxid) return; st.textContent = 'Inviting…';
+  const r = await fetch('/api/federation/partners', { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify({ mxid }) });
+  const d = await r.json().catch(() => ({})); st.textContent = r.ok ? (d.note || 'Invited — waiting for them to accept.') : ('Error: ' + (d.detail || r.status));
+  if (r.ok) document.getElementById('fedInviteMxid').value = ''; loadFedPartners();
+}
+async function fedAccept(id) { const r = await fetch(`/api/federation/partners/${id}/accept`, { method: 'POST', headers: H() }); const d = await r.json().catch(() => ({})); document.getElementById('fedPartnerStatus').textContent = r.ok ? 'Joined — now compare fingerprints and verify.' : ('Error: ' + (d.detail || r.status)); setTimeout(loadFedPartners, 2500); }
+async function fedVerify(id, deviceId) {
+  if (!confirm('Verify only after you compared the fingerprint with the partner admin out-of-band (phone/video). Continue?')) return;
+  const r = await fetch(`/api/federation/partners/${id}/verify`, { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify({ device_id: deviceId }) });
+  const d = await r.json().catch(() => ({})); document.getElementById('fedPartnerStatus').textContent = r.ok ? 'Verified — sharing with this partner is now possible.' : ('Error: ' + (d.detail || r.status)); loadFedPartners();
+}
+async function fedDisconnect(id) { if (!confirm('Disconnect this partner? Shares with them stop; copies they already received stay with them.')) return; await fetch(`/api/federation/partners/${id}/disconnect`, { method: 'POST', headers: H() }); loadFedPartners(); }
+async function fedForget(id) { await fetch(`/api/federation/partners/${id}`, { method: 'DELETE', headers: H() }); loadFedPartners(); }
 
 // ── Plan & usage (admin, Phase 6a) ────────────────────────────────────────
 let _plan = null;
