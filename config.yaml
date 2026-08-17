@@ -238,6 +238,20 @@ hosted:
 # hosted deployments and never rotate it without re-entering keys.
 # llm_prices: { "gpt-4o-mini": [0.15, 0.60] }   # USD per 1M tokens (in, out) — overrides plans.py defaults
 
+# Matrix federation (Phase 5b) — sharing clients with reps on OTHER Buzzowl installs.
+# One bot account per org lives on a Matrix homeserver (yours via
+# `docker compose --profile federation up`, or any homeserver you trust);
+# partners pair by Matrix ID, admins compare device fingerprints, then research/
+# findings/signals/profile of shared clients sync end-to-end encrypted.
+federation:
+  enabled: true
+  homeserver_url: ""                # e.g. http://synapse:8008 (bundled profile) or https://matrix.example
+  # server_name: ""                 # only when it differs from the URL host (bundled profile: synapse)
+  # registration_shared_secret: "" # lets Buzzowl create bot accounts on YOUR Synapse without open registration
+  # store_dir: data/federation      # E2EE key store (keep it — losing it means re-pairing every partner)
+  outbox_interval_s: 5
+  inbox_interval_s: 5
+
 # Web search
 # SearXNG (primary): self-hosted metasearch engine — docker compose up -d starts it at :8080
 # DuckDuckGo (fallback): used automatically when SearXNG is unreachable, no key needed

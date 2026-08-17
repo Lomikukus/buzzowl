@@ -19,3 +19,4 @@ python-multipart>=0.0.9 # multipart form parsing — required by FastAPI UploadF
 requests
 slowapi>=0.1.9
 cryptography>=42.0        # AES-GCM for per-org LLM keys at rest (Phase 6a)
+matrix-nio[e2e]>=0.26.0     # Matrix federation transport (Phase 5b); vodozemac wheel, no libolm

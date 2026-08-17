@@ -372,6 +372,18 @@ async def init_db(
         _embed_api_key = (
             os.environ.get("OPENROUTER_API_KEY", "") or os.environ.get("OPENROUTE", "")
         )
+    # Fresh database: the pool's connection init registers the pgvector codec,
+    # which needs the extension to exist BEFORE schema.sql runs — create it here
+    # with a plain connection (idempotent; harmless on an initialised DB).
+    try:
+        _boot = await asyncpg.connect(db_url, timeout=15)
+        try:
+            await _boot.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            await _boot.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        finally:
+            await _boot.close()
+    except Exception as exc:
+        logger.warning("could not ensure DB extensions (continuing): %s", exc)
     try:
         _pool = await asyncpg.create_pool(
             db_url,
@@ -3917,14 +3929,15 @@ async def sharing_update_scope(group_id: int, scope: dict) -> None:
 
 async def sharing_create_invite(group_id: int, from_org_id: int, from_user_id: Optional[int], *,
                                 to_user_id: Optional[int] = None, to_org_id: Optional[int] = None,
-                                to_email: Optional[str] = None, message: str = "") -> dict:
+                                to_email: Optional[str] = None, message: str = "",
+                                to_partner_id: Optional[int] = None) -> dict:
     if not _pool:
         raise RuntimeError("DB unavailable")
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
-            """INSERT INTO share_invites (shared_client_id, from_org_id, from_user_id, to_org_id, to_user_id, to_email, message)
-               VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *""",
-            group_id, from_org_id, from_user_id, to_org_id, to_user_id, (to_email or None), (message or None))
+            """INSERT INTO share_invites (shared_client_id, from_org_id, from_user_id, to_org_id, to_user_id, to_email, message, to_partner_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *""",
+            group_id, from_org_id, from_user_id, to_org_id, to_user_id, (to_email or None), (message or None), to_partner_id)
     return dict(row)
 
 
@@ -3934,12 +3947,16 @@ async def sharing_get_invite(invite_id: int) -> Optional[dict]:
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             """SELECT i.*, sc.name AS client_name, sc.key AS group_key, sc.scope, sc.status AS group_status,
-                      fo.name AS from_org_name, fu.display_name AS from_user_name, tu.display_name AS to_user_name
+                      fo.name AS from_org_name, fu.display_name AS from_user_name, tu.display_name AS to_user_name,
+                      fp.partner_name AS from_partner_name, fp.partner_mxid AS from_partner_mxid,
+                      tp.partner_name AS to_partner_name, tp.partner_mxid AS to_partner_mxid
                  FROM share_invites i
                  JOIN shared_clients sc ON sc.id = i.shared_client_id
-                 JOIN orgs fo ON fo.id = i.from_org_id
+                 LEFT JOIN orgs fo ON fo.id = i.from_org_id
                  LEFT JOIN users fu ON fu.id = i.from_user_id
                  LEFT JOIN users tu ON tu.id = i.to_user_id
+                 LEFT JOIN federation_partners fp ON fp.id = i.from_partner_id
+                 LEFT JOIN federation_partners tp ON tp.id = i.to_partner_id
                 WHERE i.id = $1""",
             invite_id)
     return _grp(row) if row else None
@@ -3953,13 +3970,17 @@ async def sharing_list_invites(org_id: int, direction: str = "incoming", status:
         rows = await conn.fetch(
             f"""SELECT i.*, sc.name AS client_name, sc.key AS group_key, sc.scope,
                        fo.name AS from_org_name, fu.display_name AS from_user_name,
-                       tou.name AS to_org_name, tu.display_name AS to_user_name
+                       tou.name AS to_org_name, tu.display_name AS to_user_name,
+                       fp.partner_name AS from_partner_name, fp.partner_mxid AS from_partner_mxid,
+                       tp.partner_name AS to_partner_name, tp.partner_mxid AS to_partner_mxid
                   FROM share_invites i
                   JOIN shared_clients sc ON sc.id = i.shared_client_id
-                  JOIN orgs fo ON fo.id = i.from_org_id
+                  LEFT JOIN orgs fo ON fo.id = i.from_org_id
                   LEFT JOIN orgs tou ON tou.id = i.to_org_id
                   LEFT JOIN users fu ON fu.id = i.from_user_id
                   LEFT JOIN users tu ON tu.id = i.to_user_id
+                  LEFT JOIN federation_partners fp ON fp.id = i.from_partner_id
+                  LEFT JOIN federation_partners tp ON tp.id = i.to_partner_id
                  WHERE {col} = $1 AND ($2 = 'all' OR i.status = $2)
                  ORDER BY i.created_at DESC LIMIT 200""",
             org_id, status)
@@ -4125,7 +4146,7 @@ async def sharing_non_monitor_client_ids(org_id: int) -> set:
             """SELECT scm.client_id
                  FROM shared_client_members scm JOIN shared_clients sc ON sc.id = scm.shared_client_id
                 WHERE scm.org_id = $1 AND scm.left_at IS NULL AND sc.status = 'active'
-                  AND sc.monitor_org_id IS NOT NULL AND sc.monitor_org_id <> $1""",
+                  AND ((sc.monitor_org_id IS NOT NULL AND sc.monitor_org_id <> $1) OR sc.monitor_partner_id IS NOT NULL)""",
             org_id)
     return {r["client_id"] for r in rows}
 
@@ -4190,3 +4211,338 @@ async def llm_usage_summary(org_id: int, days: int = 31) -> dict:
                         "cost_usd": float(r["cost_usd"])} for r in by_day],
             "by_model": [{**dict(r), "calls": int(r["calls"]), "tokens": int(r["tokens"]),
                           "cost_usd": float(r["cost_usd"])} for r in by_model]}
+
+
+# ---------------------------------------------------------------------------
+# Matrix federation (Phase 5b) — see federation.py
+# ---------------------------------------------------------------------------
+
+async def fed_get_identity(org_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM federation_identities WHERE org_id = $1", org_id)
+        return dict(row) if row else None
+
+
+async def fed_list_identities() -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM federation_identities WHERE status <> 'disabled' ORDER BY org_id")
+        return [dict(r) for r in rows]
+
+
+async def fed_upsert_identity(org_id: int, **fields) -> dict:
+    """Create/update the org's bot identity. fields: homeserver_url, mxid, device_id,
+    access_token_enc, ed25519, display_name, status, last_error, last_sync_at."""
+    if not _pool:
+        raise RuntimeError("DB unavailable")
+    allowed = {"homeserver_url", "mxid", "device_id", "access_token_enc", "ed25519", "display_name",
+               "status", "last_error", "last_sync_at"}
+    f = {k: v for k, v in fields.items() if k in allowed}
+    async with _pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT 1 FROM federation_identities WHERE org_id = $1", org_id)
+        if not exists:
+            row = await conn.fetchrow(
+                """INSERT INTO federation_identities (org_id, homeserver_url, mxid, device_id, access_token_enc,
+                       ed25519, display_name, status, last_error)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,'configured'),$9) RETURNING *""",
+                org_id, f.get("homeserver_url", ""), f.get("mxid", ""), f.get("device_id"), f.get("access_token_enc"),
+                f.get("ed25519"), f.get("display_name"), f.get("status"), f.get("last_error"))
+            return dict(row)
+        sets, params = [], [org_id]
+        for k, v in f.items():
+            params.append(v); sets.append(f"{k} = ${len(params)}")
+        sets.append("updated_at = NOW()")
+        row = await conn.fetchrow(f"UPDATE federation_identities SET {', '.join(sets)} WHERE org_id = $1 RETURNING *", *params)
+        return dict(row)
+
+
+async def fed_delete_identity(org_id: int) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("DELETE FROM federation_identities WHERE org_id = $1", org_id)
+
+
+# --- partners ---------------------------------------------------------------
+
+async def fed_get_partner(partner_id: int) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM federation_partners WHERE id = $1", partner_id)
+        return dict(row) if row else None
+
+
+async def fed_partner_by_room(org_id: int, room_id: str) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM federation_partners WHERE org_id = $1 AND room_id = $2", org_id, room_id)
+        return dict(row) if row else None
+
+
+async def fed_partner_by_mxid(org_id: int, mxid: str) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM federation_partners WHERE org_id = $1 AND partner_mxid = $2", org_id, mxid)
+        return dict(row) if row else None
+
+
+async def fed_list_partners(org_id: int, statuses: Optional[list] = None) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT * FROM federation_partners WHERE org_id = $1
+                AND ($2::text[] IS NULL OR status = ANY($2::text[]))
+                ORDER BY status = 'active' DESC, created_at DESC""", org_id, statuses)
+        return [dict(r) for r in rows]
+
+
+async def fed_upsert_partner(org_id: int, partner_mxid: str, **fields) -> dict:
+    allowed = {"partner_name", "room_id", "direction", "status", "pinned_device_id", "pinned_ed25519",
+               "seen_device_id", "seen_ed25519", "verified_at", "verified_by", "last_event_at", "last_error"}
+    f = {k: v for k, v in fields.items() if k in allowed}
+    if not _pool:
+        raise RuntimeError("DB unavailable")
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT id FROM federation_partners WHERE org_id = $1 AND partner_mxid = $2", org_id, partner_mxid)
+        if not row:
+            row = await conn.fetchrow(
+                """INSERT INTO federation_partners (org_id, partner_mxid, partner_name, room_id, direction, status)
+                   VALUES ($1,$2,$3,$4,COALESCE($5,'outgoing'),COALESCE($6,'pending')) RETURNING *""",
+                org_id, partner_mxid, f.get("partner_name"), f.get("room_id"), f.get("direction"), f.get("status"))
+            return dict(row)
+        sets, params = [], [row["id"]]
+        for k, v in f.items():
+            params.append(v); sets.append(f"{k} = ${len(params)}")
+        if not sets:
+            return dict(await conn.fetchrow("SELECT * FROM federation_partners WHERE id = $1", row["id"]))
+        sets.append("updated_at = NOW()")
+        r2 = await conn.fetchrow(f"UPDATE federation_partners SET {', '.join(sets)} WHERE id = $1 RETURNING *", *params)
+        return dict(r2)
+
+
+async def fed_update_partner(partner_id: int, **fields) -> Optional[dict]:
+    allowed = {"partner_name", "room_id", "direction", "status", "pinned_device_id", "pinned_ed25519",
+               "seen_device_id", "seen_ed25519", "verified_at", "verified_by", "last_event_at", "last_error"}
+    f = {k: v for k, v in fields.items() if k in allowed}
+    if not _pool or not f:
+        return None
+    sets, params = [], [partner_id]
+    for k, v in f.items():
+        params.append(v); sets.append(f"{k} = ${len(params)}")
+    sets.append("updated_at = NOW()")
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(f"UPDATE federation_partners SET {', '.join(sets)} WHERE id = $1 RETURNING *", *params)
+        return dict(row) if row else None
+
+
+async def fed_delete_partner(partner_id: int) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("DELETE FROM federation_partners WHERE id = $1", partner_id)
+
+
+# --- outbox / inbox ---------------------------------------------------------
+
+async def fed_enqueue(org_id: int, partner_id: int, kind: str, payload: dict) -> int:
+    if not _pool:
+        return 0
+    async with _pool.acquire() as conn:
+        return await conn.fetchval(
+            "INSERT INTO federation_outbox (org_id, partner_id, kind, payload) VALUES ($1,$2,$3,$4) RETURNING id",
+            org_id, partner_id, kind, payload)
+
+
+async def fed_pending_outbox(org_id: int, limit: int = 50) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT o.*, p.room_id, p.status AS partner_status, p.partner_mxid
+                 FROM federation_outbox o JOIN federation_partners p ON p.id = o.partner_id
+                WHERE o.org_id = $1 AND o.sent_at IS NULL AND o.attempts < 20
+                ORDER BY o.id LIMIT $2""", org_id, limit)
+        return [dict(r) for r in rows]
+
+
+async def fed_mark_outbox(outbox_id: int, *, event_id: Optional[str] = None, error: Optional[str] = None) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        if error is None:
+            await conn.execute("UPDATE federation_outbox SET sent_at = NOW(), event_id = $2, attempts = attempts + 1, error = NULL WHERE id = $1",
+                               outbox_id, event_id)
+        else:
+            await conn.execute("UPDATE federation_outbox SET attempts = attempts + 1, error = $2 WHERE id = $1", outbox_id, error[:500])
+
+
+async def fed_inbox_insert(org_id: int, *, partner_id: Optional[int], room_id: str, event_id: str, sender: str,
+                           sender_key: Optional[str], verified: bool, kind: str, payload: dict) -> Optional[int]:
+    """Replay-safe: returns None when the event_id was seen before."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        return await conn.fetchval(
+            """INSERT INTO federation_inbox (org_id, partner_id, room_id, event_id, sender, sender_key, verified, kind, payload)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (event_id) DO NOTHING RETURNING id""",
+            org_id, partner_id, room_id, event_id, sender, sender_key, verified, kind, payload)
+
+
+async def fed_pending_inbox(org_id: int, limit: int = 100) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT i.*, p.status AS partner_status, p.partner_name, p.partner_mxid
+                 FROM federation_inbox i LEFT JOIN federation_partners p ON p.id = i.partner_id
+                WHERE i.org_id = $1 AND i.applied_at IS NULL
+                ORDER BY i.id LIMIT $2""", org_id, limit)
+        return [dict(r) for r in rows]
+
+
+async def fed_mark_inbox(inbox_id: int, *, error: Optional[str] = None) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        if error is None:
+            await conn.execute("UPDATE federation_inbox SET applied_at = NOW(), error = NULL WHERE id = $1", inbox_id)
+        else:
+            await conn.execute("UPDATE federation_inbox SET error = $2 WHERE id = $1", inbox_id, error[:500])
+
+
+async def fed_mark_inbox_verified(partner_id: int) -> int:
+    """After pinning: events that arrived from the (now pinned) device become applicable."""
+    if not _pool:
+        return 0
+    async with _pool.acquire() as conn:
+        res = await conn.execute(
+            """UPDATE federation_inbox SET verified = TRUE WHERE partner_id = $1 AND applied_at IS NULL
+                AND sender_key = (SELECT pinned_ed25519 FROM federation_partners WHERE id = $1)""", partner_id)
+    try:
+        return int(res.split()[-1])
+    except Exception:
+        return 0
+
+
+# --- remote members / group key ---------------------------------------------
+
+async def sharing_group_by_key(org_id: int, key: str) -> Optional[dict]:
+    """The org's local group row for a cross-instance group key (member must be active)."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT sc.*, scm.client_id AS my_client_id, scm.role AS my_role
+                 FROM shared_clients sc JOIN shared_client_members scm ON scm.shared_client_id = sc.id
+                WHERE sc.key = $2::uuid AND scm.org_id = $1 AND scm.left_at IS NULL""", org_id, key)
+    return _grp(row) if row else None
+
+
+async def sharing_create_group_with_key(org_id: int, client_id: int, user_id: Optional[int], name: str,
+                                        key: str, scope: Optional[dict] = None, role: str = "member",
+                                        monitor_local: bool = False, monitor_partner_id: Optional[int] = None) -> dict:
+    """Local mirror of a group that exists on a partner instance (same key)."""
+    if not _pool:
+        raise RuntimeError("DB unavailable")
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """INSERT INTO shared_clients (key, name, created_by_org, created_by_user, monitor_org_id, monitor_partner_id, scope)
+                   VALUES ($1::uuid, $2, $3, $4, $5, $6, COALESCE($7::jsonb, '{"doc_types": ["research","osint","finding","signal"], "profile": true, "sources": true, "contacts": false}'::jsonb))
+                   RETURNING *""",
+                key, name, org_id, user_id, org_id if monitor_local else None, monitor_partner_id, scope)
+            await conn.execute(
+                "INSERT INTO shared_client_members (shared_client_id, org_id, client_id, role, joined_by) VALUES ($1,$2,$3,$4,$5)",
+                row["id"], org_id, client_id, role, user_id)
+    return _grp(row)
+
+
+async def sharing_list_remote_members(group_id: int) -> list[dict]:
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT rm.*, p.partner_mxid, p.partner_name, p.status AS partner_status, p.org_id AS local_org_id
+                 FROM shared_client_remote_members rm JOIN federation_partners p ON p.id = rm.partner_id
+                WHERE rm.shared_client_id = $1 ORDER BY rm.joined_at""", group_id)
+        return [dict(r) for r in rows]
+
+
+async def sharing_add_remote_member(group_id: int, partner_id: int, role: str = "member") -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO shared_client_remote_members (shared_client_id, partner_id, role)
+               VALUES ($1,$2,$3) ON CONFLICT (shared_client_id, partner_id) DO UPDATE SET left_at = NULL, joined_at = NOW(), role = EXCLUDED.role""",
+            group_id, partner_id, role)
+
+
+async def sharing_remove_remote_member(group_id: int, partner_id: int) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("UPDATE shared_client_remote_members SET left_at = NOW() WHERE shared_client_id = $1 AND partner_id = $2",
+                           group_id, partner_id)
+
+
+async def sharing_set_monitor_remote(group_id: int, partner_id: Optional[int], org_id: Optional[int]) -> None:
+    """Exactly one of partner_id / org_id holds monitoring."""
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("UPDATE shared_clients SET monitor_partner_id = $2, monitor_org_id = $3, updated_at = NOW() WHERE id = $1",
+                           group_id, partner_id, org_id)
+
+
+async def sharing_create_remote_invite(org_id: int, from_partner_id: int, *, remote_group_key: str, remote_invite_id: Optional[int],
+                                       client_name: str, scope: Optional[dict], message: str) -> dict:
+    """An invite that arrived from a partner instance: stored as a local pending invite
+    (from_org NULL, from_partner set); a placeholder group row is created on accept."""
+    if not _pool:
+        raise RuntimeError("DB unavailable")
+    async with _pool.acquire() as conn:
+        # a lightweight local group row so the invite can reference shared_client_id (NOT NULL);
+        # it becomes the real mirror on accept (member added then), or stays orphaned/closed on decline.
+        grp = await conn.fetchrow(
+            """SELECT id FROM shared_clients WHERE key = $1::uuid""", remote_group_key)
+        if not grp:
+            grp = await conn.fetchrow(
+                """INSERT INTO shared_clients (key, name, created_by_org, scope, status)
+                   VALUES ($1::uuid, $2, $3, COALESCE($4::jsonb, '{"doc_types": ["research","osint","finding","signal"], "profile": true, "sources": true, "contacts": false}'::jsonb), 'active')
+                   RETURNING id""", remote_group_key, client_name, org_id, scope)
+        row = await conn.fetchrow(
+            """INSERT INTO share_invites (shared_client_id, from_org_id, from_partner_id, to_org_id, message, remote_group_key, remote_invite_id)
+               VALUES ($1, NULL, $2, $3, $4, $5::uuid, $6) RETURNING *""",
+            grp["id"], from_partner_id, org_id, message or None, remote_group_key, remote_invite_id)
+        return dict(row)
+
+
+async def sharing_group_row_by_key(key: str) -> Optional[dict]:
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM shared_clients WHERE key = $1::uuid", key)
+    return _grp(row) if row else None
+
+
+async def sharing_add_member_to_group(group_id: int, org_id: int, client_id: int, user_id: Optional[int], role: str = "member",
+                                      monitor_local: bool = False) -> None:
+    if not _pool:
+        return
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """INSERT INTO shared_client_members (shared_client_id, org_id, client_id, role, joined_by)
+                   VALUES ($1,$2,$3,$4,$5) ON CONFLICT (shared_client_id, org_id) DO UPDATE
+                      SET client_id = EXCLUDED.client_id, joined_by = EXCLUDED.joined_by, joined_at = NOW(), left_at = NULL, role = EXCLUDED.role""",
+                group_id, org_id, client_id, role, user_id)
+            if monitor_local:
+                await conn.execute("UPDATE shared_clients SET monitor_org_id = $2, monitor_partner_id = NULL WHERE id = $1", group_id, org_id)

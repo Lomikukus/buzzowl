@@ -67,6 +67,35 @@ async def share_client(client_id: int, body: dict, user: dict = Depends(current_
     to_user_id = body.get("to_user_id")
     to_email = (body.get("to_email") or "").strip().lower()
     to_org_id = None
+    to_partner_id = body.get("to_partner_id")
+    if to_partner_id:
+        # cross-instance: a verified federation partner (Phase 5b)
+        import federation
+        partner = await db_module.fed_get_partner(int(to_partner_id))
+        if not partner or partner["org_id"] != user["org_id"]:
+            raise HTTPException(status_code=404, detail="partner not found")
+        if partner["status"] != "active":
+            raise HTTPException(status_code=409, detail="verify the partner's device before sharing with them")
+        group = await db_module.sharing_group_for_client(client_id)
+        if group and group.get("member_org_id") != user["org_id"]:
+            raise HTTPException(status_code=409, detail="client belongs to another org's share group")
+        if not group:
+            group = await db_module.sharing_create_group(user["org_id"], client_id, user["id"], client["name"],
+                                                         scope=sharing.normalize_scope(body.get("scope")))
+        remote = await db_module.sharing_list_remote_members(group["id"])
+        if any(m["partner_id"] == partner["id"] and m.get("left_at") is None for m in remote):
+            raise HTTPException(status_code=409, detail="that partner already shares this client")
+        pending = [i for i in await db_module.sharing_list_invites(user["org_id"], "outgoing", "pending")
+                   if i["shared_client_id"] == group["id"] and i.get("to_partner_id") == partner["id"]]
+        if pending:
+            return {"ok": True, "invite": pending[0], "group": group, "note": "invite already pending"}
+        inv = await db_module.sharing_create_invite(group["id"], user["org_id"], user["id"], to_partner_id=partner["id"],
+                                                    message=(body.get("message") or "").strip())
+        await federation.enqueue(user["org_id"], partner["id"], "share_invite", {
+            "group_key": group["key"], "invite_id": inv["id"], "client_name": client["name"],
+            "scope": sharing.normalize_scope(group.get("scope")), "message": (body.get("message") or "").strip()[:500]})
+        logger.info("share invite #%s: org %s client %r → partner %s", inv["id"], user["org_id"], client["name"], partner["partner_mxid"])
+        return {"ok": True, "invite": inv, "group": group, "remote": True}
     if to_user_id:
         u = await db_module.get_user_by_id(int(to_user_id))
         if not u:
@@ -112,10 +141,12 @@ async def client_sharing(client_id: int, user: dict = Depends(current_user)):
     if not group:
         return {"group": None, "members": [], "invites": []}
     members = await db_module.sharing_list_members(group["id"])
+    remote = [m for m in await db_module.sharing_list_remote_members(group["id"]) if m.get("left_at") is None]
     invites = [i for i in await db_module.sharing_list_invites(user["org_id"], "outgoing", "pending")
                if i["shared_client_id"] == group["id"]]
-    return {"group": group, "members": members, "invites": invites,
-            "i_monitor": group.get("monitor_org_id") == user["org_id"], "my_org_id": user["org_id"]}
+    return {"group": group, "members": members, "remote_members": remote, "invites": invites,
+            "i_monitor": group.get("monitor_org_id") == user["org_id"] and not group.get("monitor_partner_id"),
+            "my_org_id": user["org_id"]}
 
 
 @router.get("/api/sharing/invites")
@@ -161,6 +192,27 @@ async def accept_invite(invite_id: int, body: dict, user: dict = Depends(current
     if existing and existing["id"] != inv["shared_client_id"]:
         raise HTTPException(status_code=409, detail=f"'{client['name']}' is already shared in another group — leave it first")
 
+    if inv.get("from_partner_id"):
+        # Cross-instance invite (Phase 5b): the group row with the remote key already
+        # exists locally (created on receipt); we join it, the partner keeps monitoring
+        # by default, and both sides start their full sync.
+        import federation
+        partner = await db_module.fed_get_partner(inv["from_partner_id"])
+        if not partner or partner["org_id"] != user["org_id"] or partner["status"] != "active":
+            raise HTTPException(status_code=409, detail="verify the partner before accepting")
+        await db_module.sharing_add_member_to_group(inv["shared_client_id"], user["org_id"], client["id"], user["id"])
+        await db_module.sharing_add_remote_member(inv["shared_client_id"], partner["id"], role="owner")
+        await db_module.sharing_set_monitor_remote(inv["shared_client_id"], partner["id"], None)
+        await db_module.sharing_respond_invite(invite_id, "accepted")
+        await federation.enqueue(user["org_id"], partner["id"], "share_accept",
+                                 {"group_key": str(inv["remote_group_key"]), "invite_id": inv.get("remote_invite_id")})
+        scope = sharing.normalize_scope(inv.get("scope"))
+        queued = await db_module.sharing_enqueue_client(inv["shared_client_id"], user["org_id"], client["id"], scope["doc_types"])
+        stats = await sharing.process_outbox(limit=500)
+        logger.info("remote share invite #%s accepted by org %s (client %r): queued %s", invite_id, user["org_id"], client["name"], queued)
+        return {"ok": True, "group_id": inv["shared_client_id"], "client_id": client["id"], "client_name": client["name"],
+                "queued": queued, "sync": stats, "remote": True}
+
     await db_module.sharing_add_member(inv["shared_client_id"], user["org_id"], client["id"], user["id"])
     await db_module.sharing_respond_invite(invite_id, "accepted")
     # full sync in both directions
@@ -187,6 +239,10 @@ async def decline_invite(invite_id: int, user: dict = Depends(current_user)):
     if inv.get("to_org_id") not in (None, user["org_id"]):
         raise HTTPException(status_code=403, detail="not yours")
     await db_module.sharing_respond_invite(invite_id, "declined")
+    if inv.get("from_partner_id"):
+        import federation
+        await federation.enqueue(user["org_id"], inv["from_partner_id"], "share_decline",
+                                 {"group_key": str(inv["remote_group_key"]), "invite_id": inv.get("remote_invite_id")})
     return {"ok": True}
 
 
@@ -217,6 +273,12 @@ async def leave_group(group_id: int, body: dict, user: dict = Depends(current_us
     members = await db_module.sharing_list_members(group_id)
     if not _member_of(members, user["org_id"]):
         raise HTTPException(status_code=403, detail="not a member")
+    remote = [m for m in await db_module.sharing_list_remote_members(group_id) if m.get("left_at") is None]
+    for m in remote:
+        import federation
+        if m.get("local_org_id") == user["org_id"]:
+            await federation.enqueue(user["org_id"], m["partner_id"], "share_leave", {"group_key": group["key"]})
+            await db_module.sharing_remove_remote_member(group_id, m["partner_id"])
     res = await db_module.sharing_leave(group_id, user["org_id"])
     n = await db_module.sharing_leave_cleanup(user["org_id"], group["key"], bool(body.get("delete_copies")))
     return {"ok": True, **res, "copies_affected": n}
@@ -228,10 +290,26 @@ async def set_monitor(group_id: int, body: dict, user: dict = Depends(current_us
     members = await db_module.sharing_list_members(group_id)
     if not _member_of(members, user["org_id"]):
         raise HTTPException(status_code=403, detail="not a member")
+    group = await db_module.sharing_get_group(group_id)
+    remote = [m for m in await db_module.sharing_list_remote_members(group_id) if m.get("left_at") is None]
+    if body.get("partner_id"):
+        # hand monitoring to a remote member
+        import federation
+        pid = int(body["partner_id"])
+        if not any(m["partner_id"] == pid for m in remote):
+            raise HTTPException(status_code=400, detail="that partner is not a member")
+        await db_module.sharing_set_monitor_remote(group_id, pid, None)
+        await federation.enqueue(user["org_id"], pid, "monitor", {"group_key": group["key"], "monitor": "you"})
+        return {"ok": True, "monitor_partner_id": pid}
     target = int(body.get("org_id") or user["org_id"])
     if not _member_of(members, target):
         raise HTTPException(status_code=400, detail="target org is not a member")
-    await db_module.sharing_set_monitor(group_id, target)
+    await db_module.sharing_set_monitor_remote(group_id, None, target)
+    if remote and target == user["org_id"]:
+        import federation
+        for m in remote:
+            if m.get("local_org_id") == user["org_id"]:
+                await federation.enqueue(user["org_id"], m["partner_id"], "monitor", {"group_key": group["key"], "monitor": "me"})
     return {"ok": True, "monitor_org_id": target}
 
 

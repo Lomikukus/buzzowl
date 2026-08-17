@@ -148,6 +148,23 @@ async def process_outbox(limit: int = 200) -> dict:
     return stats
 
 
+def _doc_payload(doc: dict) -> dict:
+    """What travels to a partner instance for one document (no owner ids, no ids)."""
+    meta = {k: v for k, v in (doc.get("metadata") or {}).items() if k not in ("owner_ids", "shared_from")}
+    return {"doc_id": doc["doc_id"], "type": doc["type"], "title": doc.get("title") or "",
+            "content": doc.get("content") or "", "metadata": meta, "visibility": doc.get("visibility") or "shared",
+            "updated_at": (doc.get("updated_at") or doc.get("created_at") or "").isoformat()
+            if hasattr(doc.get("updated_at") or doc.get("created_at"), "isoformat") else None}
+
+
+async def _remote_targets(db, group_id: int) -> list[dict]:
+    try:
+        return [m for m in await db.sharing_list_remote_members(group_id)
+                if m.get("left_at") is None and m.get("partner_status") in ("active", "reverify")]
+    except Exception:
+        return []
+
+
 async def _process_row(db, transport: Transport, row: dict) -> int:
     group = await db.sharing_get_group(row["shared_client_id"])
     if not group or group["status"] != "active":
@@ -156,7 +173,8 @@ async def _process_row(db, transport: Transport, row: dict) -> int:
     members = [m for m in await db.sharing_list_members(group["id"]) if m["left_at"] is None]
     origin = row["origin_org_id"]
     targets = [m for m in members if m["org_id"] != origin]
-    if not targets:
+    remote = await _remote_targets(db, group["id"])
+    if not targets and not remote:
         return 0
     origin_member = next((m for m in members if m["org_id"] == origin), None)
     origin_org = await db.get_org(origin) if hasattr(db, "get_org") else None
@@ -179,6 +197,12 @@ async def _process_row(db, transport: Transport, row: dict) -> int:
         for m in targets:
             await transport.apply_document(m["org_id"], m["client_id"], doc_out, prov)
             applied += 1
+        if remote:
+            import federation
+            payload = {"group_key": prov["shared_client_key"], "doc": _doc_payload(doc)}
+            for m in remote:
+                await federation.enqueue(m["local_org_id"], m["partner_id"], "document", payload)
+                applied += 1
     elif kind == "document_delete":
         origin_doc_id = (row.get("payload") or {}).get("doc_id")
         if not origin_doc_id:
@@ -187,6 +211,12 @@ async def _process_row(db, transport: Transport, row: dict) -> int:
         for m in targets:
             await transport.delete_document(m["org_id"], sid)
             applied += 1
+        if remote:
+            import federation
+            for m in remote:
+                await federation.enqueue(m["local_org_id"], m["partner_id"], "document_delete",
+                                         {"group_key": str(group["key"]), "doc_id": origin_doc_id})
+                applied += 1
     elif kind == "profile":
         if not origin_member:
             return 0
@@ -206,6 +236,12 @@ async def _process_row(db, transport: Transport, row: dict) -> int:
         for m in targets:
             await transport.apply_profile(m["org_id"], m["client_id"], patch, prov)
             applied += 1
+        if remote:
+            import federation
+            for m in remote:
+                await federation.enqueue(m["local_org_id"], m["partner_id"], "profile",
+                                         {"group_key": str(group["key"]), "patch": patch})
+                applied += 1
     elif kind == "full_sync":
         # enqueue every shareable doc + the profile of the origin member (used on join)
         if not origin_member:
@@ -220,7 +256,8 @@ async def _process_row(db, transport: Transport, row: dict) -> int:
 # ---------------------------------------------------------------------------
 
 async def monitor_org_for_client(org_id: int, client_id: int) -> Optional[int]:
-    """None when the client is not shared; otherwise the org that runs monitoring."""
+    """None when the client is not shared; otherwise the org that runs monitoring
+    (-1 when a remote partner instance monitors)."""
     import context
     db = context.db_module
     if not context.DB_AVAILABLE or db is None:
@@ -228,6 +265,8 @@ async def monitor_org_for_client(org_id: int, client_id: int) -> Optional[int]:
     g = await db.sharing_group_for_client(client_id)
     if not g or g["status"] != "active":
         return None
+    if g.get("monitor_partner_id"):
+        return -1
     return g.get("monitor_org_id")
 
 

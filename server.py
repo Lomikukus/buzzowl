@@ -26,7 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import context
 from context import BASE_DIR, DB_AVAILABLE, RATE_LIMIT_AVAILABLE, config, console, db_module, executor, limiter, pwd_context
-from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router
+from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router
 from routers.pipeline import (
     ensure_dirs,
     _migrate_legacy_dirs,
@@ -229,6 +229,14 @@ async def startup() -> None:
         from agents.research_runner import run_research_workers
         run_research_workers(None, n_workers=n_workers)
         console.print(f"  Research workers: [green]{n_workers} workers started (all orgs)[/green]")
+        # Matrix federation runtime (Phase 5b): one bot per org with an identity; no-op otherwise.
+        try:
+            import federation as _federation
+            if _federation.enabled():
+                asyncio.create_task(_federation.start())
+                console.print("  Federation: [green]runtime scheduled[/green]")
+        except Exception as _fexc:
+            console.print(f"  [yellow]Federation not started: {_fexc}[/yellow]")
 
     console.print(f"  Ready. Open [cyan]http://localhost:8000[/cyan]\n")
 
@@ -239,6 +247,11 @@ async def shutdown() -> None:
         await db_module.close_db()
     if context._scheduler and context._scheduler.running:
         context._scheduler.shutdown(wait=False)
+    try:
+        import federation as _federation
+        await _federation.stop()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +437,7 @@ app.include_router(org_settings.router)
 app.include_router(outreach_router.router)
 app.include_router(deals_router.router)
 app.include_router(sharing_router.router)
+app.include_router(federation_router.router)
 app.include_router(pipeline.router)
 app.include_router(knowledge.router)
 app.include_router(agents.router)
