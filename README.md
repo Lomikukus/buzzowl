@@ -215,6 +215,7 @@ Precedence: environment variables override `config.yaml` where both exist.
 | | |
 |---|---|
 | [docs/troubleshooting.md](docs/troubleshooting.md) | it will not start, or an agent does nothing |
+| [docs/agents.md](docs/agents.md) | what the agents do, autonomy levels, watching runs |
 | [docs/backup-restore.md](docs/backup-restore.md) | backing up and restoring the database |
 | [docs/upgrading.md](docs/upgrading.md) | pulling a new version, migrations |
 | [docs/outreach.md](docs/outreach.md) | supervised outreach: SMTP, approval, replies |

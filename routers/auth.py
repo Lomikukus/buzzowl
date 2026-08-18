@@ -367,6 +367,37 @@ async def set_theme(body: dict, user: dict = Depends(current_user)):
     return {"ok": True, "ui_variant": saved or variant}
 
 
+@router.get("/identity")
+async def get_identity(user: dict = Depends(current_user)):
+    """The sender identity outreach mails use for this rep."""
+    ident = await db_module.get_user_identity(user["org_id"], user["id"]) if DB_AVAILABLE else {}
+    return {"identity": ident or {}}
+
+
+@router.patch("/identity")
+async def set_identity(body: dict, user: dict = Depends(current_user)):
+    """Update this rep's outreach identity (display name, reply-to, signature).
+
+    Empty strings clear the override and fall back to the account values."""
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    body = body or {}
+    patch: dict = {}
+    for field, key, limit in (
+        ("display_name", "outreach_display_name", 120),
+        ("reply_to",     "outreach_reply_to",     254),
+        ("signature",    "outreach_signature",    2000),
+    ):
+        if field in body:
+            patch[key] = str(body[field] or "").strip()[:limit]
+    reply_to = patch.get("outreach_reply_to")
+    if reply_to and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", reply_to):
+        raise HTTPException(status_code=400, detail="reply_to must be an email address")
+    if patch:
+        await db_module.update_user_settings(user["org_id"], user["id"], patch)
+    return {"ok": True, "identity": await db_module.get_user_identity(user["org_id"], user["id"])}
+
+
 @router.get("/users")
 async def list_users(user: dict = Depends(current_user)):
     """Return all users in the caller's org (admin only)."""

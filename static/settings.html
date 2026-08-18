@@ -141,6 +141,31 @@ tr:hover td { background: var(--c-linefaint, #222); }
       </div>
     </div>
 
+    <!-- Outreach identity (all users) — what your mails are sent as -->
+    <div class="section" id="identitySection">
+      <h2>Your outreach identity</h2>
+      <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
+        Outreach goes out from the organisation's mail address, but with <b>your</b> name and your reply-to, so answers
+        come back to you. Leave a field empty to use your account values.
+      </p>
+      <div style="max-width:560px;font-size:0.8rem">
+        <div class="form-row" style="margin-bottom:0.5rem">
+          <label>Display name</label>
+          <input id="identName" type="text" placeholder="Anna Weber">
+        </div>
+        <div class="form-row" style="margin-bottom:0.5rem">
+          <label>Reply-to address</label>
+          <input id="identReply" type="email" placeholder="anna@yourcompany.com">
+        </div>
+        <div class="form-row" style="margin-bottom:0.5rem">
+          <label>Signature (plain text, appended to every mail)</label>
+          <textarea id="identSig" rows="4" placeholder="Anna Weber&#10;Account Executive · Example GmbH&#10;+49 …"></textarea>
+        </div>
+        <button class="btn primary" onclick="saveIdentity()">Save identity</button>
+        <span id="identStatus" style="font-size:0.72rem;color:var(--c-muted2, #666);margin-left:0.6rem"></span>
+      </div>
+    </div>
+
     <!-- Mac App Token (all users) -->
     <div class="section">
       <h2>Your Account</h2>
@@ -608,6 +633,7 @@ async function init() {
   // Populate Mac App Token (all users)
   document.getElementById('macTokenDisplay').value = _token;
   loadNotifications();
+  loadIdentity();
   loadHeartbeats();
   if (_meUser.role === 'admin') {
     document.getElementById('adminSections').style.display = 'block';
@@ -621,6 +647,40 @@ async function init() {
     loadFederation();
   }
 }
+
+// ── Outreach identity (all users) ─────────────────────────────────────────
+async function loadIdentity() {
+  try {
+    const r = await fetch('/api/auth/identity', { headers: H() });
+    if (!r.ok) return;
+    const { identity } = await r.json();
+    document.getElementById('identName').value  = identity.display_name || '';
+    document.getElementById('identReply').value = identity.reply_to || '';
+    document.getElementById('identSig').value   = identity.signature || '';
+  } catch (e) { /* section stays empty */ }
+}
+
+async function saveIdentity() {
+  const status = document.getElementById('identStatus');
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/auth/identity', {
+      method: 'PATCH',
+      headers: H(),
+      body: JSON.stringify({
+        display_name: document.getElementById('identName').value,
+        reply_to:     document.getElementById('identReply').value,
+        signature:    document.getElementById('identSig').value,
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    status.textContent = r.ok ? 'Saved.' : (data.detail || 'Could not save.');
+  } catch (e) {
+    status.textContent = 'Could not save.';
+  }
+  setTimeout(() => { status.textContent = ''; }, 4000);
+}
+window.saveIdentity = saveIdentity;
 
 // ── Notifications / Telegram per person (all users, Phase 6b) ─────────────
 let _tgPollTimer = null;
