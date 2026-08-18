@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-ci.txt
+      - run: pip install -r requirements-ci.txt
+      - run: >
+          python -m pytest -q -p no:cacheprovider
+          --ignore=tests/test_search_integration.py
+          --ignore=tests/test_db.py
+  agent-service:
+    name: agent-service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent_service_ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: agent_service_ts/package-lock.json
+      - run: npm ci
+      - run: npm run build

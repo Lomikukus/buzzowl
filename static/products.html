@@ -200,7 +200,7 @@ textarea.detail-input { resize: vertical; min-height: 52px; }
   <div id="setupArea" style="display:none">
     <div class="setup-card">
       <div class="setup-title">Set Up Your Product Intelligence</div>
-      <div class="setup-sub">Enter your company info and Hermes will map your full product catalog — including product pages, pricing, and YouTube demo videos.</div>
+      <div class="setup-sub">Enter your company info and Buzzowl will map your full product catalog — including product pages, pricing, and YouTube demo videos.</div>
       <div class="form-row">
         <label class="form-label">Your Company Name</label>
         <input class="form-input" id="companyName" type="text" placeholder="Acme Corp" autocomplete="off">
@@ -210,7 +210,7 @@ textarea.detail-input { resize: vertical; min-height: 52px; }
         <input class="form-input" id="companyUrl" type="url" placeholder="https://acme.com" autocomplete="off">
       </div>
       <div class="form-row">
-        <label class="form-label">Known products (optional — helps Hermes find specific offerings)</label>
+        <label class="form-label">Known products (optional — helps Buzzowl find specific offerings)</label>
         <input class="form-input" id="productHints" type="text" placeholder="e.g. Watson AI, IBM Cloud, IBM MQ, IBM Maximo">
       </div>
       <div class="form-actions">
@@ -268,7 +268,7 @@ textarea.detail-input { resize: vertical; min-height: 52px; }
         <!-- Researching -->
         <div class="main-banner" id="bannerResearching" style="display:none">
           <div class="banner-title">Mapping Your Product Catalog</div>
-          <div class="banner-sub">Hermes is fetching product pages, pricing information, and YouTube demo videos.</div>
+          <div class="banner-sub">Buzzowl is fetching product pages, pricing information, and YouTube demo videos.</div>
           <div class="spinner-box">
             <div class="spinner"></div>
             <span id="bannerResearchingStatus">Starting research…</span>
@@ -289,7 +289,7 @@ textarea.detail-input { resize: vertical; min-height: 52px; }
         <!-- Deep researching -->
         <div class="main-banner" id="bannerDeepResearching" style="display:none">
           <div class="banner-title">Deep Research Running</div>
-          <div class="banner-sub">Hermes is doing a deep dive — product pages, YouTube demos, customer reviews, competitive positioning.</div>
+          <div class="banner-sub">Buzzowl is doing a deep dive — product pages, YouTube demos, customer reviews, competitive positioning.</div>
           <div class="spinner-box">
             <div class="spinner"></div>
             <span id="bannerDeepStatus">Fetching product details and transcribing demo videos…</span>
@@ -300,7 +300,7 @@ textarea.detail-input { resize: vertical; min-height: 52px; }
         <div class="main-banner" id="bannerVerify" style="display:none">
           <div class="verify-box">
             <h3>Verification ready — interview with Pi</h3>
-            <p>Hermes has built detailed profiles for your focus products. Pi will walk through each one with you — confirming descriptions, pain points, pricing, and target buyers.</p>
+            <p>Buzzowl has built detailed profiles for your focus products. Pi will walk through each one with you — confirming descriptions, pain points, pricing, and target buyers.</p>
             <div class="verify-actions">
               <button class="btn btn-teal btn-lg" onclick="openVerification()">Open Pi Verification Chat →</button>
               <button class="btn" onclick="dismissBanner()">Not now</button>
@@ -667,7 +667,7 @@ async function startResearch() {
   _state.company = { name, website_url: url, research_status: 'researching', metadata: {} };
   _state.products = [];
   renderPage();
-  toast('Research started — Hermes is mapping your product catalog');
+  toast('Research started — Buzzowl is mapping your product catalog');
 }
 
 // ---------------------------------------------------------------------------
@@ -681,7 +681,7 @@ function renderProductCheckboxes() {
     return;
   }
   document.getElementById('bannerPFSub').textContent =
-    `Hermes found ${n} product${n !== 1 ? 's' : ''}. Check the ones you actively sell for deeper research.`;
+    `Buzzowl found ${n} product${n !== 1 ? 's' : ''}. Check the ones you actively sell for deeper research.`;
   list.innerHTML = _state.products.map(p => `
     <label class="product-check-item">
       <input type="checkbox" class="focus-checkbox" data-id="${p.id}" checked>
@@ -760,7 +760,7 @@ async function researchMore() {
 async function rerunResearch() {
   if (!_state.company) return;
   const hints = prompt('Hint at additional products (optional, comma-separated):') || '';
-  if (!confirm(`Re-run Hermes product research for ${_state.company.name}?`)) return;
+  if (!confirm(`Re-run product research for ${_state.company.name}?`)) return;
   const r = await _api('POST', '/api/seller/company', {
     name: _state.company.name,
     website_url: _state.company.website_url,

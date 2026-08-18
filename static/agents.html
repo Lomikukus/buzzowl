@@ -217,7 +217,7 @@
             font-size: 0.58rem; padding: 0.05rem 0.3rem; border-radius: 2px;
             background: #1a2a3a; color: var(--c-blue, #569cd6); text-transform: uppercase; flex-shrink: 0;
         }
-        .run-badge.hermes { background: #2a1a3a; color: var(--c-purple, #c586c0); }
+        .run-badge.legacy { background: #2a1a3a; color: var(--c-purple, #c586c0); }
         .run-subject { color: #ddd; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .run-status { font-size: 0.6rem; flex-shrink: 0; }
         .run-meta { color: var(--c-faint2, #444); font-size: 0.62rem; margin-top: 0.1rem; }
@@ -536,7 +536,7 @@
 <!-- New research modal -->
 <div class="overlay" id="modal">
     <div class="modal">
-        <h3>Start Research <span style="font-size:0.65rem;color:var(--c-faint, #555);font-weight:normal">via Hermes</span></h3>
+        <h3>Start Research <span style="font-size:0.65rem;color:var(--c-faint, #555);font-weight:normal">via Pi</span></h3>
         <div class="form-row">
             <label>Subject</label>
             <input id="r-subject" placeholder="e.g. Bosch GmbH" autofocus />
@@ -1414,7 +1414,7 @@ function renderRunsSidebar(runs) {
 function renderRunsList(runs) {
     const el = document.getElementById('run-list');
     if (!runs.length) {
-        el.innerHTML = '<div class="tc-empty">No Pi/Hermes runs yet. Trigger research to start one.</div>';
+        el.innerHTML = '<div class="tc-empty">No Pi runs yet. Trigger research to start one.</div>';
         return;
     }
     el.innerHTML = runs.map(r => {

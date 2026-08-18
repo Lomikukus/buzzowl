@@ -1,0 +1,50 @@
+name: Install / setup problem
+description: docker compose up (or the venv path) isn't working
+labels: ["install"]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x86_64)
+        - Linux (ARM64)
+        - Windows / WSL2
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: ram
+    attributes:
+      label: RAM available to Docker
+      placeholder: e.g. 16 GB total, 8 GB allocated to Docker Desktop
+    validations:
+      required: true
+
+  - type: input
+    id: docker-version
+    attributes:
+      label: Docker / Compose version
+      description: Output of `docker --version` and `docker compose version`.
+    validations:
+      required: true
+
+  - type: input
+    id: failed-step
+    attributes:
+      label: Which step failed
+      placeholder: e.g. "docker compose up -d", "camofox make build", first login, migrations
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Full output
+      description: Paste the complete command output, not just the last line. Use `docker compose logs <service>` for a specific container.
+      render: shell
+    validations:
+      required: true

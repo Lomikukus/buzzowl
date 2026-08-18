@@ -65,8 +65,18 @@ _live_ws_connections: dict = {}   # WebSocket -> org_id (multi-tenant: broadcast
 # Config
 # ---------------------------------------------------------------------------
 
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge `overlay` into `base` (overlay wins on conflicts)."""
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def load_config() -> dict:
-    """Load config.yaml from the project root, merge with .env, return as dict.
+    """Load config.yaml (+ optional config.local.yaml overlay) and .env.
 
     Sensible defaults are applied for every key so callers can always use
     config.get("key") without KeyError.
@@ -85,6 +95,14 @@ def load_config() -> dict:
         with open(config_path) as f:
             loaded = yaml.safe_load(f) or {}
         defaults.update(loaded)
+    # Optional untracked overlay: keep machine-specific choices (models, local
+    # experiments) out of the tracked config.yaml. Nested dicts merge, so a local
+    # file can override a single llm role without repeating the whole block.
+    local_path = BASE_DIR / os.environ.get("CONFIG_LOCAL", "config.local.yaml")
+    if local_path.exists():
+        with open(local_path) as f:
+            overlay = yaml.safe_load(f) or {}
+        _deep_merge(defaults, overlay)
     # Prefer .env HFTOKEN over config.yaml when the yaml value is blank
     if not defaults.get("hf_token"):
         defaults["hf_token"] = os.environ.get("HFTOKEN", "")

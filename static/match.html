@@ -182,8 +182,8 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 
       <div class="panel-controls" id="panelControls" style="display:none">
         <div class="model-group">
-          <span class="model-label">Research model (Hermes)</span>
-          <select class="model-select" id="hermesModelSel"></select>
+          <span class="model-label">Research model (Pi)</span>
+          <select class="model-select" id="researchModelSel"></select>
         </div>
         <div class="model-group">
           <span class="model-label">Synthesis model (Pi)</span>
@@ -198,7 +198,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
         <div class="empty-state">
           <div class="icon">🎯</div>
           <div class="msg">Select a client to view their match report</div>
-          <div style="font-size:0.75rem;color:var(--c-faint2, #444);margin-top:0.3rem">Reports are generated automatically after Hermes researches a client</div>
+          <div style="font-size:0.75rem;color:var(--c-faint2, #444);margin-top:0.3rem">Reports are generated automatically after Pi researches a client</div>
         </div>
       </div>
 
@@ -249,7 +249,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
     ];
     const models = cloudModels.length ? cloudModels : defaults;
 
-    ['hermesModelSel', 'piModelSel'].forEach((id, idx) => {
+    ['researchModelSel', 'piModelSel'].forEach((id, idx) => {
       const sel = document.getElementById(id);
       sel.innerHTML = models.map(m =>
         `<option value="${m.id}">${m.label || m.id}</option>`
@@ -408,7 +408,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
   // ── render states ──────────────────────────────────────────────────────────
   function renderRunning(state) {
     const runs = state.agent_runs || [];
-    const hermes = state.hermes_live;
+    const research = state.pi_live;   // live tool-call counter from the agent service
 
     // Determine current phase
     const pprRun = runs.find(r => r.agent_type === 'pain_point_research' && r.status === 'running');
@@ -418,21 +418,21 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 
     if (msRun) {
       phaseTitle = 'Pi is synthesizing…';
-      phaseDetail = 'Building product-fit report from Hermes research findings.';
+      phaseDetail = 'Building the product-fit report from the research findings.';
     } else if (pprRun) {
-      phaseTitle = 'Hermes is researching…';
-      const liveCount = hermes && hermes.reachable ? hermes.tool_calls_count : null;
+      phaseTitle = 'Researching this client…';
+      const liveCount = research && research.reachable ? research.tool_calls_count : null;
       const dbCount   = pprRun.tool_calls_count;
       const count     = liveCount ?? dbCount;
-      phaseDetail = hermes && !hermes.reachable
-        ? 'Hermes unreachable — watchdog monitoring for timeout.'
+      phaseDetail = research && !research.reachable
+        ? 'Research agent unreachable — watchdog monitoring for timeout.'
         : 'Researching pain points, buying signals, and strategic initiatives.';
       if (count != null) {
         toolBadge = `<span class="phase-tool-count">${count} tool calls made</span>`;
       }
     } else {
       phaseTitle = 'Starting…';
-      phaseDetail = 'Sending task to Hermes research agent.';
+      phaseDetail = 'Sending the task to the research agent.';
     }
 
     document.getElementById('panelBody').innerHTML = `
@@ -475,7 +475,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
         <div class="icon">📋</div>
         <div class="msg">No match report yet for <strong>${escHtml(clientName)}</strong></div>
         <div style="font-size:0.75rem;color:var(--c-faint2, #444);margin-top:0.4rem">
-          Run a match analysis, or it will start automatically after Hermes researches this client.
+          Run a match analysis, or it will start automatically once this client has been researched.
         </div>
       </div>
     `;
@@ -586,7 +586,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
   });
 
   async function triggerMatch(clientName) {
-    const hermes_model = document.getElementById('hermesModelSel').value;
+    const research_model = document.getElementById('researchModelSel').value;
     const pi_model     = document.getElementById('piModelSel').value;
     const btn = document.getElementById('runMatchBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
@@ -598,8 +598,8 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
         headers: H,
         body: JSON.stringify({
           client_name:  clientName,
-          hermes_brain: 'openrouter',
-          hermes_model,
+          research_brain: 'openrouter',
+          research_model,
           pi_brain:     'openrouter',
           pi_model,
         }),
@@ -612,7 +612,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
       }
       showStatus('Match analysis started…', true);
       // Optimistic state — render running immediately
-      renderRunning({ agent_runs: [], hermes_live: null });
+      renderRunning({ agent_runs: [], pi_live: null });
       const c = allClients.find(x => x.name === clientName);
       if (c) {
         if (!c.metadata) c.metadata = {};
@@ -660,7 +660,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
     const btn = document.getElementById('runAllBtn');
     btn.disabled = true;
 
-    const hermes_model = document.getElementById('hermesModelSel')?.value || 'deepseek/deepseek-v4-flash';
+    const research_model = document.getElementById('researchModelSel')?.value || 'deepseek/deepseek-v4-flash';
     const pi_model     = document.getElementById('piModelSel')?.value     || 'deepseek/deepseek-v4-pro';
 
     // Clients without a recent report (no done status or stale)
@@ -690,8 +690,8 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
           headers: H,
           body: JSON.stringify({
             client_name:  c.name,
-            hermes_brain: 'openrouter',
-            hermes_model,
+            research_brain: 'openrouter',
+            research_model,
             pi_brain:     'openrouter',
             pi_model,
           }),
@@ -709,7 +709,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
     // If a client is selected and was in targets, start polling
     if (selectedClient && targets.find(c => c.name === selectedClient.name)) {
       clearPoll();
-      renderRunning({ agent_runs: [], hermes_live: null });
+      renderRunning({ agent_runs: [], pi_live: null });
       showStatus('Match analysis started…', true);
       pollTimer = setInterval(() => loadMatchState(selectedClient.name), 5000);
     }

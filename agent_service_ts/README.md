@@ -1,6 +1,9 @@
-# Agent Service — TypeScript + Pi (Candidate A)
+# Agent service (TypeScript, Pi runtime)
 
-Phase 12.5 framework evaluation candidate. Runs in Docker — do not install packages on the host.
+The agent runtime: it receives a task, plans, calls tools (search, page fetch,
+knowledge read/write), and writes source-linked documents back into PostgreSQL.
+Built on [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai);
+runs as the `agent-pi` container — do not install its packages on the host.
 
 ## HTTP Contract
 
@@ -19,12 +22,12 @@ GET    /health            → liveness check
 ```json
 {
   "agent_type": "research | osint | enrichment | org | system",
-  "task": "research Bosch — focus on recent executive changes",
+  "task": "research Acme Corp — focus on recent executive changes",
   "org_id": 1,
-  "subject": "Bosch",
+  "subject": "Acme Corp",
   "subject_type": "company | person | topic",
-  "brain": "ollama | openrouter | claude",
-  "model": "qwen3.5",
+  "provider_name": "openrouter",
+  "model": "deepseek/deepseek-v4-flash",
   "max_queries": 20,
   "callback_url": "http://host.docker.internal:8000/api/agents/callback"
 }
@@ -37,44 +40,49 @@ GET    /health            → liveness check
   "run_id": "abc123",
   "status": "done | failed",
   "agent_type": "research",
-  "subject": "Bosch",
+  "subject": "Acme Corp",
   "output": { "findings_saved": 12, "signals_extracted": 3 },
   "error": null
 }
 ```
 
-## Build & Run
+## Build & run
 
 ```bash
-# From repo root:
-docker compose --profile bench up agent-pi
+# From the repo root — part of the default stack:
+docker compose up -d --build agent-pi
 
-# Check health:
 curl http://localhost:8001/health
+docker compose logs -f agent-pi
 ```
+
+Local TypeScript work: `npm install && npm run build` inside this directory; the
+container is the only supported runtime.
 
 ## Environment (injected by docker-compose.yml)
 
 - `DATABASE_URL` — PostgreSQL connection string
 - `OLLAMA_URL` — `http://host.docker.internal:11434` (reaches macOS host Ollama)
-- `OPENROUTER_API_KEY` — injected from `HERMES` in `.env` (OpenRouter key for benchmark runs)
-- `DEFAULT_BRAIN` — `openrouter` (primary) or `ollama` (fallback)
-- `DEFAULT_MODEL` — `minimax/minimax-m2.7` (primary); override per-run via `POST /runs` body
-- `AGENT_SERVICE_PORT` — 8001
+- `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` — provider keys from `.env`
+- `DEFAULT_BRAIN` — `openrouter` unless overridden
+- `DEFAULT_MODEL` — `deepseek/deepseek-v4-flash`; override per run in the `POST /runs` body
+- `SEARXNG_URL`, `CAMOFOX_URL`, `BROWSER_SERVICE_URL` — tool backends (page fetch degrades to plain HTTP when the browser stack is down)
+- `AGENT_SERVICE_TOKEN` — shared secret with the main server (required)
+- `BUZZOWL_SECRET_KEY` — decrypts per-org LLM keys stored in the database
+- `AGENT_SERVICE_PORT` — 8001, `AGENT_MAX_CONCURRENT` — parallel runs (default 2)
 
 ## Models
 
-**Primary (OpenRouter):** `minimax/minimax-m2.7` — set `brain: openrouter` in `POST /runs`.
-API key comes from `HERMES` in `.env`, passed into the container as `OPENROUTER_API_KEY`.
-
-**Fallback (Ollama):** set `brain: ollama`, `model: qwen3.5` in `POST /runs`.
-Reaches the macOS host Ollama via `OLLAMA_URL`.
+Providers are resolved from the `llm:` block in the mounted `config.yaml` — the
+server never sends API keys over HTTP, it sends `{provider_name, model}` and the
+container resolves the key locally (env var or, for a hosted org, the encrypted
+per-org key from the database). Any OpenAI-compatible endpoint works, including a
+local Ollama/LM Studio via `base_url`.
 
 ## Implementation notes
 
-- `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` — Pi agent engine
-- `pi-ollama` extension required for reliable tool_call streaming with local Ollama
-- OpenRouter: native first-class support — pass `base_url: "https://openrouter.ai/api/v1"` + `OPENROUTER_API_KEY`
-- Fastify wrapper: ~80 lines mapping `POST /runs` → Pi agent run → callback
-- Tool registry: TypeScript async functions calling PostgreSQL via `pg` npm package
-- Vault writes: Node.js `fs` + `gray-matter` to `/vault` (mounted from `./north-info`)
+- `@earendil-works/pi-ai` — the agent engine (planning loop, tool calls, streaming)
+- Fastify wrapper mapping `POST /runs` → agent run → callback to the main server
+- Tool registry: TypeScript async functions talking to PostgreSQL via `pg`
+- Everything the agent writes goes into the `documents` table with its `agent_run_id`
+  and a `## Sources` section — there is no file-based vault

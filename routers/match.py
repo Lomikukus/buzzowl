@@ -31,6 +31,9 @@ except Exception:
 
 class MatchRunRequest(BaseModel):
     client_name: str
+    research_brain: Optional[str] = None
+    research_model: Optional[str] = None
+    # Field names shipped before the rename — still accepted from older clients.
     hermes_brain: Optional[str] = None
     hermes_model: Optional[str] = None
     pi_brain: Optional[str] = None
@@ -42,8 +45,8 @@ class MatchRunRequest(BaseModel):
 async def _fire_pain_point_research(
     org_id: int,
     client_name: str,
-    hermes_brain: str,
-    hermes_model: str,
+    research_brain: str,
+    research_model: str,
     pi_brain: str,
     pi_model: str,
 ) -> dict:
@@ -62,7 +65,7 @@ async def _fire_pain_point_research(
         triggered_by=None,
     )
 
-    # Store pi_brain/pi_model in DB now so the callback can retrieve them even after Hermes drops them
+    # Store pi_brain/pi_model in the DB now so the callback still has them later
     await db_module.update_agent_run(
         run_id, "pending",
         output={"_pi_brain": pi_brain, "_pi_model": pi_model},
@@ -72,9 +75,9 @@ async def _fire_pain_point_research(
         "task": task,
         "agent_type": "pain_point_research",
         "org_id": org_id,
-        "provider": llm.provider_for_brain(hermes_brain),
-        "brain": hermes_brain,
-        "model": hermes_model,
+        "provider": llm.provider_for_brain(research_brain),
+        "brain": research_brain,
+        "model": research_model,
         "subject": client_name,
         "callback_url": f"{server_url}/api/agents/callback",
     }
@@ -118,8 +121,10 @@ async def run_match(body: MatchRunRequest, user: dict = Depends(current_user)):
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
-    hermes_brain = body.hermes_brain or config.get("match_brain", config.get("research_brain", "openrouter"))
-    hermes_model = body.hermes_model or config.get("match_research_model", config.get("research_model", "deepseek/deepseek-v4-flash"))
+    research_brain = (body.research_brain or body.hermes_brain
+                      or config.get("match_brain", config.get("research_brain", "openrouter")))
+    research_model = (body.research_model or body.hermes_model
+                      or config.get("match_research_model", config.get("research_model", "deepseek/deepseek-v4-flash")))
     pi_brain = body.pi_brain or config.get("match_brain", "openrouter")
     pi_model = body.pi_model or config.get("match_model", "deepseek/deepseek-v4-pro")
 
@@ -138,10 +143,10 @@ async def run_match(body: MatchRunRequest, user: dict = Depends(current_user)):
 
     try:
         result = await _fire_pain_point_research(
-            org_id, client_name, hermes_brain, hermes_model, pi_brain, pi_model
+            org_id, client_name, research_brain, research_model, pi_brain, pi_model
         )
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"Hermes service unavailable: {exc}")
+        raise HTTPException(status_code=503, detail=f"Agent service unavailable: {exc}")
 
     return {"run_id": result["run_id"], "status": "researching", "client_name": client_name}
 

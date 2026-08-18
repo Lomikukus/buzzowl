@@ -78,20 +78,23 @@ llm:
     chatgpt:
       kind: pi
       headers: {pi_provider: openai-codex}
+  # Defaults assume one OpenRouter key (OPENROUTER_API_KEY in .env). Point any
+  # role at another provider you configured above — e.g. summary: {provider:
+  # ollama, model: qwen3.5} to keep meeting summaries entirely local.
   roles:
-    default:  {provider: chatgpt,    model: gpt-5.4-mini}
-    research: {provider: chatgpt,    model: gpt-5.4-mini}
-    pipeline: {provider: chatgpt,    model: gpt-5.4-mini}
+    default:  {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    research: {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    pipeline: {provider: openrouter, model: deepseek/deepseek-v4-flash}
     chat:     {provider: openrouter, model: deepseek/deepseek-v4-pro}
-    match:    {provider: chatgpt,    model: gpt-5.4}
-    summary:  {provider: ollama,     model: qwen3.5}
-    triage:   {provider: chatgpt,    model: gpt-5.4-mini}
+    match:    {provider: openrouter, model: deepseek/deepseek-v4-pro}
+    summary:  {provider: openrouter, model: deepseek/deepseek-v4-flash}
+    triage:   {provider: openrouter, model: deepseek/deepseek-v4-flash}
 
 # Subscription logins (ChatGPT-Codex / GitHub Copilot flows in the Pi service).
 # GRAY ZONE: neither vendor officially sanctions these for third-party apps
 # without a whitelist; Anthropic's flow is banned outright and never offered.
-# Enable only after reviewing the providers' terms of service.
-llm_oauth_gray_flows: true
+# Off by default — enable only after reviewing the providers' terms of service.
+llm_oauth_gray_flows: false
 
 # Agent runtime (legacy keys — still honored as fallback when llm: is absent)
 agent_brain: openrouter  # ollama | claude | openrouter — used for enrichment/org agents
@@ -106,9 +109,9 @@ anthropic_api_key: ""    # required only if agent_brain or research_brain: claud
 openrouter_api_key: ""   # required only if agent_brain or research_brain: openrouter (get key at openrouter.ai)
 
 # Match page — proactive product-client matching
-match_brain: openai-codex
-match_research_model: gpt-5.4-mini  # Stage 1: pain-point web research (Pi)
-match_model: gpt-5.4             # Stage 2: Pi match synthesis (reasoning)
+match_brain: openrouter
+match_research_model: deepseek/deepseek-v4-flash  # Stage 1: pain-point web research
+match_model: deepseek/deepseek-v4-pro            # Stage 2: match synthesis (reasoning)
 match_watchdog_timeout_secs: 1800  # 30 min absolute cap for match runs
 
 # Cloud model options (used by match page and other UI model selectors)
@@ -124,18 +127,18 @@ cloud_models:
   - id: qwen/qwen3.6-plus
     label: "Qwen3.6 Plus"
 
-# Agent service — Pi handles all agent types
-# Start with: docker compose --profile research up -d
+# Agent service — the Pi container handles all agent types.
+# In Docker the URL is overridden by AGENT_PI_URL=http://agent-pi:8001.
 agent_service_url_pi:     "http://localhost:8001"   # Pi: all agent types
 agent_service_url:        "http://localhost:8001"   # legacy fallback (single-backend mode)
 agent_service_token: ""             # shared secret for internal auth (set same value in Docker env)
-agent_service_brain: openai-codex          # default brain
-agent_service_model: "gpt-5.4-mini"
+agent_service_brain: openrouter            # default brain for agent runs
+agent_service_model: "deepseek/deepseek-v4-flash"
 # Pi chat backend — used by the knowledge page chat interface (Pi agent Q&A over the KB)
-# v4-pro: v4-flash proved weak at multi-step tool calling (Session 80); chat
-# quality drives evaluation UX and chat volume is low, so the cost delta is cents.
-pi_chat_brain: openai-codex
-pi_chat_model: gpt-5.4
+# A stronger model pays off here: the flash tier is weak at multi-step tool
+# calling, and chat volume is low, so the cost difference is cents.
+pi_chat_brain: openrouter
+pi_chat_model: deepseek/deepseek-v4-pro
 # Backend routing: "pi" | "python" (Hermes retired in Phase 29)
 agent_service_backend: "pi"
 # URL the main server is reachable at from inside Docker containers (for callbacks)
@@ -145,9 +148,9 @@ server_url: "http://host.docker.internal:8000"
 # fall back to server_url or relative paths.
 public_url: ""
 
-# Context windows (num_ctx sent to Ollama on every call)
-# qwen3.5 native max: 32768. Default Ollama value is only 2048 — far too small.
-# 24 GB Apple Silicon: 16384 costs ~2.4 GB KV cache; 32768 costs ~4.8 GB.
+# Context windows (num_ctx, only used by local Ollama backends — Ollama's own
+# default of 2048 is far too small). 24 GB Apple Silicon: 16384 ≈ 2.4 GB KV
+# cache, 32768 ≈ 4.8 GB.
 agent_num_ctx: 16384          # leaf agents: enrichment, research, osint
 orchestrator_num_ctx: 32768   # orchestrator (think=True) needs headroom for reasoning tokens
 

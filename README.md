@@ -48,20 +48,33 @@ read and write the same knowledge base.
 
 ## Quickstart (Docker)
 
-Requirements: Docker with Compose v2.
+**You need:** Docker with Compose v2 · ~8 GB RAM free (the default stack reserves
+about 4 GB across six containers) · ~15 GB disk · an LLM credential (an
+[OpenRouter](https://openrouter.ai) key is the shortest path, see
+[Bring your own LLM](#bring-your-own-llm)). Runs on Apple Silicon and x86_64.
 
 ```bash
-git clone <repo-url> buzzowl
+git clone https://github.com/Lomikukus/buzzowl.git
 cd buzzowl
 
 cp .env.example .env
-# Generate the internal service token and put it in .env:
-openssl rand -hex 32        # -> AGENT_SERVICE_TOKEN=<paste>
-# Add at least one LLM credential (see "Bring your own LLM" below), e.g.:
-# OPENROUTE=<your OpenRouter API key>
+openssl rand -hex 32        # -> put it in .env as AGENT_SERVICE_TOKEN=
+openssl rand -hex 32        # -> put it in .env as BUZZOWL_SECRET_KEY=
+# and at least one LLM credential, e.g. OPENROUTER_API_KEY=sk-or-...
+
+# One-time: build the hardened browser image the agents fetch pages with
+# (~2.5 GB, a few minutes). On x86_64 hosts also set CAMOFOX_ARCH=x86_64 in .env.
+./scripts/build-browser.sh
 
 docker compose up -d
 # open http://localhost:8000/login
+```
+
+Without that browser image the stack still runs — start it without the two
+browser containers and agents fall back to plain HTTP fetching:
+
+```bash
+docker compose up -d db searxng server agent-pi
 ```
 
 First-run bootstrap (empty database) works one of two ways:
@@ -139,6 +152,11 @@ Docker Compose runs the platform as a set of services:
 | `camofox` + `browser-service` | Hardened Firefox + Playwright service — browser-based fetching for agents |
 | `pgweb` | DB browser UI for local debugging (host port 5433, `--profile debug`) |
 | `cloudflared` | Tunnel for exposing an instance publicly (`--profile tunnel`) |
+| `synapse` | Matrix homeserver for cross-install sharing (`--profile federation`, see [docs/federation.md](docs/federation.md)) |
+
+`camofox` is the one image Compose neither pulls nor builds — build it once with
+`./scripts/build-browser.sh` (it needs browser binaries that upstream does not ship
+in the Git context). Everything else comes up with `docker compose up -d`.
 
 Design in one paragraph: the schema is document-oriented — meetings, research,
 notes, and signals are all rows in a universal `documents` table with a `type`
@@ -158,8 +176,10 @@ The Docker deployment does **not** transcribe audio by default — it ingests te
   records and transcribes locally on Apple Silicon, then posts finished transcripts
   to `POST /api/transcript/ingest` (authenticated with a per-user token from
   Settings). The server does no Whisper inference.
-- **Transcribe profile (optional)** — an optional Compose profile that runs Whisper
-  inside Docker for server-side file transcription, useful when no Mac is involved.
+- **In-Docker live transcription (optional)** — set `INSTALL_TRANSCRIBE=1` and
+  `TRANSCRIPTION_MODE=local` in `.env`, then `docker compose up -d --build server`:
+  the browser microphone streams to faster-whisper inside the container (CPU only,
+  no WhisperX post-pass). It is a build argument, not a Compose profile.
 - **Local mode (`transcription_mode: local`)** — run `python server.py` directly on
   a Mac: browser mic → faster-whisper live transcription, then a WhisperX post-pass
   with speaker diarization (requires a HuggingFace token for the pyannote models,
@@ -179,6 +199,10 @@ Two places:
 - **`config.yaml`** — models and providers (`llm:` block, embeddings), agent
   scheduling and throttling, next-best-action weights, SMTP for digests,
   `public_url` for outbound links. Every key is commented in the file itself.
+- **`config.local.yaml`** (optional, gitignored) — an overlay merged on top of
+  `config.yaml`. Put machine-specific choices there (a different model per role,
+  a local Ollama) and leave the tracked file alone. Nested keys merge, so
+  overriding one role does not repeat the block.
 - **`.env`** (from `.env.example`) — secrets and per-deployment values:
   `AGENT_SERVICE_TOKEN` (required, shared secret between server and agent
   service), LLM/API keys, optional `ADMIN_USERNAME`/`ADMIN_PASSWORD` bootstrap,
@@ -186,26 +210,40 @@ Two places:
 
 Precedence: environment variables override `config.yaml` where both exist.
 
+## Running it in practice
+
+| | |
+|---|---|
+| [docs/troubleshooting.md](docs/troubleshooting.md) | it will not start, or an agent does nothing |
+| [docs/backup-restore.md](docs/backup-restore.md) | backing up and restoring the database |
+| [docs/upgrading.md](docs/upgrading.md) | pulling a new version, migrations |
+| [docs/outreach.md](docs/outreach.md) | supervised outreach: SMTP, approval, replies |
+| [docs/federation.md](docs/federation.md) | sharing clients with another install |
+| [docs/privacy.md](docs/privacy.md) | what data goes where, GDPR for operators |
+| [docs/adding-an-org.md](docs/adding-an-org.md) | more users, invite keys |
+
 ## Development
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-ci.txt   # everything except the heavy WhisperX stack
 
 # run the server against a local Docker Postgres
 docker compose up -d db
 python server.py
 
-# tests (CI runs the fast suite)
-pytest tests/ -m "not slow and not ollama"
+# the suite CI runs on every push (two files need a live test database and are
+# excluded here — see CONTRIBUTING.md)
+pytest -q --ignore=tests/test_search_integration.py --ignore=tests/test_db.py
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup and
+[SECURITY.md](SECURITY.md) to report a vulnerability.
 
 Conventions:
 
-- Development happens on `test-branch`; `main` is the release branch (CI runs on
-  both, deployment templates trigger from `main` only — see
-  `docs/examples/deploy.yml.example`).
+- Work on a branch, open a pull request against `main`, keep CI green.
 - The schema is document-oriented: new content types are new `type` values on the
   `documents` table, never new tables. Attributes go into JSONB `metadata`.
 - Graceful degradation everywhere: LLM offline → skip summary; DB index fails →

@@ -418,9 +418,13 @@ class TestMultiMailFailureModes:
         assert "NorthStar Analytics" in prompt
         assert "PRODUCTS TO PROMOTE" in prompt
 
-    def test_no_valid_products_returns_404(self, app_client):
-        """POST with all invalid product IDs returns 404."""
-        with patch("server.db_module.get_product", new_callable=AsyncMock, return_value=None):
+    def test_unknown_products_still_sends_a_general_mail(self, app_client):
+        """Unknown product IDs are dropped, not fatal: the endpoint falls back to a
+        general email with no product focus (deliberate — see routers/products.py)."""
+        with (
+            patch("server.db_module.get_product", new_callable=AsyncMock, return_value=None),
+            patch("server.db_module.log_prompt"),
+        ):
             resp = app_client.post(
                 "/api/products/multi-mail",
                 json={
@@ -430,7 +434,7 @@ class TestMultiMailFailureModes:
                 },
                 headers={"Authorization": "Bearer fake"},
             )
-        assert resp.status_code == 404
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

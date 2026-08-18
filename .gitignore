@@ -41,8 +41,8 @@ camofox-browser/
 agent_service_ts/node_modules/
 agent_service_ts/dist/
 
-# Claude Code worktrees (embedded repos)
-.claude/worktrees/
+# Local editor/agent config — machine specific, never shared
+.claude/
 
 # Personal documents — root-level PDFs and local screenshots never belong in the repo
 Master_expose.pdf

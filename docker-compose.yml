@@ -81,6 +81,9 @@ services:
       - "8000:8000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      # Optional untracked overlay (see docs): create config.local.yaml, then add
+      #   - ./config.local.yaml:/app/config.local.yaml:ro
+      # here and to agent-pi via a docker-compose.override.yml.
       - ./data:/app/data:rw
       - ./static:/app/static:ro
     environment:
@@ -109,7 +112,14 @@ services:
       - SMTP_PASS=${SMTP_PASS:-}
       - SMTP_FROM=${SMTP_FROM:-}
       - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Buzzowl}
-      # First-boot admin bootstrap (server-side support lands separately) — set in .env.
+      # IMAP — reply/bounce ingestion for supervised outreach (optional).
+      - IMAP_HOST=${IMAP_HOST:-}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - IMAP_USER=${IMAP_USER:-}
+      - IMAP_PASS=${IMAP_PASS:-}
+      - IMAP_FOLDER=${IMAP_FOLDER:-INBOX}
+      # First-boot admin bootstrap — set in .env (otherwise a one-time
+      # registration key is printed to `docker compose logs server`).
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     extra_hosts:
@@ -140,7 +150,8 @@ services:
     #     ARCH: ${CAMOFOX_ARCH:-aarch64}
     container_name: buzzowl_camofox
     ports:
-      - "9377:9377"
+      # Loopback only — agents reach it inside the compose network as camofox:9377.
+      - "127.0.0.1:9377:9377"
     restart: unless-stopped
     # Cap the biggest memory hog so it can't take the whole box, but leave enough
     # headroom (peak ~1.0 GB) that it keeps rendering pages. OOM-kills a tab, not the DB.
@@ -156,7 +167,8 @@ services:
     build: ./browser_service
     container_name: buzzowl_browser_service
     ports:
-      - "3001:3000"
+      # Loopback only — the agent service uses browser-service:3000 internally.
+      - "127.0.0.1:3001:3000"
     shm_size: '1gb'
     restart: unless-stopped
     mem_limit: 640m
@@ -173,7 +185,8 @@ services:
     restart: unless-stopped
     mem_limit: 448m
     ports:
-      - "8001:8001"
+      # Loopback only — the server talks to agent-pi:8001 inside the network.
+      - "127.0.0.1:8001:8001"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       # Subscription-OAuth credential store (chmod 600 JSON) — survives rebuilds

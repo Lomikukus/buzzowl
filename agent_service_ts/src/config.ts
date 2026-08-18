@@ -30,6 +30,28 @@ let yamlEmbedDim: number | undefined;
 // hosted: block from config.yaml (Phase 6a) — only enforce_plans matters here.
 let yamlHostedEnforce = false;
 
+/** Recursively merge `overlay` into `base` (overlay wins), same as the server. */
+function deepMerge(base: Record<string, unknown>, overlay: Record<string, unknown>): Record<string, unknown> {
+  for (const [key, value] of Object.entries(overlay)) {
+    const current = base[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)
+        && current && typeof current === 'object' && !Array.isArray(current)) {
+      deepMerge(current as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      base[key] = value;
+    }
+  }
+  return base;
+}
+
+function readYaml(path: string): Record<string, unknown> | null {
+  try {
+    return (loadYaml(readFileSync(path, 'utf-8')) as Record<string, unknown> | null) ?? null;
+  } catch {
+    return null;                              // missing or invalid — caller moves on
+  }
+}
+
 function loadLlmBlock(): LlmYaml {
   const candidates = [
     process.env.CONFIG_YAML_PATH ?? '',
@@ -38,17 +60,19 @@ function loadLlmBlock(): LlmYaml {
     resolve(process.cwd(), '../config.yaml'),  // dev: run from agent_service_ts/
   ].filter(Boolean);
   for (const path of candidates) {
-    try {
-      const parsed = loadYaml(readFileSync(path, 'utf-8')) as Record<string, unknown> | null;
-      if (yamlEmbedDim === undefined) {
-        const dim = Number(parsed?.embed_dim);
-        if (Number.isInteger(dim) && dim > 0) yamlEmbedDim = dim;
-      }
-      const hosted = parsed?.hosted as { enforce_plans?: boolean } | undefined;
-      if (hosted && typeof hosted === 'object') yamlHostedEnforce = !!hosted.enforce_plans;
-      const llm = parsed?.llm as LlmYaml | undefined;
-      if (llm && typeof llm === 'object') return llm;
-    } catch { /* unreadable or invalid — try the next candidate */ }
+    const parsed = readYaml(path);
+    if (!parsed) continue;
+    // Optional untracked overlay next to it (same mechanism as the server).
+    const local = readYaml(path.replace(/config\.yaml$/, 'config.local.yaml'));
+    if (local) deepMerge(parsed, local);
+    if (yamlEmbedDim === undefined) {
+      const dim = Number(parsed?.embed_dim);
+      if (Number.isInteger(dim) && dim > 0) yamlEmbedDim = dim;
+    }
+    const hosted = parsed?.hosted as { enforce_plans?: boolean } | undefined;
+    if (hosted && typeof hosted === 'object') yamlHostedEnforce = !!hosted.enforce_plans;
+    const llm = parsed?.llm as LlmYaml | undefined;
+    if (llm && typeof llm === 'object') return llm;
   }
   return {};
 }

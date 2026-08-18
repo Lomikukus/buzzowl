@@ -1,0 +1,27 @@
+name: Idea / feature request
+description: Suggest something Buzzowl doesn't do yet
+labels: ["idea"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not the feature yet — what are you trying to get done?
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How do you work around it today?
+      description: Manual process, another tool, not doing it at all — helps gauge how much it hurts.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you think Buzzowl could do about it. Rough is fine.
+    validations:
+      required: false
