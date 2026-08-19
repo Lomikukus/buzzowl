@@ -90,11 +90,25 @@ llm:
     summary:  {provider: openrouter, model: deepseek/deepseek-v4-flash}
     triage:   {provider: openrouter, model: deepseek/deepseek-v4-flash}
 
-# Subscription logins (ChatGPT-Codex / GitHub Copilot flows in the Pi service).
-# GRAY ZONE: neither vendor officially sanctions these for third-party apps
-# without a whitelist; Anthropic's flow is banned outright and never offered.
-# Off by default — enable only after reviewing the providers' terms of service.
-llm_oauth_gray_flows: false
+# ─────────────────────────────────────────────────────────────────────────────
+# SUBSCRIPTION LOGINS — READ THIS BEFORE USING THEM
+#
+#   These let you drive Buzzowl from a ChatGPT or GitHub Copilot *subscription*
+#   instead of a paid API key. They work, and they are ON by default because
+#   they are the cheapest way to try the product.
+#
+#   ⚠ NEITHER VENDOR PERMITS THIS FOR THIRD-PARTY APPS WITHOUT A WHITELIST.
+#     You are using your personal subscription outside its intended client.
+#     The realistic worst case is that OpenAI or GitHub rate-limits, suspends or
+#     terminates YOUR account. Nobody can appeal that for you.
+#     For anything you depend on — and for every deployment where other people
+#     are your users — use an API key instead (OPENROUTER_API_KEY is one signup
+#     away) and set this to false.
+#
+#   Anthropic's subscription flow is blocked by Anthropic for third parties and
+#   is never offered here, at any setting.
+# ─────────────────────────────────────────────────────────────────────────────
+llm_oauth_gray_flows: true
 
 # Agent runtime (legacy keys — still honored as fallback when llm: is absent)
 agent_brain: openrouter  # ollama | claude | openrouter — used for enrichment/org agents

@@ -9,11 +9,16 @@ seriously and fixed as quickly as possible.
 Please report privately through GitHub's built-in vulnerability reporting:
 **Security tab → "Report a vulnerability"** on this repository.
 
+If you would rather not use GitHub, mail **security@codexperiment.de** — plain
+text is fine, and encrypted mail is welcome if you have a key you prefer.
+
 > Note for the maintainer: private vulnerability reporting must be turned on
 > in repo Settings → Security → "Private vulnerability reporting" before this
 > works — do this before the repo goes public.
 
-Please do not open a public issue for a suspected vulnerability.
+Please do not open a public issue for a suspected vulnerability. Expect a first
+reply within a few days; if you hear nothing after a week, ping again — mail gets
+lost, silence is not a policy.
 
 ## Scope
 

@@ -440,11 +440,24 @@ tr:hover td { background: var(--c-linefaint, #222); }
       </div>
       <div id="llmSubSection" style="display:none;margin-top:1.1rem">
         <h3 style="font-size:0.85rem;margin:0 0 0.3rem">Subscription logins</h3>
-        <p style="font-size:0.72rem;color:var(--c-warn, #d7ba7d);margin:0 0 0.5rem">
-          ⚠ Not officially sanctioned for third-party apps without a vendor whitelist —
-          enabled via <code>llm_oauth_gray_flows</code>. Use at your own risk; review the
-          provider's terms. (Claude subscription login is blocked by Anthropic and not offered.)
-        </p>
+        <div style="border:1px solid var(--c-warn, #d7ba7d);border-left-width:4px;border-radius:6px;
+                    background:rgba(215,186,125,0.08);padding:0.6rem 0.8rem;margin:0 0 0.7rem;max-width:640px">
+          <div style="color:var(--c-warn, #d7ba7d);font-weight:700;font-size:0.78rem;margin-bottom:0.25rem">
+            ⚠ Risk to your personal account — read before connecting
+          </div>
+          <p style="font-size:0.74rem;color:var(--c-fg2, #bbb);margin:0 0 0.35rem">
+            Using a ChatGPT or Copilot <b>subscription</b> from a third-party app is not permitted by
+            OpenAI or GitHub without a whitelist. It works today, but the realistic worst case is that
+            <b>your</b> account gets rate-limited, suspended or terminated — and nobody can appeal that
+            for you.
+          </p>
+          <p style="font-size:0.74rem;color:var(--c-fg2, #bbb);margin:0">
+            Fine for trying Buzzowl out on your own machine. For anything you rely on, and for any
+            install other people use, connect an API key instead (OpenRouter above) and set
+            <code>llm_oauth_gray_flows: false</code>. Claude subscription login is blocked by Anthropic
+            and is never offered here.
+          </p>
+        </div>
         <div id="llmSubRows" style="display:flex;flex-direction:column;gap:0.5rem"></div>
       </div>
       <div style="margin-top:0.7rem;display:flex;gap:0.6rem;align-items:center">

@@ -77,6 +77,7 @@ soft-blocked. See `plans.py`.
 ## Environment for a hosted tenant host
 
 ```
+llm_oauth_gray_flows: false  # never in a hosted deployment — see below
 hosted:
   signup_enabled: false      # signups happen on the control plane
   enforce_plans: true
@@ -90,6 +91,12 @@ Env: `BUZZOWL_SECRET_KEY` (per-org LLM keys at rest), `HOSTED_OPERATOR_KEY`,
 `AGENT_SERVICE_TOKEN`, platform LLM keys for premium.
 
 ## Security notes
+
+- **Turn `llm_oauth_gray_flows` off.** Subscription logins (ChatGPT-Codex,
+  Copilot) are not permitted for third-party apps without a vendor whitelist.
+  On a personal install that risk is the operator's own; in a hosted product you
+  would be running it on customers' accounts at scale. Hosted tenants use API
+  keys: their own (light) or yours (premium).
 
 - The operator key grants tenant-wide control — keep it in the control plane's
   server-side secrets only; rotate by changing the config and redeploying.

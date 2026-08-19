@@ -1,5 +1,7 @@
 # Buzzowl
 
+[buzzowl.app](https://buzzowl.app) · AGPL-3.0 · self-hostable
+
 An agentic research and knowledge platform for sales teams. Buzzowl turns
 meetings into structured, searchable client knowledge, keeps that knowledge fresh
 through autonomous research agents, and tells each rep who to contact next and why.
@@ -126,13 +128,20 @@ Options, in increasing order of setup effort:
   OpenAI-compatible `base_url` and supply the key via env.
 - **Fully local** — run Ollama or LM Studio on the host and point `base_url` at it.
   No data leaves your machine, at the cost of model quality/speed.
-- **Subscription logins (disabled by default)** — the agent service contains OAuth
-  flows for ChatGPT-Codex and GitHub Copilot subscriptions, gated behind
-  `llm_oauth_gray_flows: false` in `config.yaml`. Neither vendor officially
-  sanctions these flows for third-party apps; review the providers' terms of
-  service before enabling. Anthropic explicitly blocks Claude subscription use by
-  third-party apps, so a Claude subscription login is never offered — use the
-  Anthropic API key instead.
+- **Subscription logins (on by default — read the warning)** — you can drive
+  Buzzowl from a ChatGPT or GitHub Copilot *subscription* instead of an API key:
+  Settings → LLM Providers → Subscription logins.
+
+  > ⚠ **Neither OpenAI nor GitHub permits this for third-party apps without a
+  > whitelist.** It works today, but you are using your personal subscription
+  > outside its intended client, and the realistic worst case is that *your*
+  > account is rate-limited, suspended or terminated. Fine for trying Buzzowl on
+  > your own machine — for anything you rely on, and for any install other people
+  > use, connect an API key and set `llm_oauth_gray_flows: false` in `config.yaml`.
+
+  Anthropic blocks Claude subscription use by third-party apps, so a Claude
+  subscription login is never offered at any setting — use an Anthropic API key
+  (or reach Claude models through OpenRouter).
 
 Embeddings are configured separately (`embed_backend` / `embed_url` /
 `embed_model`) and also accept any OpenAI-compatible endpoint or local Ollama.
