@@ -60,9 +60,9 @@
             <button class="login-tab" data-tab="register">Register</button>
         </div>
         <div id="loginFields" class="login-fields">
-            <div class="login-field">
-                <label>Organisation slug</label>
-                <input type="text" id="loginOrg" placeholder="your-org" autocomplete="organization">
+            <div class="login-field" id="loginOrgField">
+                <label>Workspace</label>
+                <input type="text" id="loginOrg" placeholder="your-workspace" autocomplete="organization">
             </div>
             <div class="login-field">
                 <label>Username</label>
@@ -210,6 +210,13 @@
             if (d && d.signup_enabled) {
                 const f = document.getElementById('regKeyField'); if (f) f.style.display = 'none';
                 const t = document.querySelector('[data-tab="register"], #tabRegister'); if (t) t.textContent = 'Create your workspace';
+            }
+            // One workspace on this install → nobody should have to type its slug.
+            if (d && d.single_org_slug) {
+                const org = document.getElementById('loginOrg');
+                if (org) org.value = d.single_org_slug;
+                const field = document.getElementById('loginOrgField');
+                if (field) field.style.display = 'none';
             }
         }).catch(() => {});
         ['loginOrg','loginUser','loginPass','joinKey','joinUser','joinName','joinPass','regKey','regOrgName','regUser','regPass'].forEach(id => {

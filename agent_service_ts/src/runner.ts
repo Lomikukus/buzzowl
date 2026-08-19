@@ -183,6 +183,28 @@ async function executeRun(runId: number, body: RunRequest): Promise<void> {
       searches_made: state.tool_calls.filter(t => t.tool === 'web_search').length,
     };
 
+    // A run that searched and fetched for minutes but wrote nothing is not a
+    // success: it cost tokens and left the knowledge base untouched. Report it
+    // as failed so the UI says so and the follow-up chain (brief, matching)
+    // does not run on nothing. agent.ts already nudged the model twice by here.
+    if (output.documents_written === 0 && output.tool_calls_made > 0) {
+      const msg = `run wrote no documents (${output.tool_calls_made} tool calls, ` +
+        `${output.searches_made} searches) — the model never called write_document`;
+      state.status = 'failed';
+      state.completed_at = new Date().toISOString();
+      state.error = msg;
+      state.output = output;
+      await db.updateAgentRun(runId, { status: 'failed', toolCalls: state.tool_calls, output, error: msg });
+      console.warn(`[pi-agent] run ${runId}: ${msg}`);
+      if (body.callback_url) {
+        await fireCallback(body.callback_url, {
+          run_id: runId, status: 'failed', agent_type: state.agent_type,
+          subject, output, error: msg,
+        });
+      }
+      return;
+    }
+
     state.status = 'done';
     state.completed_at = new Date().toISOString();
     state.output = output;

@@ -65,8 +65,15 @@ def _signup_open() -> bool:
 
 @router.get("/signup-status")
 async def signup_status():
-    """Public: is self-service org creation open on this deployment?"""
-    return {"signup_enabled": _signup_open()}
+    """Public: is self-service org creation open, and does login need a workspace slug?"""
+    single = None
+    try:
+        orgs = await db_module.list_orgs() if DB_AVAILABLE else []
+        if len(orgs) == 1:
+            single = orgs[0].get("slug")
+    except Exception:
+        pass
+    return {"signup_enabled": _signup_open(), "single_org_slug": single}
 
 
 @router.post("/register")
@@ -151,12 +158,21 @@ async def login(request: Request, body: dict):
     username = body.get("username", "").strip()
     password = body.get("password", "")
 
-    if not all([org_slug, username, password]):
-        raise HTTPException(status_code=400, detail="org_slug, username, and password are required")
+    if not all([username, password]):
+        raise HTTPException(status_code=400, detail="username and password are required")
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
-    org = await db_module.get_org_by_slug(org_slug)
+    if org_slug:
+        org = await db_module.get_org_by_slug(org_slug)
+    else:
+        # Single-workspace install (the normal self-host case): nobody should have
+        # to remember a slug the bootstrap invented. With several workspaces the
+        # slug stays required — it is what picks the tenant.
+        orgs = await db_module.list_orgs()
+        if len(orgs) != 1:
+            raise HTTPException(status_code=400, detail="org_slug is required on this deployment")
+        org = orgs[0]
     if not org:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 

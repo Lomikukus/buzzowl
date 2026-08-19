@@ -5,6 +5,7 @@ import { config, resolveProvider, resolveProviderForOrg } from './config.js';
 import { getOAuthAuth, isSubscriptionProvider } from './oauth.js';
 import type { OAuthCredentials, SubscriptionProvider } from './oauth.js';
 import { buildTools } from './tools.js';
+import type { AgentTool } from './tools.js';
 import * as db from './db.js';
 
 const PROMPTS: Record<string, string> = {
@@ -705,8 +706,62 @@ export async function runPiAgent(opts: RunAgentOptions): Promise<void> {
           : `You have not written the final report. Call write_document(type="${finalDocType}") NOW ` +
             'with a complete synthesis of everything you found. Do not call any other tools first.';
         await agent.prompt(forceMsg);
+
+        // Small models answer that prompt in prose instead of calling the tool,
+        // and the run then ends with findings but no report — the one document
+        // the client page expects. Assemble it from what the run already wrote.
+        const stillMissing = !opts.toolCallLog.some(
+          tc => tc.tool === 'write_document' &&
+                typeof tc.args === 'object' && tc.args !== null &&
+                (tc.args as Record<string, unknown>).type === finalDocType
+        );
+        if (stillMissing) {
+          await writeFallbackReport(allTools, opts, finalDocType);
+        }
       }
     }
+  }
+}
+
+/**
+ * Last resort when the model wrote findings but never the final report: build the
+ * report from those findings in code, so a run always leaves the document the UI
+ * reads. Clearly labelled — this is assembly, not synthesis.
+ */
+async function writeFallbackReport(
+  allTools: AgentTool[],
+  opts: RunAgentOptions,
+  finalDocType: string,
+): Promise<void> {
+  const writeTool = allTools.find(t => t.name === 'write_document');
+  if (!writeTool) return;
+
+  const parts = opts.toolCallLog
+    .filter(tc => tc.tool === 'write_document')
+    .map(tc => tc.args as Record<string, unknown>)
+    .filter(a => a && typeof a.title === 'string' && typeof a.content === 'string');
+  if (!parts.length) return;
+
+  const body = parts.map(a => {
+    const src = typeof a.source_url === 'string' && a.source_url ? `\n\nSource: ${a.source_url}` : '';
+    return `## ${a.title as string}\n\n${(a.content as string).trim()}${src}`;
+  }).join('\n\n');
+
+  const content =
+    `_Assembled from the ${parts.length} finding${parts.length === 1 ? '' : 's'} of this run — ` +
+    `the model ended without writing a synthesis, so the sections below are its findings verbatim._\n\n` +
+    body;
+
+  try {
+    await writeTool.execute('fallback-final', {
+      type: finalDocType,
+      title: `${opts.subject} — research summary`,
+      content,
+      client_name: opts.subject,
+    }, opts.abortController.signal);
+    console.log(`[pi-agent] run ${opts.agentRunId}: assembled fallback ${finalDocType} report from ${parts.length} findings`);
+  } catch (err) {
+    console.error(`[pi-agent] run ${opts.agentRunId}: fallback report failed: ${String(err)}`);
   }
 }
 
