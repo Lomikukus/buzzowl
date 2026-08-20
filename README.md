@@ -79,6 +79,15 @@ browser containers and agents fall back to plain HTTP fetching:
 docker compose up -d db searxng server agent-pi
 ```
 
+An empty workspace is a poor first impression, so there is a demo dataset —
+fictional companies with agent-written research, deals, tasks and an outreach
+draft — to look around in before your first real research run finishes:
+
+```bash
+docker compose exec server python scripts/seed_demo.py     # log in as demo / demo-password
+docker compose exec server python scripts/seed_demo.py --drop   # remove it again
+```
+
 First-run bootstrap (empty database) works one of two ways:
 
 - **Env-based admin** — set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env` before
