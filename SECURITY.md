@@ -9,7 +9,7 @@ seriously and fixed as quickly as possible.
 Please report privately through GitHub's built-in vulnerability reporting:
 **Security tab → "Report a vulnerability"** on this repository.
 
-If you would rather not use GitHub, mail **security@codexperiment.de** — plain
+If you would rather not use GitHub, mail **security@buzzowl.app** — plain
 text is fine, and encrypted mail is welcome if you have a key you prefer.
 
 > Note for the maintainer: private vulnerability reporting must be turned on
