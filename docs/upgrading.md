@@ -21,16 +21,27 @@ docker compose logs -f server        # watch the migrations run, then Ctrl+C
    applied, *one transaction per file*, and the version is recorded.
 
 A failing migration rolls back that file and the server stops with the error in
-the log — the database is never left half-migrated.
+the log — the database is never left half-migrated. The container then
+crash-loops under `restart: unless-stopped`; that is intentional, and it is what
+you want instead of a server running new code against the old schema. Fix the
+migration (or roll the image back, see below) and restart.
+
+A database that simply is not up yet is *not* a migration failure: the server
+boots degraded, skips migrations with a warning, and picks them up on the next
+start once the DB answers.
 
 ## Which version am I on?
 
 ```bash
+curl -fsS http://localhost:8000/api/health | jq .checks.schema_version
 docker compose exec -T db psql -U whisper -d whisper -c \
   "SELECT max(version) AS schema_version FROM schema_version;"
 ls migrations/          # the highest NNN_ prefix is what the code expects
 git log --oneline -1    # the build you are running
 ```
+
+`checks.schema_version` is `null` when the server never reached the database at
+startup.
 
 ## After the upgrade
 
