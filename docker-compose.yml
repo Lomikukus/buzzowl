@@ -10,6 +10,13 @@
 # Prod note (deploy/SERVER_SETUP.md): the old `docker compose --profile research up -d`
 # keeps working — the research profile no longer exists, so the flag is a no-op and the
 # default services start anyway. pgweb now additionally needs `--profile debug`.
+#
+# Healthchecks: every long-running service defines one so a hung (not crashed)
+# process surfaces as "unhealthy" in `docker compose ps` instead of passing for
+# "running". Each probe uses a binary the image actually ships (see the comment
+# on each check). Note that plain Docker does not restart unhealthy containers —
+# `restart: unless-stopped` only covers exits — so these checks buy visibility
+# and depends_on gating, not self-healing.
 
 services:
   searxng:
@@ -26,6 +33,15 @@ services:
       # supplies a value. The dev fallback is acceptable for this internal-only
       # container (no host port); set a real secret in .env: openssl rand -hex 32
       - SEARXNG_SECRET=${SEARXNG_SECRET:-buzzowl-dev-secret-change-me}
+    healthcheck:
+      # The image is Alpine-based: no curl, but busybox wget is present
+      # (/usr/bin/wget). /healthz returns a plain 200 "OK" and is explicitly
+      # exempt from SearXNG's rate limiter, so it never trips bot detection.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   db:
     image: pgvector/pgvector:pg16
@@ -137,9 +153,31 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Startup ordering only: wait until search actually answers, so the API
+      # isn't serving traffic while agent tool calls would fail on a search
+      # backend that is still booting. This is NOT a runtime coupling — if
+      # searxng dies later the server keeps running (and search degrades), and
+      # compose never stops or restarts the server because of it. searxng is in
+      # the default profile, so this gate is always satisfiable; if it is ever
+      # moved behind a profile, add `required: false` here.
       searxng:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # The image is python:3.11-slim — neither curl nor wget is installed
+      # (only gcc/libpq-dev/postgresql-client are added) — so the probe uses the
+      # Python stdlib, which is guaranteed present. Liveness only: /api/health
+      # answers 200 even when it reports "degraded" (DB or embeddings down), so
+      # a dependency outage never marks the API server itself unhealthy; only a
+      # hung/unresponsive process does.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Boot is slow: entrypoint waits for the DB and applies schema.sql on a
+      # fresh install, then startup() initialises the pool, runs the first-run
+      # bootstrap and (with TRANSCRIPTION_MODE=local) loads a Whisper model.
+      start_period: 180s
     # Reserve memory so the API server stays responsive during a browser burst.
     mem_reservation: 320m
     mem_limit: 700m
@@ -241,6 +279,17 @@ services:
         condition: service_healthy
       searxng:
         condition: service_started
+    healthcheck:
+      # node:22-alpine ships no curl; use node itself (same pattern as
+      # browser-service above). GET /health is unauthenticated by design — the
+      # bearer-token preHandler in src/index.ts skips it — and returns 200 even
+      # when its own DB probe reports "error", so this is liveness, not
+      # readiness: a hung event loop fails it, a DB blip does not.
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8001/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   # Cloudflare tunnel — needs CLOUDFLARE_TUNNEL_TOKEN, crash-loops without it,
   # so it only runs with an explicit opt-in: docker compose --profile tunnel up -d
