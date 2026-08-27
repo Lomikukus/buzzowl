@@ -11,7 +11,7 @@ pytest-asyncio>=0.24
 aiosmtpd>=1.4         # test SMTP server for the outreach send-worker e2e test
 passlib[bcrypt]>=1.7.4
 bcrypt==4.0.1
-mcp>=1.0.0
+mcp>=1.0.0,<2
 # anthropic>=0.40.0      # Optional: Anthropic provider (llm kind 'anthropic') — pip install anthropic
 ddgs>=0.5               # web search for enrichment agent (Phase 5; renamed from duckduckgo-search)
 apscheduler>=3.10       # heartbeat scheduler (Phase 5)

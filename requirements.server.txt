@@ -10,7 +10,7 @@ asyncpg>=0.31.0
 pgvector>=0.3.0
 passlib[bcrypt]>=1.7.4
 bcrypt==4.0.1
-mcp>=1.0.0
+mcp>=1.0.0,<2
 # anthropic>=0.40.0      # Optional: Anthropic provider (llm kind 'anthropic') — pip install anthropic
 ddgs>=0.5
 apscheduler>=3.10

@@ -25,7 +25,7 @@ TRANSCRIBE_PY = Path(__file__).parent.parent / "transcribe.py"
 @pytest.mark.slow
 def test_whisperx_transcribes_tone():
     """WhisperX tiny model transcribes a WAV without crashing."""
-    import whisperx
+    whisperx = pytest.importorskip("whisperx", reason="ML stack not installed (CI)")
 
     model = whisperx.load_model("tiny", "cpu", compute_type="int8")
     audio = whisperx.load_audio(str(TONE_WAV))
@@ -92,6 +92,7 @@ async def test_stream_summary_degrades_when_summary_role_unreachable(monkeypatch
 @pytest.mark.slow
 def test_cli_transcribes_to_disk():
     """transcribe.py CLI runs end-to-end and writes transcript.txt to data/raw/."""
+    pytest.importorskip("torch", reason="ML stack not installed (CI)")
     project_root = TRANSCRIBE_PY.parent
     raw_dir = project_root / "data" / "raw"
     before = set(raw_dir.iterdir()) if raw_dir.exists() else set()

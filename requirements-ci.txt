@@ -10,7 +10,7 @@ pytest-asyncio>=0.24
 aiosmtpd>=1.4
 passlib[bcrypt]>=1.7.4
 bcrypt==4.0.1
-mcp>=1.0.0
+mcp>=1.0.0,<2
 # anthropic>=0.40.0      # Optional: Anthropic provider (llm kind 'anthropic') — pip install anthropic
 ddgs>=0.5
 apscheduler>=3.10
@@ -21,3 +21,4 @@ requests>=2.31.0
 cryptography>=42.0        # AES-GCM for per-org LLM keys at rest (Phase 6a)
 matrix-nio[e2e]>=0.26.0     # Matrix federation transport (Phase 5b); vodozemac wheel, no libolm
 PyJWT[crypto]>=2.8            # external login (Supabase/OIDC JWT exchange, Phase 6b)
+numpy

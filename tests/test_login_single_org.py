@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from starlette.requests import Request
+
 from routers import auth as auth_router
 
 ORG_A = {"id": 1, "name": "My Organization", "slug": "my-organization"}
@@ -12,11 +14,10 @@ ORG_B = {"id": 2, "name": "Other", "slug": "other"}
 USER = {"id": 7, "username": "admin", "display_name": "Admin", "role": "admin", "password_hash": "hash"}
 
 
-class _Req:
-    """FastAPI Request stand-in — the rate limiter only reads client/scope."""
-    client = type("C", (), {"host": "127.0.0.1"})()
-    scope = {"type": "http"}
-    headers: dict = {}
+def _Req() -> Request:
+    """Real starlette Request (slowapi's limiter type-checks it since 0.1.10)."""
+    return Request({"type": "http", "client": ("127.0.0.1", 1234), "headers": [],
+                    "method": "POST", "path": "/api/auth/login", "query_string": b"", "scheme": "http", "server": ("test", 80)})
 
 
 @pytest.fixture
