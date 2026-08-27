@@ -21,16 +21,27 @@ docker compose logs -f server        # watch the migrations run, then Ctrl+C
    applied, *one transaction per file*, and the version is recorded.
 
 A failing migration rolls back that file and the server stops with the error in
-the log — the database is never left half-migrated.
+the log — the database is never left half-migrated. The container then
+crash-loops under `restart: unless-stopped`; that is intentional, and it is what
+you want instead of a server running new code against the old schema. Fix the
+migration (or roll the image back, see below) and restart.
+
+A database that simply is not up yet is *not* a migration failure: the server
+boots degraded, skips migrations with a warning, and picks them up on the next
+start once the DB answers.
 
 ## Which version am I on?
 
 ```bash
+curl -fsS http://localhost:8000/api/health | jq .checks.schema_version
 docker compose exec -T db psql -U whisper -d whisper -c \
   "SELECT max(version) AS schema_version FROM schema_version;"
 ls migrations/          # the highest NNN_ prefix is what the code expects
 git log --oneline -1    # the build you are running
 ```
+
+`checks.schema_version` is `null` when the server never reached the database at
+startup.
 
 ## After the upgrade
 
@@ -70,6 +81,21 @@ docker compose up -d --build
 Read the release notes before moving to the next tag: anything that needs manual
 action (a new required env var, a re-embedding run) is called out there.
 
+## Before you rotate `AGENT_SERVICE_TOKEN`
+
+Check that `.env` has its own `BUZZOWL_SECRET_KEY`:
+
+```bash
+grep -c '^BUZZOWL_SECRET_KEY=.\+' .env      # 1 = safe to rotate, 0 = read on
+```
+
+With no `BUZZOWL_SECRET_KEY`, per-org LLM keys and the Matrix federation access
+token are encrypted with a key derived from `AGENT_SERVICE_TOKEN`. Rotating the
+token then orphans all of them permanently — Settings shows *needs reconnection*
+and each org admin has to enter the key again. Fix it before rotating: set
+`BUZZOWL_SECRET_KEY` to the **current** `AGENT_SERVICE_TOKEN` value, restart, and
+only then generate a new token.
+
 ## Upgrades that need more than a rebuild
 
 - **A new required environment variable** — the server refuses to start and says
@@ -79,5 +105,10 @@ action (a new required env var, a re-embedding run) is called out there.
   `scripts/backfill_embeddings.py` after changing `embed_model`/`embed_dim`.
 - **The agent service** — `docker compose up -d --build agent-pi` rebuilds it;
   the TypeScript image is not versioned separately.
-- **The browser image** — `./scripts/build-browser.sh` is a one-time build. Rerun
-  it only when the release notes say the browser version changed.
+- **The browser image** — built once and then reused; `docker compose up -d`
+  rebuilds it only if it is missing. `--build` does re-run its build, but the
+  upstream ref is pinned, so it is a cache hit and finishes in seconds — unless
+  the build cache was pruned, in which case that one image takes a few minutes
+  again. When the release notes say the browser version changed, force it:
+  `docker compose build camofox` (or rerun `./scripts/build-browser.sh` after
+  deleting the old tag).

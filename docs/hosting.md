@@ -100,6 +100,19 @@ Env: `BUZZOWL_SECRET_KEY` (per-org LLM keys at rest), `HOSTED_OPERATOR_KEY`,
 
 - The operator key grants tenant-wide control — keep it in the control plane's
   server-side secrets only; rotate by changing the config and redeploying.
+- **Rate limits.** `/api/operator/*` is capped at 30 requests/minute per client
+  IP as a brute-force backstop on `X-Operator-Key` — comfortably above what a
+  control plane needs, so batch reconciliation jobs should still stagger their
+  calls. Every other endpoint falls back to an app-wide 300/minute per client IP
+  and view function (`RATE_LIMIT_DEFAULT` to change it); `/api/health` and the
+  agent service callbacks (`/api/internal/*`, `/api/agents/internal/*`,
+  `/api/agents/callback`) are exempt.
+- **Set `FORWARDED_ALLOW_IPS` when you terminate TLS elsewhere.** The limiter
+  keys on the peer address, and uvicorn only trusts `X-Forwarded-For` from
+  127.0.0.1 by default. Behind the cloudflared sidecar (or any proxy that is a
+  separate container/host) every request looks like it comes from the proxy, so
+  all tenants land in one bucket and throttle each other. Set the variable to
+  the proxy's address — not `*`, since compose publishes port 8000 on the host.
 - Login tokens are ordinary sessions (30 days); they travel in a URL fragment
   (`#token=`), which browsers do not send to servers.
 - Suspension is enforced in `current_user` (writes) and in the schedulers; reads

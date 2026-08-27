@@ -17,6 +17,8 @@ import logging
 import os
 import re
 import secrets
+import time
+from typing import Optional
 
 import httpx
 from fastapi import FastAPI
@@ -25,7 +27,20 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import context
-from context import BASE_DIR, DB_AVAILABLE, RATE_LIMIT_AVAILABLE, config, console, db_module, executor, limiter, pwd_context
+from context import (
+    BASE_DIR,
+    DB_AVAILABLE,
+    RATE_LIMIT_AVAILABLE,
+    RATE_LIMIT_DEFAULT,
+    RateLimitMiddleware,
+    config,
+    configure_rate_limits,
+    console,
+    db_module,
+    executor,
+    limiter,
+    pwd_context,
+)
 from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
 from routers.pipeline import (
     ensure_dirs,
@@ -76,13 +91,17 @@ app.add_middleware(SecurityHeadersMiddleware)
 # Rate limiting (slowapi)
 # ---------------------------------------------------------------------------
 
+# The middleware is what makes the app-wide default limit (context.
+# RATE_LIMIT_DEFAULT) apply to undecorated routes — the @limiter.limit(...)
+# decorators enforce themselves, the default does not. It needs the route table
+# and the exemption list that configure_rate_limits() builds further down, once
+# every router is mounted.
 if RATE_LIMIT_AVAILABLE:
     from slowapi import _rate_limit_exceeded_handler  # type: ignore
     from slowapi.errors import RateLimitExceeded      # type: ignore
-    from slowapi.middleware import SlowAPIMiddleware   # type: ignore
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +407,58 @@ async def get_config_models():
 # Health endpoint
 # ---------------------------------------------------------------------------
 
+# The embeddings probe is the one check here that costs money: it is a real
+# request to the configured embeddings provider (OpenRouter by default), and
+# /api/health is public and polled by uptime monitors every 30-60s. So the
+# probe result is cached for a TTL window — at most one live call per minute
+# no matter the poll rate. Failures are cached too, so a provider that is
+# already down does not get hammered. The DB and Pi checks are local and cheap
+# and stay live on every request.
+_EMBED_PROBE_TTL_S = 60.0
+_embed_probe_lock = asyncio.Lock()
+_embed_probe_cache: dict = {"ok": False, "at": None}  # at = time.monotonic() of last probe
+
+
+def _cached_embed_probe(now: float) -> Optional[tuple[bool, float]]:
+    """Return (ok, age_seconds) if the cached probe is still fresh, else None."""
+    at = _embed_probe_cache["at"]
+    if at is None:
+        return None
+    age = now - at
+    if age >= _EMBED_PROBE_TTL_S:
+        return None
+    return _embed_probe_cache["ok"], age
+
+
+async def _probe_embeddings() -> tuple[bool, Optional[float]]:
+    """Embeddings liveness, cached for _EMBED_PROBE_TTL_S.
+
+    If this fails, vector search is degraded to FTS-only and every new document
+    is stored without an embedding. Returns (ok, age_of_result_in_seconds);
+    age is None when no probe has run (DB layer unavailable).
+    """
+    if not (DB_AVAILABLE and db_module is not None):
+        return False, None
+
+    fresh = _cached_embed_probe(time.monotonic())
+    if fresh is not None:
+        return fresh
+
+    async with _embed_probe_lock:
+        # Someone else may have refreshed the cache while we waited for the lock —
+        # re-check so concurrent pollers do not stampede the provider.
+        fresh = _cached_embed_probe(time.monotonic())
+        if fresh is not None:
+            return fresh
+        try:
+            ok = bool(await db_module.embed_text("health check"))
+        except Exception:
+            ok = False
+        _embed_probe_cache["ok"] = ok
+        _embed_probe_cache["at"] = time.monotonic()
+        return ok, 0.0
+
+
 @app.get("/api/health")
 async def health_check():
     """Returns DB + agent service liveness. No auth required — used by uptime monitors."""
@@ -410,20 +481,18 @@ async def health_check():
             except Exception:
                 pass
 
-    # Embeddings: a live probe — if this fails, vector search is degraded to
-    # FTS-only and every new document is stored without an embedding.
-    embed_ok = False
-    if DB_AVAILABLE and db_module is not None:
-        try:
-            embed_ok = bool(await db_module.embed_text("health check"))
-        except Exception:
-            pass
+    embed_ok, embed_age = await _probe_embeddings()
 
     checks = {
         "db": db_ok,
         "pi": pi_ok,
         "embeddings": embed_ok,
+        # Recorded once by the migration runner at startup — no query per poll.
+        # None means the DB was unreachable at boot (migrations never ran).
+        "schema_version": db_module.get_schema_version() if DB_AVAILABLE and db_module else None,
         "embed_stats": db_module.embed_stats if DB_AVAILABLE and db_module else {},
+        # How stale the cached embeddings probe is, in seconds (null = never probed).
+        "embed_checked_ago_s": round(embed_age, 1) if embed_age is not None else None,
     }
     return {"status": "healthy" if db_ok else "degraded", "checks": checks}
 
@@ -454,6 +523,20 @@ app.include_router(benchmark.router)
 app.include_router(evaluation.router)
 app.include_router(today.router)
 app.include_router(tasks.router)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting: route table + exemptions — must run after every router is
+# mounted, and the route table is fixed from here on
+# ---------------------------------------------------------------------------
+
+if RATE_LIMIT_AVAILABLE:
+    _exempt_routes = configure_rate_limits(app)
+    logging.getLogger("wk.server").info(
+        "Rate limiting: default %s (enabled=%s), %d of %d routes exempt",
+        RATE_LIMIT_DEFAULT, limiter.enabled, len(_exempt_routes),
+        len(app.state.rate_limit_routes),
+    )
 
 
 # ---------------------------------------------------------------------------

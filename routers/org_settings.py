@@ -124,6 +124,10 @@ async def get_plan(user: dict = Depends(current_user)):
     usage = await db_module.llm_usage_summary(user["org_id"], days=31)
     budget = _plans.budget_usd(settings, _config)
     month_cost = float((usage.get("month") or {}).get("cost_usd") or 0)
+    own = ((settings.get("llm") or {}).get("providers") or {})
+    # Stored keys that no longer decrypt (encryption key changed) count as absent.
+    broken = sorted(n for n, p in own.items()
+                    if p.get("api_key") and not _plans.key_readable(p.get("api_key", "")))
     return {
         "plan": _plans.plan_of(settings),
         "plans": list(_plans.PLANS),
@@ -132,7 +136,8 @@ async def get_plan(user: dict = Depends(current_user)):
         "budget_used_pct": round(100 * month_cost / budget, 1) if budget else None,
         "enforce_plans": _plans.enforce_plans(_config),
         "hosted_mode": bool(_hosted().get("signup_enabled")),
-        "has_own_providers": bool(((settings.get("llm") or {}).get("providers") or {})),
+        "has_own_providers": bool(own) and len(broken) < len(own),
+        "keys_need_reconnect": broken,
         "usage": usage,
     }
 

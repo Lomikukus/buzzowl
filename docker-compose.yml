@@ -1,5 +1,7 @@
 # Buzzowl — plain `docker compose up -d` starts the whole app:
 #   db, searxng, server, camofox, browser-service, agent-pi
+# Nothing has to be built or fetched by hand first: on a fresh clone the first
+# `up` also builds the camofox browser image (~2.5 GB, a few minutes, once).
 #
 # Optional profiles:
 #   --profile debug   → pgweb DB browser UI (no auth — must never run by default)
@@ -8,6 +10,13 @@
 # Prod note (deploy/SERVER_SETUP.md): the old `docker compose --profile research up -d`
 # keeps working — the research profile no longer exists, so the flag is a no-op and the
 # default services start anyway. pgweb now additionally needs `--profile debug`.
+#
+# Healthchecks: every long-running service defines one so a hung (not crashed)
+# process surfaces as "unhealthy" in `docker compose ps` instead of passing for
+# "running". Each probe uses a binary the image actually ships (see the comment
+# on each check). Note that plain Docker does not restart unhealthy containers —
+# `restart: unless-stopped` only covers exits — so these checks buy visibility
+# and depends_on gating, not self-healing.
 
 services:
   searxng:
@@ -24,6 +33,15 @@ services:
       # supplies a value. The dev fallback is acceptable for this internal-only
       # container (no host port); set a real secret in .env: openssl rand -hex 32
       - SEARXNG_SECRET=${SEARXNG_SECRET:-buzzowl-dev-secret-change-me}
+    healthcheck:
+      # The image is Alpine-based: no curl, but busybox wget is present
+      # (/usr/bin/wget). /healthz returns a plain 200 "OK" and is explicitly
+      # exempt from SearXNG's rate limiter, so it never trips bot detection.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   db:
     image: pgvector/pgvector:pg16
@@ -94,6 +112,14 @@ services:
       - BROWSER_SERVICE_URL=http://browser-service:3000
       - CAMOFOX_URL=http://camofox:9377
       - TRANSCRIPTION_MODE=${TRANSCRIPTION_MODE:-app}
+      # Rate limiting is keyed on the client IP. Behind a reverse proxy (the
+      # cloudflared profile, nginx, …) every request arrives from the proxy, so
+      # all users would share one bucket unless its X-Forwarded-For is trusted:
+      # set FORWARDED_ALLOW_IPS to the proxy's address in .env. Left at uvicorn's
+      # default otherwise — port 8000 is published, so do not widen it blindly.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # App-wide fallback limit for endpoints without their own (see context.py).
+      - RATE_LIMIT_DEFAULT=${RATE_LIMIT_DEFAULT:-300/minute}
       - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
       - BUZZOWL_SECRET_KEY=${BUZZOWL_SECRET_KEY:-}
       - HOSTED_OPERATOR_KEY=${HOSTED_OPERATOR_KEY:-}
@@ -127,27 +153,57 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Startup ordering only: wait until search actually answers, so the API
+      # isn't serving traffic while agent tool calls would fail on a search
+      # backend that is still booting. This is NOT a runtime coupling — if
+      # searxng dies later the server keeps running (and search degrades), and
+      # compose never stops or restarts the server because of it. searxng is in
+      # the default profile, so this gate is always satisfiable; if it is ever
+      # moved behind a profile, add `required: false` here.
       searxng:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # The image is python:3.11-slim — neither curl nor wget is installed
+      # (only gcc/libpq-dev/postgresql-client are added) — so the probe uses the
+      # Python stdlib, which is guaranteed present. Liveness only: /api/health
+      # answers 200 even when it reports "degraded" (DB or embeddings down), so
+      # a dependency outage never marks the API server itself unhealthy; only a
+      # hung/unresponsive process does.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Boot is slow: entrypoint waits for the DB and applies schema.sql on a
+      # fresh install, then startup() initialises the pool, runs the first-run
+      # bootstrap and (with TRANSCRIPTION_MODE=local) loads a Whisper model.
+      start_period: 180s
     # Reserve memory so the API server stays responsive during a browser burst.
     mem_reservation: 320m
     mem_limit: 700m
 
-  # Camofox cannot be built straight from its Git URL: the upstream Dockerfile
-  # bind-mounts pre-downloaded browser binaries from dist/ (gitignored), which
-  # `make fetch` downloads first. One-time manual build (auto-detects the host
-  # arch; arm64 Mac → aarch64, Linux → x86_64):
-  #   git clone https://github.com/jo-inc/camofox-browser ./camofox-browser
-  #   cd camofox-browser && make build      # or explicitly: make build-arm64 / build-x86
-  # → produces the image tag referenced below. On x86_64 hosts set
-  #   CAMOFOX_ARCH=x86_64 in .env so compose picks the matching tag.
+  # Hardened browser the research agents fetch pages with. `image:` first, `build:`
+  # second: Compose reuses a locally present camofox-browser image and only builds
+  # when it is missing — so the first `docker compose up -d` on a fresh clone builds
+  # it from the upstream MIT repo (~2.5 GB, a few minutes) instead of failing on a
+  # missing image, and `./scripts/build-browser.sh` stays a way to do that build
+  # ahead of time (it produces exactly the tag below).
+  # The upstream Dockerfile downloads the Camoufox binaries itself at build time,
+  # so the Git context is self-contained — nothing outside the repo is needed.
+  # x86_64 hosts: set CAMOFOX_ARCH=x86_64 *and* CAMOFOX_BUILD_ARCH=x86_64 in .env.
+  # The two differ on ARM on purpose: the image tag says aarch64, the Camoufox
+  # release asset for it is named lin.arm64.zip.
   camofox:
     image: camofox-browser:135.0.1-${CAMOFOX_ARCH:-aarch64}
-    # build:                          # would fail today: dist/ artifacts are not in the repo
-    #   context: https://github.com/jo-inc/camofox-browser.git
-    #   args:
-    #     ARCH: ${CAMOFOX_ARCH:-aarch64}
+    build:
+      # Pinned to the commit behind upstream tag v1.14.0 — a first run builds
+      # third-party code unattended, so the ref must be immutable (tags are not).
+      # Bump the commit and the version args together.
+      context: https://github.com/jo-inc/camofox-browser.git#e5a36f5cd0332fde6597de474329a308a53a0716
+      args:
+        ARCH: ${CAMOFOX_BUILD_ARCH:-arm64}
+        CAMOUFOX_VERSION: "135.0.1"
+        CAMOUFOX_RELEASE: beta.24
     container_name: buzzowl_camofox
     ports:
       # Loopback only — agents reach it inside the compose network as camofox:9377.
@@ -225,6 +281,17 @@ services:
         condition: service_healthy
       searxng:
         condition: service_started
+    healthcheck:
+      # node:22-alpine ships no curl; use node itself (same pattern as
+      # browser-service above). GET /health is unauthenticated by design — the
+      # bearer-token preHandler in src/index.ts skips it — and returns 200 even
+      # when its own DB probe reports "error", so this is liveness, not
+      # readiness: a hung event loop fails it, a DB blip does not.
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8001/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   # Cloudflare tunnel — needs CLOUDFLARE_TUNNEL_TOKEN, crash-loops without it,
   # so it only runs with an explicit opt-in: docker compose --profile tunnel up -d

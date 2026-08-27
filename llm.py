@@ -201,7 +201,7 @@ async def ensure_org_overlay(org_id: Optional[int], force: bool = False) -> Opti
         month_cost = await db.llm_usage_month_cost(org_id) if (context.DB_AVAILABLE and db) else 0.0
         ov = {
             "plan": _plans.plan_of(settings),
-            **_plans.overlay_for_llm(settings.get("llm") or {}),
+            **_plans.overlay_for_llm(settings.get("llm") or {}, org_id),
             "budget": _plans.budget_usd(settings, context.config),
             "month_cost": float(month_cost or 0.0),
             "enforce": _plans.enforce_plans(context.config),
@@ -263,6 +263,11 @@ def resolve(role: str = "default", model: Optional[str] = None,
             if pname in ov["providers"]:
                 return _get_provider_from(ov, pname), (model or entry.get("model") or _FALLBACK_MODEL)
         elif ov.get("enforce"):
+            # An org whose stored key no longer decrypts arrives here with no
+            # usable providers — say so instead of "none configured".
+            if ov.get("undecryptable_providers"):
+                raise LLMError("this workspace's stored LLM key can no longer be decrypted (the "
+                               "encryption key changed) — enter it again under Settings › LLM")
             raise LLMError("this workspace has no LLM provider configured — add your own key under "
                            "Settings › LLM (light plan) or upgrade to premium")
     block = _effective_config()

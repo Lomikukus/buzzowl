@@ -6,6 +6,11 @@ v1 lives in migrations/NNN_name.sql. init_db() applies both automatically:
 fresh DB → full schema.sql; legacy DB (no schema_version table) → one-time
 baseline reconcile, then stamped v1; then pending migrations in order.
 
+A migration that fails on a reachable database is FATAL — init_db raises
+SchemaMigrationError and startup aborts, because serving traffic on a stale or
+half-migrated schema is worse than not starting. An unreachable database stays
+non-fatal (the server boots degraded and retries), as everywhere else here.
+
 This module otherwise manages the connection pool and provides async
 data-access functions for orgs, users, clients, contacts, documents, search.
 
@@ -56,6 +61,55 @@ _SCHEMA_VERSION_DDL = """
 
 # Migration files: NNN_short_name.sql (README.md etc. are ignored).
 _MIGRATION_FILE_RE = re.compile(r"^(\d+)_[A-Za-z0-9][\w\-]*\.sql$")
+
+# Schema version the connected DB is on after the runner finished. None until
+# init_db() has run (or when the DB was unreachable). Surfaced by /api/health
+# so operators can see at a glance which schema the running code sits on,
+# without a query per health poll.
+_schema_version: Optional[int] = None
+
+
+def get_schema_version() -> Optional[int]:
+    """Applied schema version recorded at startup, or None if unknown."""
+    return _schema_version
+
+
+class SchemaMigrationError(RuntimeError):
+    """A migration failed to apply on a REACHABLE database.
+
+    Fatal by design (see docs/upgrading.md): the alternative is a server
+    happily serving traffic against a stale or half-migrated schema, which is
+    far worse than a crash loop an operator can see. Distinct from "database
+    unreachable", which stays gracefully degraded — see
+    _is_infrastructure_error().
+    """
+
+    def __init__(self, source: str, original: BaseException):
+        self.source = source          # migration file name (or schema.sql)
+        self.original = original      # the underlying SQL / IO error
+        super().__init__(
+            f"migration {source} failed to apply: "
+            f"{type(original).__name__}: {original}"
+        )
+
+
+# Errors that mean "the database is not reachable right now" rather than "this
+# SQL is wrong". compose starts the server alongside db, so booting degraded and
+# retrying must keep working; only real migration failures are fatal.
+_INFRASTRUCTURE_ERRORS: tuple = (
+    asyncpg.PostgresConnectionError,   # SQLSTATE 08xxx — connection_exception
+    asyncpg.CannotConnectNowError,     # 57P03 — server still starting up
+    asyncpg.TooManyConnectionsError,   # 53300 — transient capacity, not bad SQL
+    asyncpg.InterfaceError,            # pool/connection closed under us
+    ConnectionError,
+    OSError,                           # socket-level failures
+    asyncio.TimeoutError,              # includes builtins.TimeoutError on 3.11+
+)
+
+
+def _is_infrastructure_error(exc: BaseException) -> bool:
+    """True when exc means the DB was unreachable, not that a migration is bad."""
+    return isinstance(exc, _INFRASTRUCTURE_ERRORS)
 
 
 # ---------------------------------------------------------------------------
@@ -314,36 +368,81 @@ async def _run_schema_migrations(
     pool: asyncpg.Pool,
     migrations_dir: Optional[Path] = None,
 ) -> None:
-    """Bring the connected database up to the current schema version."""
+    """Bring the connected database up to the current schema version.
+
+    Every DDL step runs in its own transaction, so a failure rolls that step
+    back and leaves the database consistent at the previous version. A failed
+    step is re-raised as SchemaMigrationError (fatal — init_db aborts startup);
+    a lost/absent connection propagates unchanged so the caller can degrade
+    gracefully.
+    """
+    global _schema_version
     async with pool.acquire() as conn:
         # (a) Fresh database → the full schema.sql (which stamps v1 itself).
         if not await _table_exists(conn, "orgs"):
             logger.info("Fresh database — applying %s", SCHEMA_PATH.name)
-            async with conn.transaction():
-                await conn.execute(SCHEMA_PATH.read_text())
+            # Read outside the DB try: a file error is a broken build, not an
+            # unreachable database (both are OSError — don't conflate them).
+            try:
+                schema_sql = SCHEMA_PATH.read_text()
+            except OSError as exc:
+                raise SchemaMigrationError(SCHEMA_PATH.name, exc) from exc
+            try:
+                async with conn.transaction():
+                    await conn.execute(schema_sql)
+            except Exception as exc:
+                if _is_infrastructure_error(exc):
+                    raise
+                raise SchemaMigrationError(SCHEMA_PATH.name, exc) from exc
 
         # (b) Legacy database (pre-dates schema_version) → one-time baseline
         #     reconcile with the historical runtime DDL, then stamp v1.
         elif not await _table_exists(conn, "schema_version"):
             logger.info("Legacy database — baseline reconcile → schema v%d", BASELINE_VERSION)
-            async with conn.transaction():
-                for statement in _BASELINE_RECONCILE_STATEMENTS:
-                    await conn.execute(statement)
-                await conn.execute(_SCHEMA_VERSION_DDL)
-                await conn.execute(
-                    "INSERT INTO schema_version (version) VALUES ($1) ON CONFLICT DO NOTHING",
-                    BASELINE_VERSION,
-                )
+            try:
+                async with conn.transaction():
+                    for statement in _BASELINE_RECONCILE_STATEMENTS:
+                        await conn.execute(statement)
+                    await conn.execute(_SCHEMA_VERSION_DDL)
+                    await conn.execute(
+                        "INSERT INTO schema_version (version) VALUES ($1) ON CONFLICT DO NOTHING",
+                        BASELINE_VERSION,
+                    )
+            except Exception as exc:
+                if _is_infrastructure_error(exc):
+                    raise
+                raise SchemaMigrationError("baseline reconcile", exc) from exc
 
         # (c) Apply pending migrations/NNN_name.sql, one transaction per file.
-        current = await conn.fetchval("SELECT COALESCE(MAX(version), 0) FROM schema_version")
-        for version, path in pending_migrations(int(current), migrations_dir):
+        current = int(await conn.fetchval(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version"
+        ))
+        try:
+            pending = pending_migrations(current, migrations_dir)
+        except Exception as exc:
+            # Duplicate/unorderable version prefixes are a repo bug — refuse to
+            # boot rather than apply migrations in an arbitrary order.
+            raise SchemaMigrationError("migrations/", exc) from exc
+
+        for version, path in pending:
             logger.info("Applying migration %s (schema v%d)", path.name, version)
-            async with conn.transaction():
-                await conn.execute(path.read_text())
-                await conn.execute(
-                    "INSERT INTO schema_version (version) VALUES ($1)", version
-                )
+            try:
+                migration_sql = path.read_text()
+            except OSError as exc:
+                raise SchemaMigrationError(path.name, exc) from exc
+            try:
+                async with conn.transaction():
+                    await conn.execute(migration_sql)
+                    await conn.execute(
+                        "INSERT INTO schema_version (version) VALUES ($1)", version
+                    )
+            except Exception as exc:
+                if _is_infrastructure_error(exc):
+                    raise
+                raise SchemaMigrationError(path.name, exc) from exc
+            current = version
+
+        _schema_version = current
 
 
 async def init_db(
@@ -407,19 +506,46 @@ async def init_db(
         _pool = None
 
     # Bring the schema up to date (fresh install / legacy baseline / pending
-    # migrations). Best-effort like everything else in this layer: a failure
-    # is logged loudly but the server keeps running on the existing schema.
+    # migrations). Two failure modes, deliberately treated differently:
+    #
+    #   DB unreachable  → graceful degradation, as everywhere else in this
+    #                     layer. compose starts the server next to db, so a
+    #                     not-yet-up database must never be fatal.
+    #   migration failed → FATAL. Serving traffic on a stale/half-migrated
+    #                     schema corrupts data quietly; a crash loop is visible.
+    #                     (docs/upgrading.md documents exactly this.)
     if _pool:
         try:
             await _run_schema_migrations(_pool)
+        except SchemaMigrationError as exc:
+            logger.error(
+                "FATAL: schema migration %s failed — %s: %s. "
+                "The failing file was rolled back; the database is unchanged at "
+                "its previous version. Refusing to serve traffic on a stale schema.",
+                exc.source, type(exc.original).__name__, exc.original,
+            )
+            try:
+                from rich.console import Console
+                Console().print(
+                    f"[bold red]FATAL: schema migration {exc.source} failed: "
+                    f"{exc.original}[/bold red]\n"
+                    "[bold red]Aborting startup — the server will not run on a "
+                    "stale schema. Fix the migration (see docs/upgrading.md) and "
+                    "restart.[/bold red]"
+                )
+            except ImportError:
+                pass
+            raise
         except Exception as exc:
+            # Reachability problem (pool died, DB going away mid-run): degrade.
             logger.warning(
-                "Schema migration step failed (non-fatal — continuing on existing schema): %s",
+                "Schema migration skipped — database unreachable (non-fatal, "
+                "continuing degraded): %s",
                 exc,
             )
             try:
                 from rich.console import Console
-                Console().print(f"[yellow]Schema migration failed (non-fatal): {exc}[/yellow]")
+                Console().print(f"[yellow]Schema migration skipped (DB unreachable): {exc}[/yellow]")
             except ImportError:
                 pass
 
@@ -3570,6 +3696,147 @@ async def list_prompts(org_id: int, limit: int = 100, surface: Optional[str] = N
             org_id, limit, surface,
         )
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Retention — age-based pruning of OPERATIONAL TELEMETRY only
+#
+# Knowledge (documents, clients, contacts, deals, ...) is never pruned here.
+# These three helpers only touch agent_runs and prompt_log; the schedule and
+# the windows live in retention.py / config.yaml.
+#
+# All three work in bounded batches (one statement per batch, `count(*)` over a
+# RETURNING CTE so the caller gets a plain int) and stop after `max_batches` so
+# a first run against a huge table can never turn into an hour-long lock-fest —
+# the backlog simply continues the next night. Rows with a NULL created_at are
+# never matched, so a row of unknown age is kept rather than guessed at.
+# ---------------------------------------------------------------------------
+
+# Tool-call entries rewritten by compact_agent_run_tool_calls carry this marker,
+# which is also the idempotency guard (an already-compacted run is skipped).
+_PRUNED_TOOL_CALL_MARKER = '[{"pruned": true}]'
+
+
+async def compact_agent_run_tool_calls(cutoff: datetime, batch_size: int = 2000,
+                                       max_batches: int = 50) -> int:
+    """Strip the heavy payload out of agent_runs.tool_calls older than `cutoff`.
+
+    The row survives — status, task, timings, output and the documents that
+    point at it are what the dashboards and stats read. Only the per-call
+    `args`/`result` bodies (fetched page content, whole documents) go. The array
+    keeps one entry per call with its tool name and timestamp, so consumers that
+    count calls (`jsonb_array_length`, the service-runs dashboard) stay correct,
+    and the column stays a JSONB array — it is NOT NULL, so it is never nulled.
+    """
+    if not _pool:
+        return 0
+    total = 0
+    async with _pool.acquire() as conn:
+        for _ in range(max_batches):
+            n = await conn.fetchval(
+                """
+                WITH doomed AS (
+                    SELECT id FROM agent_runs
+                     WHERE created_at < $1
+                       AND jsonb_typeof(tool_calls) = 'array'
+                       AND jsonb_array_length(tool_calls) > 0
+                       AND NOT tool_calls @> $3::jsonb
+                     ORDER BY id
+                     LIMIT $2
+                ), stripped AS (
+                    UPDATE agent_runs r
+                       SET tool_calls = COALESCE((
+                             SELECT jsonb_agg(jsonb_build_object(
+                                        'tool',   COALESCE(e->>'tool', e->>'name', ''),
+                                        'ts',     COALESCE(e->>'ts', ''),
+                                        'args',   '{}'::jsonb,
+                                        'result', '',
+                                        'pruned', true)
+                                    ORDER BY ord)
+                               FROM jsonb_array_elements(r.tool_calls)
+                                    WITH ORDINALITY AS t(e, ord)
+                           ), '[]'::jsonb)
+                     WHERE r.id IN (SELECT id FROM doomed)
+                     RETURNING 1
+                )
+                SELECT count(*) FROM stripped
+                """,
+                cutoff, batch_size, _PRUNED_TOOL_CALL_MARKER,
+            )
+            n = int(n or 0)
+            total += n
+            if n < batch_size:
+                break
+    return total
+
+
+async def delete_agent_runs_before(cutoff: datetime, batch_size: int = 2000,
+                                   max_batches: int = 50) -> int:
+    """Delete agent_runs rows created before `cutoff`. Returns rows deleted.
+
+    Safe for the two foreign keys that point here — documents.agent_run_id and
+    research_tasks.assigned_agent_run_id are both ON DELETE SET NULL, so the
+    knowledge a run produced stays, it just loses the provenance pointer.
+    """
+    if not _pool:
+        return 0
+    total = 0
+    async with _pool.acquire() as conn:
+        for _ in range(max_batches):
+            n = await conn.fetchval(
+                """
+                WITH doomed AS (
+                    SELECT id FROM agent_runs
+                     WHERE created_at < $1
+                     ORDER BY id
+                     LIMIT $2
+                ), gone AS (
+                    DELETE FROM agent_runs WHERE id IN (SELECT id FROM doomed)
+                    RETURNING 1
+                )
+                SELECT count(*) FROM gone
+                """,
+                cutoff, batch_size,
+            )
+            n = int(n or 0)
+            total += n
+            if n < batch_size:
+                break
+    return total
+
+
+async def delete_prompt_log_before(cutoff: datetime, batch_size: int = 5000,
+                                   max_batches: int = 50) -> int:
+    """Delete prompt_log rows created before `cutoff`. Returns rows deleted.
+
+    prompt_log feeds the evaluation endpoints, whose lookback is capped at 365
+    days — keep the window generous (see config.yaml `retention`).
+    """
+    if not _pool:
+        return 0
+    total = 0
+    async with _pool.acquire() as conn:
+        for _ in range(max_batches):
+            n = await conn.fetchval(
+                """
+                WITH doomed AS (
+                    SELECT id FROM prompt_log
+                     WHERE created_at < $1
+                     ORDER BY id
+                     LIMIT $2
+                ), gone AS (
+                    DELETE FROM prompt_log WHERE id IN (SELECT id FROM doomed)
+                    RETURNING 1
+                )
+                SELECT count(*) FROM gone
+                """,
+                cutoff, batch_size,
+            )
+            n = int(n or 0)
+            total += n
+            if n < batch_size:
+                break
+    return total
 
 
 # ---------------------------------------------------------------------------

@@ -64,19 +64,22 @@ openssl rand -hex 32        # -> put it in .env as AGENT_SERVICE_TOKEN=
 openssl rand -hex 32        # -> put it in .env as BUZZOWL_SECRET_KEY=
 # and at least one LLM credential, e.g. OPENROUTER_API_KEY=sk-or-...
 
-# One-time: build the hardened browser image the agents fetch pages with
-# (~2.5 GB, a few minutes). On x86_64 hosts also set CAMOFOX_ARCH=x86_64 in .env.
-./scripts/build-browser.sh
-
 docker compose up -d
 # open http://localhost:8000/login
 ```
 
-Without that browser image the stack still runs — start it without the two
-browser containers and agents fall back to plain HTTP fetching:
+The first `docker compose up -d` also builds the hardened browser image the
+agents fetch pages with, from its upstream MIT repo — that adds ~2.5 GB and a few
+minutes to the first start only; every later start reuses the image. On x86_64
+hosts set `CAMOFOX_ARCH=x86_64` and `CAMOFOX_BUILD_ARCH=x86_64` in `.env` first.
+
+Two optional shortcuts:
 
 ```bash
-docker compose up -d db searxng server agent-pi
+./scripts/build-browser.sh                        # build the browser image up front,
+                                                  # so `up -d` starts immediately
+docker compose up -d db searxng server agent-pi   # skip the browser entirely —
+                                                  # agents fall back to plain HTTP fetching
 ```
 
 An empty workspace is a poor first impression, so there is a demo dataset —
@@ -172,9 +175,12 @@ Docker Compose runs the platform as a set of services:
 | `cloudflared` | Tunnel for exposing an instance publicly (`--profile tunnel`) |
 | `synapse` | Matrix homeserver for cross-install sharing (`--profile federation`, see [docs/federation.md](docs/federation.md)) |
 
-`camofox` is the one image Compose neither pulls nor builds — build it once with
-`./scripts/build-browser.sh` (it needs browser binaries that upstream does not ship
-in the Git context). Everything else comes up with `docker compose up -d`.
+All of them come up with `docker compose up -d`. `camofox` is the only one built
+from a third-party source (the MIT-licensed
+[jo-inc/camofox-browser](https://github.com/jo-inc/camofox-browser), pinned to a
+tag in `docker-compose.yml`), which is why the first start takes a few minutes;
+`./scripts/build-browser.sh` does that build separately if you would rather not
+wait during `up`.
 
 Design in one paragraph: the schema is document-oriented — meetings, research,
 notes, and signals are all rows in a universal `documents` table with a `type`

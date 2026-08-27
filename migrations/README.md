@@ -41,8 +41,24 @@ Ordered SQL migrations for the Buzzowl schema.
    equals every legacy DB's state. If the migration chain ever grows unwieldy,
    a deliberate "squash to v2 baseline" can be done as its own task.
 
-## Graceful degradation
+## Failure behaviour
 
-The runner in `db.init_db()` is best-effort like the rest of the DB layer:
-DB down → the server boots without a pool as before; a failing migration is
-logged loudly and the server keeps running on the existing schema.
+Two failure modes, deliberately different:
+
+- **Database unreachable** (not up yet, connection refused, pool lost) → graceful
+  degradation like the rest of the DB layer: the server boots without a pool,
+  migrations are skipped with a warning, and it retries as before. `compose`
+  starts the server alongside `db`, so this must never be fatal.
+- **A migration file fails to apply** on a reachable database → **fatal**. The
+  file's transaction rolls back (the DB stays at its previous version),
+  `db.init_db()` raises `db.SchemaMigrationError` naming the file and the SQL
+  error, and startup aborts. Under `restart: unless-stopped` the container
+  crash-loops, which is visible — far better than a server quietly serving
+  traffic against a stale or half-migrated schema.
+
+Duplicate version prefixes in this directory are treated the same way: fatal,
+before anything is applied.
+
+The applied version is recorded at startup and surfaced as
+`checks.schema_version` in `GET /api/health` (`null` when the DB was unreachable
+at boot).

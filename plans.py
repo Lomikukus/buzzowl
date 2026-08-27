@@ -15,14 +15,23 @@ Keys at rest: AES-256-GCM with a key derived from BUZZOWL_SECRET_KEY (env),
 falling back to the agent_service_token — the same derivation the Pi service
 uses (agent_service_ts/src/secrets.ts) so both sides can read one org's keys
 without any key ever travelling over HTTP.
+
+Because of that fallback, an install that never set BUZZOWL_SECRET_KEY encrypts
+with AGENT_SERVICE_TOKEN — rotating that token makes every stored org key
+unreadable. Ciphertext that no longer opens raises SecretDecryptError; callers
+treat it as "no key stored" and tell the admin to re-enter it (see
+docs/backup-restore.md).
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 from typing import Optional
+
+logger = logging.getLogger("whisper.plans")
 
 PLAN_LIGHT, PLAN_PREMIUM = "light", "premium"
 PLANS = (PLAN_LIGHT, PLAN_PREMIUM)
@@ -49,6 +58,15 @@ DEFAULT_PRICES = {
 # key encryption
 # ---------------------------------------------------------------------------
 
+class SecretDecryptError(Exception):
+    """Stored ciphertext does not open with the current key material.
+
+    Almost always: BUZZOWL_SECRET_KEY was never set and AGENT_SERVICE_TOKEN was
+    rotated, so the derived AES key changed. The stored value is unrecoverable —
+    the secret has to be entered again.
+    """
+
+
 def _secret_material() -> bytes:
     raw = os.environ.get("BUZZOWL_SECRET_KEY", "")
     if not raw:
@@ -73,13 +91,46 @@ def encrypt_secret(plain: str) -> str:
 
 
 def decrypt_secret(token: str) -> str:
+    """'enc:v1:…' → the plaintext. Non-encrypted input is returned untouched.
+
+    Raises SecretDecryptError when the ciphertext does not open with the current
+    key material (corrupt value, or the encryption key changed). Callers that can
+    carry on without the secret should use try_decrypt_secret().
+    """
     if not token or not token.startswith(_ENC_PREFIX):
         return token or ""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    b = token[len(_ENC_PREFIX):]
-    b += "=" * (-len(b) % 4)
-    raw = base64.urlsafe_b64decode(b)
-    return AESGCM(_secret_material()).decrypt(raw[:12], raw[12:], None).decode()
+    try:
+        b = token[len(_ENC_PREFIX):]
+        b += "=" * (-len(b) % 4)
+        raw = base64.urlsafe_b64decode(b)
+        return AESGCM(_secret_material()).decrypt(raw[:12], raw[12:], None).decode()
+    except Exception as exc:      # InvalidTag, bad base64, short buffer, …
+        raise SecretDecryptError(
+            "stored secret cannot be decrypted — the encryption key changed "
+            "(set BUZZOWL_SECRET_KEY explicitly; rotating AGENT_SERVICE_TOKEN "
+            "without it orphans every stored key)") from exc
+
+
+def try_decrypt_secret(token: str, what: str = "a stored secret") -> Optional[str]:
+    """decrypt_secret() that returns None instead of raising, with one WARNING."""
+    try:
+        return decrypt_secret(token)
+    except SecretDecryptError:
+        logger.warning("%s cannot be decrypted — encryption key changed? "
+                       "Reconnect the key in Settings", what)
+        return None
+
+
+def key_readable(value: str) -> bool:
+    """False only for a stored ciphertext that no longer opens (status surfaces)."""
+    if not is_encrypted(value):
+        return True
+    try:
+        decrypt_secret(value)
+        return True
+    except SecretDecryptError:
+        return False
 
 
 def is_encrypted(value: str) -> bool:
@@ -162,19 +213,45 @@ def merge_org_llm(existing: dict, incoming: dict) -> dict:
 
 
 def public_org_llm(block: dict) -> dict:
-    """Read view: keys masked, roles as-is."""
+    """Read view: keys masked, roles as-is.
+
+    A stored key that no longer decrypts reports has_key false + needs_reconnect
+    true, so the UI asks for it again instead of pretending a key is in place.
+    """
     provs = {}
     for name, p in ((block or {}).get("providers") or {}).items():
-        provs[name] = {**p, "api_key": mask_key(p.get("api_key", "")), "has_key": bool(p.get("api_key"))}
+        stored = p.get("api_key", "")
+        broken = bool(stored) and not key_readable(stored)
+        provs[name] = {**p, "api_key": mask_key(stored),
+                       "has_key": bool(stored) and not broken,
+                       "needs_reconnect": broken}
     return {"providers": provs, "roles": dict((block or {}).get("roles") or {})}
 
 
-def overlay_for_llm(block: dict) -> dict:
-    """Runtime view for llm.resolve: keys decrypted (never leaves the process)."""
-    provs = {}
+def overlay_for_llm(block: dict, org_id: Optional[int] = None) -> dict:
+    """Runtime view for llm.resolve: keys decrypted (never leaves the process).
+
+    A provider whose stored key no longer decrypts is DROPPED — the org then
+    behaves exactly as if it had never stored one (platform fallback, or the
+    normal "no provider configured" refusal when plans are enforced) instead of
+    firing an empty key at the upstream API. The dropped names come back under
+    'undecryptable_providers' so the API/UI can say "reconnect the key".
+    """
+    provs, broken = {}, []
     for name, p in ((block or {}).get("providers") or {}).items():
-        provs[name] = {**p, "api_key": decrypt_secret(p.get("api_key", ""))}
-    return {"providers": provs, "roles": dict((block or {}).get("roles") or {})}
+        try:
+            key = decrypt_secret(p.get("api_key", ""))
+        except SecretDecryptError:
+            broken.append(name)
+            logger.warning("stored LLM key for org %s (provider %r) cannot be decrypted — "
+                           "encryption key changed? Reconnect the key in Settings",
+                           org_id if org_id is not None else "?", name)
+            continue
+        provs[name] = {**p, "api_key": key}
+    out = {"providers": provs, "roles": dict((block or {}).get("roles") or {})}
+    if broken:
+        out["undecryptable_providers"] = sorted(broken)
+    return out
 
 
 # ---------------------------------------------------------------------------

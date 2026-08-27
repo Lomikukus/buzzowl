@@ -831,9 +831,13 @@ async function loadPlan() {
   const b = document.getElementById('planBadge'); b.textContent = _plan.plan;
   b.style.borderColor = b.style.color = _plan.plan === 'premium' ? 'var(--c-purple, #c586c0)' : 'var(--c-accent, #4ec9b0)';
   const note = document.getElementById('planNote');
-  note.textContent = _plan.plan === 'light'
+  const broken = (_plan.keys_need_reconnect || []).length;
+  note.textContent = broken
+    ? 'stored LLM key can no longer be decrypted (the encryption key changed) — enter it again below'
+    : _plan.plan === 'light'
     ? (_plan.has_own_providers ? 'using this workspace\'s own LLM key' : (_plan.enforce_plans ? 'no own key yet — LLM calls will be refused until you add one below' : 'no own key yet — falling back to the platform providers'))
     : 'platform providers, metered';
+  note.style.color = broken ? 'var(--c-danger, #e06c75)' : '';
   const m = _plan.usage?.month || {};
   document.getElementById('planUsage').textContent =
     `${(m.calls||0).toLocaleString()} calls · ${((m.prompt_tokens||0)+(m.completion_tokens||0)).toLocaleString()} tokens · ${_money(m.cost_usd||0)}` + (m.unpriced_calls ? ` (${m.unpriced_calls} calls without a known price)` : '');
@@ -860,7 +864,8 @@ async function loadPlan() {
       if (first) {
         const p = provs[first];
         document.getElementById('olName').value = first; document.getElementById('olKind').value = p.kind || 'openai-compat';
-        document.getElementById('olBase').value = p.base_url || ''; document.getElementById('olKey').placeholder = p.has_key ? 'stored — leave empty to keep' : 'sk-…';
+        document.getElementById('olBase').value = p.base_url || '';
+        document.getElementById('olKey').placeholder = p.needs_reconnect ? 'unreadable — enter the key again' : p.has_key ? 'stored — leave empty to keep' : 'sk-…';
         document.getElementById('olModel').value = (d.llm.roles?.default || {}).model || '';
       }
     }
