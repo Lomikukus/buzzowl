@@ -7,7 +7,10 @@ runs as the `agent-pi` container — do not install its packages on the host.
 
 ## HTTP Contract
 
-All requests require `Authorization: Bearer <agent_service_token>` (from `config.yaml`).
+All requests except `GET /health` require `Authorization: Bearer <AGENT_SERVICE_TOKEN>`.
+Auth is **fail-closed**: with no `AGENT_SERVICE_TOKEN` in the environment every
+endpoint answers `401` — same posture as the main server's internal APIs. Set
+`ALLOW_INSECURE_INTERNAL=1` to serve unauthenticated for local dev only.
 
 ```
 POST   /runs              → enqueue a run → {run_id, status: "queued"}
@@ -67,7 +70,8 @@ container is the only supported runtime.
 - `DEFAULT_BRAIN` — `openrouter` unless overridden
 - `DEFAULT_MODEL` — `deepseek/deepseek-v4-flash`; override per run in the `POST /runs` body
 - `SEARXNG_URL`, `CAMOFOX_URL`, `BROWSER_SERVICE_URL` — tool backends (page fetch degrades to plain HTTP when the browser stack is down)
-- `AGENT_SERVICE_TOKEN` — shared secret with the main server (required)
+- `AGENT_SERVICE_TOKEN` — shared secret with the main server (required; without it every route returns 401)
+- `ALLOW_INSECURE_INTERNAL` — `1` disables the token check (local dev backdoor, never in production)
 - `BUZZOWL_SECRET_KEY` — decrypts per-org LLM keys stored in the database
 - `AGENT_SERVICE_PORT` — 8001, `AGENT_MAX_CONCURRENT` — parallel runs (default 2)
 

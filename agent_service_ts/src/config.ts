@@ -190,6 +190,10 @@ export const config = {
   // Camofox (anti-bot Firefox) — permanent part of Pi's production setup
   camofoxUrl: (process.env.CAMOFOX_URL ?? '').replace(/\/$/, ''),
   serviceToken: process.env.AGENT_SERVICE_TOKEN ?? '',
+  // Explicit dev backdoor — same env var and semantics as the Python server
+  // (server.py / routers/internal.py). Without a serviceToken the API is
+  // fail-closed (401 on everything but /health); this is the only way to open it.
+  allowInsecureInternal: process.env.ALLOW_INSECURE_INTERNAL === '1',
   hostedEnforcePlans: yamlHostedEnforce,
   mainServerUrl: (process.env.MAIN_SERVER_URL ?? 'http://host.docker.internal:8000').replace(/\/$/, ''),
   // Embeddings — must match the main server's backend/model or vectors won't align.
