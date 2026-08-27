@@ -94,6 +94,14 @@ services:
       - BROWSER_SERVICE_URL=http://browser-service:3000
       - CAMOFOX_URL=http://camofox:9377
       - TRANSCRIPTION_MODE=${TRANSCRIPTION_MODE:-app}
+      # Rate limiting is keyed on the client IP. Behind a reverse proxy (the
+      # cloudflared profile, nginx, …) every request arrives from the proxy, so
+      # all users would share one bucket unless its X-Forwarded-For is trusted:
+      # set FORWARDED_ALLOW_IPS to the proxy's address in .env. Left at uvicorn's
+      # default otherwise — port 8000 is published, so do not widen it blindly.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # App-wide fallback limit for endpoints without their own (see context.py).
+      - RATE_LIMIT_DEFAULT=${RATE_LIMIT_DEFAULT:-300/minute}
       - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
       - BUZZOWL_SECRET_KEY=${BUZZOWL_SECRET_KEY:-}
       - HOSTED_OPERATOR_KEY=${HOSTED_OPERATOR_KEY:-}

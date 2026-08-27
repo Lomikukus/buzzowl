@@ -25,7 +25,20 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import context
-from context import BASE_DIR, DB_AVAILABLE, RATE_LIMIT_AVAILABLE, config, console, db_module, executor, limiter, pwd_context
+from context import (
+    BASE_DIR,
+    DB_AVAILABLE,
+    RATE_LIMIT_AVAILABLE,
+    RATE_LIMIT_DEFAULT,
+    RateLimitMiddleware,
+    config,
+    configure_rate_limits,
+    console,
+    db_module,
+    executor,
+    limiter,
+    pwd_context,
+)
 from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
 from routers.pipeline import (
     ensure_dirs,
@@ -76,13 +89,17 @@ app.add_middleware(SecurityHeadersMiddleware)
 # Rate limiting (slowapi)
 # ---------------------------------------------------------------------------
 
+# The middleware is what makes the app-wide default limit (context.
+# RATE_LIMIT_DEFAULT) apply to undecorated routes — the @limiter.limit(...)
+# decorators enforce themselves, the default does not. It needs the route table
+# and the exemption list that configure_rate_limits() builds further down, once
+# every router is mounted.
 if RATE_LIMIT_AVAILABLE:
     from slowapi import _rate_limit_exceeded_handler  # type: ignore
     from slowapi.errors import RateLimitExceeded      # type: ignore
-    from slowapi.middleware import SlowAPIMiddleware   # type: ignore
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +471,20 @@ app.include_router(benchmark.router)
 app.include_router(evaluation.router)
 app.include_router(today.router)
 app.include_router(tasks.router)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting: route table + exemptions — must run after every router is
+# mounted, and the route table is fixed from here on
+# ---------------------------------------------------------------------------
+
+if RATE_LIMIT_AVAILABLE:
+    _exempt_routes = configure_rate_limits(app)
+    logging.getLogger("wk.server").info(
+        "Rate limiting: default %s (enabled=%s), %d of %d routes exempt",
+        RATE_LIMIT_DEFAULT, limiter.enabled, len(_exempt_routes),
+        len(app.state.rate_limit_routes),
+    )
 
 
 # ---------------------------------------------------------------------------
