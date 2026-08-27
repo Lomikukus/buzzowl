@@ -70,6 +70,21 @@ docker compose up -d --build
 Read the release notes before moving to the next tag: anything that needs manual
 action (a new required env var, a re-embedding run) is called out there.
 
+## Before you rotate `AGENT_SERVICE_TOKEN`
+
+Check that `.env` has its own `BUZZOWL_SECRET_KEY`:
+
+```bash
+grep -c '^BUZZOWL_SECRET_KEY=.\+' .env      # 1 = safe to rotate, 0 = read on
+```
+
+With no `BUZZOWL_SECRET_KEY`, per-org LLM keys and the Matrix federation access
+token are encrypted with a key derived from `AGENT_SERVICE_TOKEN`. Rotating the
+token then orphans all of them permanently — Settings shows *needs reconnection*
+and each org admin has to enter the key again. Fix it before rotating: set
+`BUZZOWL_SECRET_KEY` to the **current** `AGENT_SERVICE_TOKEN` value, restart, and
+only then generate a new token.
+
 ## Upgrades that need more than a rebuild
 
 - **A new required environment variable** — the server refuses to start and says

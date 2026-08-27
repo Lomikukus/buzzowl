@@ -16,6 +16,14 @@ recreate — except two secrets that make old data unreadable if you lose them.
 stays encrypted forever** — they have to be entered again. Keep it in a password
 manager, not only on the server.
 
+> **Set `BUZZOWL_SECRET_KEY` explicitly on the first install** (`openssl rand -hex 32`).
+> When it is empty, the encryption key is derived from `AGENT_SERVICE_TOKEN`
+> instead — so rotating that token, which is otherwise routine hygiene, orphans
+> every stored per-org LLM key and the Matrix federation access token. Nothing
+> recovers them: Settings shows the key as *needs reconnection* and an admin has
+> to enter it again. Rotating `AGENT_SERVICE_TOKEN` is safe **only** once
+> `BUZZOWL_SECRET_KEY` is set to its own separate value.
+
 Not worth backing up: Docker images, the SearXNG container, `camofox`, anything
 under `node_modules/`, and the Postgres volume of a test instance.
 
