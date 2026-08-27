@@ -1,6 +1,11 @@
 # Buzzowl
 
-[buzzowl.app](https://buzzowl.app) · AGPL-3.0 · self-hostable
+[![CI](https://img.shields.io/github/actions/workflow/status/Lomikukus/buzzowl/ci.yml?branch=main&label=CI)](https://github.com/Lomikukus/buzzowl/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/Lomikukus/buzzowl)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/Lomikukus/buzzowl)](https://github.com/Lomikukus/buzzowl/releases)
+[![Stars](https://img.shields.io/github/stars/Lomikukus/buzzowl?style=social)](https://github.com/Lomikukus/buzzowl/stargazers)
+
+[buzzowl.app](https://buzzowl.app) · self-hostable
 
 An agentic research and knowledge platform for sales teams. Buzzowl turns
 meetings into structured, searchable client knowledge, keeps that knowledge fresh
@@ -19,6 +24,30 @@ The core loop:
 Everything lives in PostgreSQL as documents with hybrid (vector + full-text) search
 on top, is rendered by the web UI, and is exposed via MCP so external agents can
 read and write the same knowledge base.
+
+## Screenshots
+
+![The daily queue: who to contact today, ranked, each entry with the reason and the research behind it](docs/images/today.png)
+
+| | |
+|---|---|
+| ![A client profile with agent-written research, signals, and linked sources](docs/images/client-detail.png) | ![Hybrid search across meetings, research, clients, and contacts](docs/images/knowledge.png) |
+| Client detail — research, signals, sources | Knowledge — hybrid search across everything |
+
+## Contents
+
+- [Features](#features)
+- [Quickstart (Docker)](#quickstart-docker)
+- [Bring your own LLM](#bring-your-own-llm)
+- [Architecture overview](#architecture-overview)
+- [Transcription](#transcription)
+- [Configuration](#configuration)
+- [Running it in practice](#running-it-in-practice)
+- [Development](#development)
+- [Roadmap](ROADMAP.md)
+- [Community](#community)
+- [Star History](#star-history)
+- [License](#license)
 
 ## Features
 
@@ -47,6 +76,8 @@ read and write the same knowledge base.
   sync runs end-to-end encrypted over Matrix — see `docs/federation.md`
 - **Hosted plans** — light (bring your own LLM key, encrypted at rest) or
   premium (platform providers, metered against a monthly budget)
+
+See [ROADMAP.md](ROADMAP.md) for what's next.
 
 ## Quickstart (Docker)
 
@@ -273,6 +304,19 @@ Conventions:
   `documents` table, never new tables. Attributes go into JSONB `metadata`.
 - Graceful degradation everywhere: LLM offline → skip summary; DB index fails →
   promotion still succeeds; agent fails → log and continue.
+
+## Community
+
+If Buzzowl is useful to you, a ⭐ helps other people find it.
+
+- [Discussions](https://github.com/Lomikukus/buzzowl/discussions) — questions, ideas, and what you built with it
+- [Issues](https://github.com/Lomikukus/buzzowl/issues) — bugs and install problems
+- [SECURITY.md](SECURITY.md) — report a vulnerability privately
+- hello@buzzowl.app — anything else
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Lomikukus/buzzowl&type=Date)](https://star-history.com/#Lomikukus/buzzowl&Date)
 
 ## License
 
