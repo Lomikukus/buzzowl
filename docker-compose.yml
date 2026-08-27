@@ -1,5 +1,7 @@
 # Buzzowl — plain `docker compose up -d` starts the whole app:
 #   db, searxng, server, camofox, browser-service, agent-pi
+# Nothing has to be built or fetched by hand first: on a fresh clone the first
+# `up` also builds the camofox browser image (~2.5 GB, a few minutes, once).
 #
 # Optional profiles:
 #   --profile debug   → pgweb DB browser UI (no auth — must never run by default)
@@ -134,20 +136,26 @@ services:
     mem_reservation: 320m
     mem_limit: 700m
 
-  # Camofox cannot be built straight from its Git URL: the upstream Dockerfile
-  # bind-mounts pre-downloaded browser binaries from dist/ (gitignored), which
-  # `make fetch` downloads first. One-time manual build (auto-detects the host
-  # arch; arm64 Mac → aarch64, Linux → x86_64):
-  #   git clone https://github.com/jo-inc/camofox-browser ./camofox-browser
-  #   cd camofox-browser && make build      # or explicitly: make build-arm64 / build-x86
-  # → produces the image tag referenced below. On x86_64 hosts set
-  #   CAMOFOX_ARCH=x86_64 in .env so compose picks the matching tag.
+  # Hardened browser the research agents fetch pages with. `image:` first, `build:`
+  # second: Compose reuses a locally present camofox-browser image and only builds
+  # when it is missing — so the first `docker compose up -d` on a fresh clone builds
+  # it from the upstream MIT repo (~2.5 GB, a few minutes) instead of failing on a
+  # missing image, and `./scripts/build-browser.sh` stays a way to do that build
+  # ahead of time (it produces exactly the tag below).
+  # The upstream Dockerfile downloads the Camoufox binaries itself at build time,
+  # so the Git context is self-contained — nothing outside the repo is needed.
+  # x86_64 hosts: set CAMOFOX_ARCH=x86_64 *and* CAMOFOX_BUILD_ARCH=x86_64 in .env.
+  # The two differ on ARM on purpose: the image tag says aarch64, the Camoufox
+  # release asset for it is named lin.arm64.zip.
   camofox:
     image: camofox-browser:135.0.1-${CAMOFOX_ARCH:-aarch64}
-    # build:                          # would fail today: dist/ artifacts are not in the repo
-    #   context: https://github.com/jo-inc/camofox-browser.git
-    #   args:
-    #     ARCH: ${CAMOFOX_ARCH:-aarch64}
+    build:
+      # Pinned upstream tag — bump it and the version args together.
+      context: https://github.com/jo-inc/camofox-browser.git#v1.14.0
+      args:
+        ARCH: ${CAMOFOX_BUILD_ARCH:-arm64}
+        CAMOUFOX_VERSION: "135.0.1"
+        CAMOUFOX_RELEASE: beta.24
     container_name: buzzowl_camofox
     ports:
       # Loopback only — agents reach it inside the compose network as camofox:9377.

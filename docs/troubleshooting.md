@@ -12,7 +12,9 @@ curl -fsS http://localhost:8000/api/health
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `docker compose up` fails on `camofox`: image not found | the browser image is neither pulled nor built by Compose | `./scripts/build-browser.sh`, or start without it: `docker compose up -d db searxng server agent-pi` |
+| The first `docker compose up -d` sits on `camofox` for minutes | Compose is building the browser image from its upstream repo (~2.5 GB, first start only) | let it finish; next time build it up front with `./scripts/build-browser.sh`, or skip it: `docker compose up -d db searxng server agent-pi` |
+| The `camofox` build fails on `curl … camoufox-135.0.1-beta.24-lin.<arch>.zip` | the build arch does not match the host | x86_64 hosts need **both** `CAMOFOX_ARCH=x86_64` and `CAMOFOX_BUILD_ARCH=x86_64` in `.env`, then `docker compose build camofox` |
+| The `camofox` build fails cloning `github.com/jo-inc/camofox-browser.git` | no network/proxy access to GitHub from the Docker builder | build it on a connected host, or start without it: `docker compose up -d db searxng server agent-pi` |
 | Server log: *"agent_service_token not set — internal APIs disabled (401)"* | `AGENT_SERVICE_TOKEN` missing in `.env` | `openssl rand -hex 32` → `.env`, same value everywhere, `docker compose up -d` |
 | Login page asks for a registration key you do not have | no admin exists yet | `docker compose logs server \| grep "FIRST RUN"` — the key is printed there. Or set `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` and restart |
 | Port 8000 already in use | something else is on it | stop it, or map another host port in `docker-compose.yml` (`"8010:8000"`) |
