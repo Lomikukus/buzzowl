@@ -1,7 +1,7 @@
 import pg from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config.js';
-import { decryptSecret } from './secrets.js';
+import { tryDecryptSecret } from './secrets.js';
 
 const { Pool } = pg;
 
@@ -430,7 +430,12 @@ export async function getOrgLlmOverlay(orgId: number): Promise<OrgLlmOverlay | n
     const llm = settings.llm ?? {};
     const providers: OrgLlmOverlay['providers'] = {};
     for (const [name, raw] of Object.entries<any>(llm.providers ?? {})) {
-      providers[name] = { ...raw, api_key: raw?.api_key ? decryptSecret(raw.api_key) : '' };
+      if (!raw?.api_key) { providers[name] = { ...raw, api_key: '' }; continue; }
+      const key = tryDecryptSecret(raw.api_key, `the stored LLM key for org ${orgId} (provider "${name}")`);
+      // Undecryptable (encryption key changed) → drop it, so the org behaves as
+      // if it never stored one instead of calling out with an empty key.
+      if (key === null) continue;
+      providers[name] = { ...raw, api_key: key };
     }
     const plan = settings.plan === 'premium' ? 'premium' : 'light';
     value = { plan, providers, roles: llm.roles ?? {}, enforce: !!(config.hostedEnforcePlans) };

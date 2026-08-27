@@ -100,7 +100,13 @@ class Node:
         path.mkdir(parents=True, exist_ok=True)
         cfg = AsyncClientConfig(store_sync_tokens=True, encryption_enabled=True)
         self.client = AsyncClient(ident["homeserver_url"], ident["mxid"], store_path=str(path), config=cfg)
-        token = plans.decrypt_secret(ident.get("access_token_enc") or "")
+        token = plans.try_decrypt_secret(ident.get("access_token_enc") or "",
+                                         f"the federation access token for org {self.org_id}")
+        if token is None:
+            # Encryption key changed since the identity was stored — the token is
+            # gone for good; surface it as a setup problem, not a crash.
+            raise RuntimeError("stored access token cannot be decrypted — the encryption key "
+                               "changed; connect this workspace to Matrix again")
         if not token or not ident.get("device_id"):
             raise RuntimeError("identity has no access token — set it up again")
         self.client.restore_login(ident["mxid"], ident["device_id"], token)

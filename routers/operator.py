@@ -59,13 +59,19 @@ def _slug(text: str) -> str:
 async def _org_view(org: dict, with_usage: bool = False) -> dict:
     settings = await db_module.get_org_settings(org["id"])
     users = await db_module.list_users(org["id"])
+    own_llm = ((settings.get("llm") or {}).get("providers") or {})
+    # Keys stored under a previous encryption key are unusable — report them as
+    # missing so a rotation shows up here instead of as failing agent runs.
+    orphaned = [n for n, p in own_llm.items()
+                if p.get("api_key") and not plans.key_readable(p.get("api_key", ""))]
     out = {
         "id": org["id"], "name": org["name"], "slug": org["slug"], "created_at": org.get("created_at"),
         "plan": plans.plan_of(settings), "suspended": bool(settings.get("suspended")),
         "suspended_reason": settings.get("suspended_reason"),
         "llm_budget_usd_per_month": settings.get("llm_budget_usd_per_month"),
         "external_ref": settings.get("external_ref"),          # the control plane's id (e.g. a Stripe customer)
-        "has_own_llm": bool(((settings.get("llm") or {}).get("providers") or {})),
+        "has_own_llm": bool(own_llm) and len(orphaned) < len(own_llm),
+        "llm_keys_need_reconnect": sorted(orphaned),
         "users": [{"id": u["id"], "username": u["username"], "email": u.get("email"), "role": u["role"]} for u in users],
     }
     if with_usage:
