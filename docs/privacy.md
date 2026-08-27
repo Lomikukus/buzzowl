@@ -93,12 +93,17 @@ the Art. 19 duty.
 
 ## Retention
 
-Nothing expires on its own. Decide a retention period (e.g. meetings 24 months,
-research 12 months, prompt logs 3 months) and enforce it with a cron job:
+Operational telemetry expires on its own: a nightly job prunes `prompt_log`
+(180 days by default) and `agent_runs` (90 days, with the tool-call payloads
+stripped after 14) — windows and the off switch are the `retention` block in
+`config.yaml`, described in [backup-restore.md](backup-restore.md).
+
+Knowledge never expires on its own. Decide a retention period for it (e.g.
+meetings 24 months, research 12 months), tighten `retention.prompt_log_days` if
+3 months is your policy, and enforce the rest with a cron job:
 
 ```sql
 DELETE FROM documents WHERE type = 'research' AND created_at < now() - interval '12 months';
-DELETE FROM prompt_log WHERE created_at < now() - interval '3 months';
 ```
 
 ## Zero-third-party setup

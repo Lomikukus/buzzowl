@@ -2734,6 +2734,27 @@ async def _start_heartbeat_scheduler() -> None:
         job_count += 1
     except Exception as exc:
         console.print(f"  [yellow]Sharing outbox worker not scheduled: {exc}[/yellow]")
+    # Retention prune (nightly): strips agent_runs.tool_calls payloads and deletes
+    # aged agent_runs / prompt_log rows. Telemetry only — knowledge is never pruned.
+    try:
+        import retention as _retention
+        _ret = _retention.get_settings(context.config)
+        if _ret["enabled"]:
+            _parts = _ret["cron"].split()
+            if len(_parts) != 5:
+                raise ValueError(f"retention.cron must be 5 parts, got {_ret['cron']!r}")
+            _min, _hr, _day, _mon, _dow = _parts
+            context._scheduler.add_job(
+                _retention.run_retention, "cron", id="retention_prune",
+                minute=_min, hour=_hr, day=_day, month=_mon, day_of_week=_dow,
+                misfire_grace_time=3600, coalesce=True, max_instances=1,
+                replace_existing=True,
+            )
+            job_count += 1
+        else:
+            console.print("  [dim]Retention prune disabled (retention.enabled: false)[/dim]")
+    except Exception as exc:
+        console.print(f"  [yellow]Retention prune not scheduled: {exc}[/yellow]")
 
     context._scheduler.start()
     console.print(f"  Heartbeat scheduler: [green]{job_count} job(s) loaded[/green]")
