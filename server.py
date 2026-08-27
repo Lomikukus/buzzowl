@@ -423,6 +423,9 @@ async def health_check():
         "db": db_ok,
         "pi": pi_ok,
         "embeddings": embed_ok,
+        # Recorded once by the migration runner at startup — no query per poll.
+        # None means the DB was unreachable at boot (migrations never ran).
+        "schema_version": db_module.get_schema_version() if DB_AVAILABLE and db_module else None,
         "embed_stats": db_module.embed_stats if DB_AVAILABLE and db_module else {},
     }
     return {"status": "healthy" if db_ok else "degraded", "checks": checks}
