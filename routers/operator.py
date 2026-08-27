@@ -32,9 +32,16 @@ from fastapi import APIRouter, HTTPException, Request
 import llm
 import plans
 from context import DB_AVAILABLE, config, db_module
+from routers.auth import _limit
 
 logger = logging.getLogger("wk.operator")
 router = APIRouter(prefix="/api/operator")
+
+# Tighter than the app-wide default: X-Operator-Key is a single shared secret
+# guarding tenant creation, deletion and SSO login tokens, so every endpoint
+# here doubles as a brute-force oracle. A real control plane makes a handful of
+# calls per minute; 30 leaves plenty of headroom.
+_OPERATOR_RATE = "30/minute"
 
 
 def _hosted() -> dict:
@@ -93,6 +100,7 @@ async def _get_org(org_id: int) -> dict:
 
 
 @router.get("/orgs")
+@_limit(_OPERATOR_RATE)
 async def list_orgs(request: Request):
     _check_key(request)
     rows = await db_module.list_orgs()
@@ -100,6 +108,7 @@ async def list_orgs(request: Request):
 
 
 @router.post("/orgs")
+@_limit(_OPERATOR_RATE)
 async def create_org(body: dict, request: Request):
     """Provision a tenant for a customer: org + admin user + plan. Returns a login
     token so the control plane can drop the user straight into the workspace."""
@@ -141,12 +150,14 @@ async def create_org(body: dict, request: Request):
 
 
 @router.get("/orgs/{org_id}")
+@_limit(_OPERATOR_RATE)
 async def get_org(org_id: int, request: Request):
     _check_key(request)
     return await _org_view(await _get_org(org_id), with_usage=True)
 
 
 @router.post("/orgs/{org_id}/plan")
+@_limit(_OPERATOR_RATE)
 async def set_plan(org_id: int, body: dict, request: Request):
     _check_key(request)
     await _get_org(org_id)
@@ -169,6 +180,7 @@ async def set_plan(org_id: int, body: dict, request: Request):
 
 
 @router.post("/orgs/{org_id}/suspend")
+@_limit(_OPERATOR_RATE)
 async def suspend(org_id: int, body: dict, request: Request):
     """Subscription lapsed: the workspace becomes read-only (writes → 402) and
     agents/heartbeats skip it. Data is kept."""
@@ -181,6 +193,7 @@ async def suspend(org_id: int, body: dict, request: Request):
 
 
 @router.post("/orgs/{org_id}/resume")
+@_limit(_OPERATOR_RATE)
 async def resume(org_id: int, request: Request):
     _check_key(request)
     await _get_org(org_id)
@@ -190,6 +203,7 @@ async def resume(org_id: int, request: Request):
 
 
 @router.post("/orgs/{org_id}/login-token")
+@_limit(_OPERATOR_RATE)
 async def login_token(org_id: int, body: dict, request: Request):
     """SSO hand-off: a session token for a user of the tenant (by email; default: the
     first admin). The control plane redirects the browser to /login#token=…"""
@@ -208,6 +222,7 @@ async def login_token(org_id: int, body: dict, request: Request):
 
 
 @router.get("/orgs/{org_id}/usage")
+@_limit(_OPERATOR_RATE)
 async def usage(org_id: int, request: Request, days: int = 31):
     _check_key(request)
     await _get_org(org_id)
@@ -215,6 +230,7 @@ async def usage(org_id: int, request: Request, days: int = 31):
 
 
 @router.delete("/orgs/{org_id}")
+@_limit(_OPERATOR_RATE)
 async def delete_org(org_id: int, body: dict, request: Request):
     _check_key(request)
     org = await _get_org(org_id)
