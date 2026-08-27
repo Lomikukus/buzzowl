@@ -3573,6 +3573,147 @@ async def list_prompts(org_id: int, limit: int = 100, surface: Optional[str] = N
 
 
 # ---------------------------------------------------------------------------
+# Retention — age-based pruning of OPERATIONAL TELEMETRY only
+#
+# Knowledge (documents, clients, contacts, deals, ...) is never pruned here.
+# These three helpers only touch agent_runs and prompt_log; the schedule and
+# the windows live in retention.py / config.yaml.
+#
+# All three work in bounded batches (one statement per batch, `count(*)` over a
+# RETURNING CTE so the caller gets a plain int) and stop after `max_batches` so
+# a first run against a huge table can never turn into an hour-long lock-fest —
+# the backlog simply continues the next night. Rows with a NULL created_at are
+# never matched, so a row of unknown age is kept rather than guessed at.
+# ---------------------------------------------------------------------------
+
+# Tool-call entries rewritten by compact_agent_run_tool_calls carry this marker,
+# which is also the idempotency guard (an already-compacted run is skipped).
+_PRUNED_TOOL_CALL_MARKER = '[{"pruned": true}]'
+
+
+async def compact_agent_run_tool_calls(cutoff: datetime, batch_size: int = 2000,
+                                       max_batches: int = 50) -> int:
+    """Strip the heavy payload out of agent_runs.tool_calls older than `cutoff`.
+
+    The row survives — status, task, timings, output and the documents that
+    point at it are what the dashboards and stats read. Only the per-call
+    `args`/`result` bodies (fetched page content, whole documents) go. The array
+    keeps one entry per call with its tool name and timestamp, so consumers that
+    count calls (`jsonb_array_length`, the service-runs dashboard) stay correct,
+    and the column stays a JSONB array — it is NOT NULL, so it is never nulled.
+    """
+    if not _pool:
+        return 0
+    total = 0
+    async with _pool.acquire() as conn:
+        for _ in range(max_batches):
+            n = await conn.fetchval(
+                """
+                WITH doomed AS (
+                    SELECT id FROM agent_runs
+                     WHERE created_at < $1
+                       AND jsonb_typeof(tool_calls) = 'array'
+                       AND jsonb_array_length(tool_calls) > 0
+                       AND NOT tool_calls @> $3::jsonb
+                     ORDER BY id
+                     LIMIT $2
+                ), stripped AS (
+                    UPDATE agent_runs r
+                       SET tool_calls = COALESCE((
+                             SELECT jsonb_agg(jsonb_build_object(
+                                        'tool',   COALESCE(e->>'tool', e->>'name', ''),
+                                        'ts',     COALESCE(e->>'ts', ''),
+                                        'args',   '{}'::jsonb,
+                                        'result', '',
+                                        'pruned', true)
+                                    ORDER BY ord)
+                               FROM jsonb_array_elements(r.tool_calls)
+                                    WITH ORDINALITY AS t(e, ord)
+                           ), '[]'::jsonb)
+                     WHERE r.id IN (SELECT id FROM doomed)
+                     RETURNING 1
+                )
+                SELECT count(*) FROM stripped
+                """,
+                cutoff, batch_size, _PRUNED_TOOL_CALL_MARKER,
+            )
+            n = int(n or 0)
+            total += n
+            if n < batch_size:
+                break
+    return total
+
+
+async def delete_agent_runs_before(cutoff: datetime, batch_size: int = 2000,
+                                   max_batches: int = 50) -> int:
+    """Delete agent_runs rows created before `cutoff`. Returns rows deleted.
+
+    Safe for the two foreign keys that point here — documents.agent_run_id and
+    research_tasks.assigned_agent_run_id are both ON DELETE SET NULL, so the
+    knowledge a run produced stays, it just loses the provenance pointer.
+    """
+    if not _pool:
+        return 0
+    total = 0
+    async with _pool.acquire() as conn:
+        for _ in range(max_batches):
+            n = await conn.fetchval(
+                """
+                WITH doomed AS (
+                    SELECT id FROM agent_runs
+                     WHERE created_at < $1
+                     ORDER BY id
+                     LIMIT $2
+                ), gone AS (
+                    DELETE FROM agent_runs WHERE id IN (SELECT id FROM doomed)
+                    RETURNING 1
+                )
+                SELECT count(*) FROM gone
+                """,
+                cutoff, batch_size,
+            )
+            n = int(n or 0)
+            total += n
+            if n < batch_size:
+                break
+    return total
+
+
+async def delete_prompt_log_before(cutoff: datetime, batch_size: int = 5000,
+                                   max_batches: int = 50) -> int:
+    """Delete prompt_log rows created before `cutoff`. Returns rows deleted.
+
+    prompt_log feeds the evaluation endpoints, whose lookback is capped at 365
+    days — keep the window generous (see config.yaml `retention`).
+    """
+    if not _pool:
+        return 0
+    total = 0
+    async with _pool.acquire() as conn:
+        for _ in range(max_batches):
+            n = await conn.fetchval(
+                """
+                WITH doomed AS (
+                    SELECT id FROM prompt_log
+                     WHERE created_at < $1
+                     ORDER BY id
+                     LIMIT $2
+                ), gone AS (
+                    DELETE FROM prompt_log WHERE id IN (SELECT id FROM doomed)
+                    RETURNING 1
+                )
+                SELECT count(*) FROM gone
+                """,
+                cutoff, batch_size,
+            )
+            n = int(n or 0)
+            total += n
+            if n < batch_size:
+                break
+    return total
+
+
+# ---------------------------------------------------------------------------
 # Contact log — durable per-contact outreach record (Home "Last contacted")
 # ---------------------------------------------------------------------------
 

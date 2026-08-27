@@ -28,6 +28,21 @@ db_pool_min: 2
 db_pool_max: 20
 executor_workers: 8     # ThreadPoolExecutor size (transcription, vault writes)
 
+# Retention — nightly pruning of OPERATIONAL TELEMETRY only (see docs/backup-restore.md).
+# Knowledge is never pruned: documents, clients, contacts, deals and meetings are
+# untouched at any age. Two tables would otherwise grow forever — agent_runs
+# (tool_calls holds every tool call a run made, including fetched page content)
+# and prompt_log (one row per chat/search prompt).
+retention:
+  enabled: true                 # master switch — false disables the job entirely
+  cron: "20 3 * * *"            # after a nightly dump, before the 04:00+ heartbeats
+  tool_call_payload_days: 14    # strip agent_runs.tool_calls payloads; the row + call count stay
+  agent_runs_days: 90           # delete the agent_runs row itself (documents keep their content,
+                                #   their agent_run_id is set to NULL by the existing FK)
+  prompt_log_days: 180          # generous on purpose: the evaluation endpoints look back
+                                #   up to 365 days — raise to 365 to keep the full eval range
+  batch_size: 2000              # rows per statement; the job loops until done, max 50 batches/table/night
+
 # Embeddings — power the vector half of hybrid search.
 # embed_backend: openai = any OpenAI-compatible API (openrouter.ai/api, api.openai.com, ...)
 #                ollama = local Ollama /api/embeddings (self-host variant)

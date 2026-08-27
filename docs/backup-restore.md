@@ -89,6 +89,58 @@ If `embeddings not null` is zero but `documents` is not, the dump is fine but th
 `vector` extension was missing during restore — check that the image really is
 `pgvector/pgvector:pg16`.
 
+## Disk usage and retention
+
+Almost all growth is the `buzzowl_pgdata` volume, and on a busy instance most of
+it is *telemetry*, not knowledge. Two tables are responsible:
+
+| Table | What it holds | Why it grows |
+|---|---|---|
+| `agent_runs` | one row per agent run; `tool_calls` is a JSONB blob of every tool call it made | research runs store fetched page content in there |
+| `prompt_log` | one row per chat/search prompt (max 4000 chars) | written on every message, read only by the evaluation pages |
+
+A nightly job (`retention.py`, 03:20 by default) prunes them. It never touches
+knowledge — `documents`, `clients`, `contacts`, `deals` and meetings are kept
+forever regardless of age. Defaults in `config.yaml`:
+
+```yaml
+retention:
+  enabled: true
+  cron: "20 3 * * *"
+  tool_call_payload_days: 14    # strip agent_runs.tool_calls payloads (row stays)
+  agent_runs_days: 90           # delete the agent_runs row
+  prompt_log_days: 180          # evaluation looks back up to 365 days
+  batch_size: 2000
+```
+
+`agent_runs` is pruned in two stages. After 14 days the heavy per-call payload is
+stripped but the row survives, so run status, timings and "which documents did
+this run write" keep working — the array keeps one emptied entry per call, so
+call counts on the agents dashboard stay correct. After 90 days the row goes;
+documents that referenced it keep their content and simply lose the
+`agent_run_id` pointer (the foreign key is `ON DELETE SET NULL`).
+
+Turn it off with `retention.enabled: false`, or widen any window — set
+`prompt_log_days: 365` to keep the full evaluation range. Each run logs one line:
+
+```bash
+docker compose logs server | grep retention
+```
+
+Where the space actually went, largest tables first:
+
+```bash
+docker compose exec -T db psql -U whisper -d whisper -c "
+  SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS size
+    FROM pg_catalog.pg_statio_user_tables
+   ORDER BY pg_total_relation_size(relid) DESC LIMIT 10;"
+```
+
+Deleted rows free space for reuse but do not shrink the files — that needs
+`VACUUM FULL` (takes an exclusive lock; run it once, off hours, not on a
+schedule). Docker images and build caches are usually the *other* half of a full
+disk: `docker system prune` before you go looking at the database.
+
 ## Moving to another machine
 
 1. Dump the database and tar the config files (above).
