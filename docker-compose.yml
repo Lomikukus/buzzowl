@@ -196,8 +196,10 @@ services:
   camofox:
     image: camofox-browser:135.0.1-${CAMOFOX_ARCH:-aarch64}
     build:
-      # Pinned upstream tag — bump it and the version args together.
-      context: https://github.com/jo-inc/camofox-browser.git#v1.14.0
+      # Pinned to the commit behind upstream tag v1.14.0 — a first run builds
+      # third-party code unattended, so the ref must be immutable (tags are not).
+      # Bump the commit and the version args together.
+      context: https://github.com/jo-inc/camofox-browser.git#e5a36f5cd0332fde6597de474329a308a53a0716
       args:
         ARCH: ${CAMOFOX_BUILD_ARCH:-arm64}
         CAMOUFOX_VERSION: "135.0.1"
