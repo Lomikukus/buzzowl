@@ -58,8 +58,10 @@ sort it out.
 
 Self-hosting Buzzowl? Before exposing an instance beyond your own machine:
 
-- **Set `AGENT_SERVICE_TOKEN`** in `.env` (`openssl rand -hex 32`) — the
-  internal agent API is fail-closed and disabled without it.
+- **Set `AGENT_SERVICE_TOKEN`** in `.env` (`openssl rand -hex 32`) — both the
+  server's internal API and the whole `agent-pi` API are fail-closed and
+  disabled (401) without it. `ALLOW_INSECURE_INTERNAL=1` is the only way to
+  serve them unauthenticated; it is a local-dev backdoor, never for production.
 - **Set `BUZZOWL_SECRET_KEY`** in `.env` if you use per-org LLM keys (hosted/
   multi-org setups) — without it, key encryption at rest falls back to
   `AGENT_SERVICE_TOKEN`.

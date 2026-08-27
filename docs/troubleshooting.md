@@ -14,6 +14,7 @@ curl -fsS http://localhost:8000/api/health
 |---|---|---|
 | `docker compose up` fails on `camofox`: image not found | the browser image is neither pulled nor built by Compose | `./scripts/build-browser.sh`, or start without it: `docker compose up -d db searxng server agent-pi` |
 | Server log: *"agent_service_token not set — internal APIs disabled (401)"* | `AGENT_SERVICE_TOKEN` missing in `.env` | `openssl rand -hex 32` → `.env`, same value everywhere, `docker compose up -d` |
+| `agent-pi` log: *"AGENT_SERVICE_TOKEN not set — API disabled (401)"*, every agent run 401s | same missing `.env` value — `agent-pi` is fail-closed too | `openssl rand -hex 32` → `.env`, `docker compose up -d`. For local dev only, `ALLOW_INSECURE_INTERNAL=1` serves it unauthenticated |
 | Login page asks for a registration key you do not have | no admin exists yet | `docker compose logs server \| grep "FIRST RUN"` — the key is printed there. Or set `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` and restart |
 | Port 8000 already in use | something else is on it | stop it, or map another host port in `docker-compose.yml` (`"8010:8000"`) |
 | Everything starts, but nothing an agent does works | no usable LLM credential | `curl -s localhost:8000/api/llm/status`, then Settings → LLM providers |

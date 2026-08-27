@@ -35,9 +35,19 @@ setInterval(() => {
 }, 60 * 1000).unref();
 
 // -- Auth middleware --
+// Fail-closed, mirroring routers/internal.py::_check_token on the Python side:
+//   - token configured → require exactly `Authorization: Bearer {token}`
+//   - token empty      → 401 ALWAYS, unless ALLOW_INSECURE_INTERNAL=1 (dev)
+// Without this the whole API (runs, chat, OAuth credentials) is open to anyone
+// who can reach the port.
 app.addHook('preHandler', async (req, reply) => {
   if (req.url === '/health') return;  // health is unauthenticated
-  if (!config.serviceToken) return;  // token not set → open (dev mode)
+  if (!config.serviceToken) {
+    if (config.allowInsecureInternal) return;  // explicit dev backdoor
+    return reply.code(401).send({
+      error: 'Internal APIs disabled: agent_service_token is not configured',
+    });
+  }
   const auth = req.headers.authorization ?? '';
   if (auth !== `Bearer ${config.serviceToken}`) {
     reply.code(401).send({ error: 'unauthorized' });
@@ -339,6 +349,17 @@ const start = async () => {
       if (res.rowCount) console.log(`[pi-agent] marked ${res.rowCount} orphaned run(s) as failed`);
     } catch (err) {
       console.warn('[pi-agent] orphan cleanup failed (non-fatal):', err);
+    }
+
+    // Security posture, announced at boot like the Python server does.
+    if (!config.serviceToken) {
+      if (config.allowInsecureInternal) {
+        console.warn('[pi-agent] WARNING: ALLOW_INSECURE_INTERNAL=1 — this API accepts '
+          + 'UNAUTHENTICATED requests (dev only)');
+      } else {
+        console.warn('[pi-agent] AGENT_SERVICE_TOKEN not set — API disabled (401). '
+          + 'Set AGENT_SERVICE_TOKEN, or ALLOW_INSECURE_INTERNAL=1 for local dev.');
+      }
     }
 
     await app.listen({ port: config.port, host: '0.0.0.0' });
