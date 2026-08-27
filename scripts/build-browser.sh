@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Build the hardened browser image the research agents fetch pages with.
 #
-# Camofox cannot be built straight from its Git URL: the upstream Dockerfile
-# bind-mounts browser binaries that `make fetch` downloads first, and those are
-# not in the Git context. This script does the clone + build once.
+# OPTIONAL — `docker compose up -d` builds this image itself when it is missing
+# (see the camofox service in docker-compose.yml). Running this first just moves
+# the ~2.5 GB build out of the first `up`, so the stack starts immediately.
 #
 #   ./scripts/build-browser.sh            # auto-detects the host architecture
 #   CAMOFOX_ARCH=x86_64 ./scripts/...     # or force one
 #
-# Result: image camofox-browser:135.0.1-<arch> (~2.5 GB), which docker-compose.yml
-# references. Skip this and start without the browser containers instead:
+# Result: image camofox-browser:135.0.1-<arch>, exactly the tag docker-compose.yml
+# references, so Compose reuses it instead of building. To skip the browser
+# entirely, start without those containers:
 #   docker compose up -d db searxng server agent-pi
 set -euo pipefail
 
@@ -43,7 +44,7 @@ if [ "$ARCH" = aarch64 ]; then
   make -C "$SRC_DIR" build-arm64
 else
   make -C "$SRC_DIR" build-x86
-  echo "→ remember to set CAMOFOX_ARCH=x86_64 in .env"
+  echo "→ remember to set CAMOFOX_ARCH=x86_64 and CAMOFOX_BUILD_ARCH=x86_64 in .env"
 fi
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 \

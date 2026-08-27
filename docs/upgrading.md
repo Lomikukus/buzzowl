@@ -105,5 +105,10 @@ only then generate a new token.
   `scripts/backfill_embeddings.py` after changing `embed_model`/`embed_dim`.
 - **The agent service** — `docker compose up -d --build agent-pi` rebuilds it;
   the TypeScript image is not versioned separately.
-- **The browser image** — `./scripts/build-browser.sh` is a one-time build. Rerun
-  it only when the release notes say the browser version changed.
+- **The browser image** — built once and then reused; `docker compose up -d`
+  rebuilds it only if it is missing. `--build` does re-run its build, but the
+  upstream ref is pinned, so it is a cache hit and finishes in seconds — unless
+  the build cache was pruned, in which case that one image takes a few minutes
+  again. When the release notes say the browser version changed, force it:
+  `docker compose build camofox` (or rerun `./scripts/build-browser.sh` after
+  deleting the old tag).

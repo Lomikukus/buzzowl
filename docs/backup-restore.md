@@ -154,6 +154,7 @@ disk: `docker system prune` before you go looking at the database.
 1. Dump the database and tar the config files (above).
 2. Clone the repo on the new host, copy `.env`, `config.yaml`, `data/` in.
 3. `docker compose up -d db`, restore the dump, then `docker compose up -d`.
-4. Build the browser image once: `./scripts/build-browser.sh`.
+4. The browser image is rebuilt by that `up` if the new host does not have it —
+   `./scripts/build-browser.sh` beforehand keeps the restart short.
 5. Log in and check Settings → LLM providers: the keys come from `.env`, per-org
    keys from the database (they need the same `BUZZOWL_SECRET_KEY`).
