@@ -24,6 +24,8 @@ curl -fsS http://localhost:8000/api/health
 | Agent runs stay `queued` forever | the agent container is down or its token differs | `docker compose ps agent-pi`; the token in `.env` must match on both containers |
 | Research finds nothing, every page fetch fails | SearXNG or the browser stack is down | `docker compose logs searxng`; page fetching degrades to plain HTTP when `camofox` is missing — JS-heavy sites then return little |
 | Search returns nothing sensible | embeddings missing or in the wrong vector space | see *Embeddings* below |
+| Server log: *"Embeddings not configured (no API key) — vector search disabled"* | expected on a fresh install with no embeddings key | nothing is broken: search still works (full-text only). To enable vector search set `OPENROUTER_API_KEY` (or `EMBED_API_KEY`) in `.env` — see *Embeddings* below |
+| Server log: *"Embedding failed (openai @ …): 401"* | a key **is** set but the provider rejected it | check `OPENROUTER_API_KEY`/`EMBED_API_KEY` in `.env`; the warning repeats at most once every 15 min while it keeps failing |
 | Telegram bot does not react to `/start <code>` | bot token missing, or the link code expired (15 min) | `curl -s localhost:8000/api/notifications/status`; generate a fresh link in Settings → Notifications |
 | Containers get OOM-killed, the box swaps | less than ~8 GB RAM free | run without `camofox`/`browser-service`, or raise Docker's memory limit |
 | `no space left on device` | old images and build cache | `docker system prune -a` (this does **not** touch the `buzzowl_pgdata` volume) |
@@ -84,9 +86,42 @@ Each role shows its provider and whether the endpoint answered.
 
 ## Embeddings
 
-The dimension is fixed at boot (`embed_dim`, default 768). If you change the
-embedding model, old vectors stay in the old space and hybrid search quietly gets
-worse. The server warns on a mismatch at startup.
+Embeddings are optional. Without them search runs full-text only — everything
+still works, results are just less fuzzy.
+
+**No key set.** The server says so once at startup and then stays quiet:
+
+```
+Embeddings not configured (no API key for the 'openai' backend at
+https://openrouter.ai/api) — vector search disabled, full-text search still
+works; set OPENROUTER_API_KEY (or EMBED_API_KEY) to enable.
+```
+
+No request is made to the provider in this state, so `/api/health` reports
+`"embeddings": false` without any error in the log, and `embed_stats.skipped`
+counts the calls that were never attempted. This is the expected first-run
+state, not a fault. Local backends (`embed_backend: ollama`, or an
+OpenAI-compatible server on `localhost`/`host.docker.internal`/a compose
+service name) need no key, so they are never treated as unconfigured and are
+always called.
+
+**Key set but rejected** (`401`/`403`) **, or the provider unreachable.** That
+is a real failure and gets a warning:
+
+```
+Embedding failed (openai @ https://openrouter.ai/api): 401 … — vector search
+degraded to full-text only; further identical warnings suppressed for 15 min
+```
+
+The warning is logged in full the first time and then at most once every 15
+minutes while the same error persists (suppressed repeats go to `DEBUG`), so a
+bad key cannot flood the log via the once-a-minute health probe. A *different*
+error warns again immediately. `embed_stats.fail` and `last_error` in
+`/api/health` keep counting every attempt regardless of what is logged.
+
+**Dimension mismatch.** The dimension is fixed at boot (`embed_dim`, default
+768). If you change the embedding model, old vectors stay in the old space and
+hybrid search quietly gets worse. The server warns on a mismatch at startup.
 
 ```bash
 docker compose exec -T db psql -U whisper -d whisper -c \
