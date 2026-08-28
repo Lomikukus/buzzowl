@@ -83,7 +83,9 @@
             width: 320px; flex-shrink: 0;
             border-right: 1px solid var(--c-linefaint, #222);
             display: flex; flex-direction: column;
-            overflow: hidden;
+            /* Sections scroll internally; the rail itself only scrolls as a last
+               resort (very short viewport) so a block is never clipped away. */
+            overflow-x: hidden; overflow-y: auto;
         }
 
         .panel-section {
@@ -129,13 +131,28 @@
         .client-row.active .client-count { color: #4a7fa5; }
 
         /* Contacts */
-        #contactsList { display: flex; flex-direction: column; gap: 0.25rem; }
+        /* Sized by its content, shrinkable, and scrolls inside itself — no fixed
+           max-height, so a row is never sliced and Agent Activity below always
+           gets its full height. */
+        #contactsSection {
+            display: flex; flex-direction: column; min-height: 0;
+        }
+        #contactsList { display: flex; flex-direction: column; gap: 0.25rem; overflow-y: auto; min-height: 0; }
         .contact-row {
             font-size: 0.78rem; padding: 0.2rem 0;
             display: flex; align-items: baseline; gap: 0.4rem;
         }
-        .contact-name { color: var(--c-text, #d4d4d4); }
-        .contact-meta { font-size: 0.68rem; color: var(--c-faint, #555); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* Like .client-name / .session-title: one line, ellipsis, title tooltip.
+           The name keeps the width it needs; the meta takes the remainder and is
+           the first to truncate. */
+        .contact-name {
+            color: var(--c-text, #d4d4d4); flex: 0 1 auto; min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .contact-meta {
+            font-size: 0.68rem; color: var(--c-faint, #555); flex: 1 1 0; min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
 
         /* Activity */
         #activityList { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -529,7 +546,7 @@
             </div>
 
             <!-- Contacts -->
-            <div class="panel-section" style="flex-shrink:0; max-height:160px; overflow-y:auto;">
+            <div class="panel-section" id="contactsSection">
                 <div class="panel-section-title">Recent Contacts</div>
                 <div id="contactsList">
                     <div class="empty-note">Loading…</div>
@@ -778,8 +795,8 @@
                     const meta = c.metadata || {};
                     const parts = [meta.role, meta.company].filter(Boolean).join(' · ');
                     return `<div class="contact-row">
-                        <span class="contact-name">${escHtml(c.name)}</span>
-                        ${parts ? `<span class="contact-meta">${escHtml(parts)}</span>` : ''}
+                        <span class="contact-name" title="${escHtml(c.name)}">${escHtml(c.name)}</span>
+                        ${parts ? `<span class="contact-meta" title="${escHtml(parts)}">${escHtml(parts)}</span>` : ''}
                     </div>`;
                 }).join('');
             } catch {
