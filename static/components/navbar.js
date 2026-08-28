@@ -34,6 +34,10 @@
         overflow: hidden;
         text-overflow: ellipsis;
         max-width: 200px;
+        /* Without this it is the one item the row can squeeze, so a crowded
+           bar shrank the record's name to "N..". Let the overflow menu take
+           the pressure instead; max-width still caps very long names. */
+        flex-shrink: 0;
       }
       #main-nav a.nav-link {
         color: var(--c-muted, #888);
@@ -51,6 +55,64 @@
         border-bottom-color: var(--c-accent, #4ec9b0);
       }
       #main-nav .nav-spacer { flex: 1; }
+      /* Links live in their own box so the overflow menu has something to
+         measure, and so the tools cluster on the right is never pushed out.
+         It must not shrink: a shrinkable box would slide silently under the
+         action buttons and hide the overflow from scrollWidth, leaving the
+         row looking broken instead of reflowing. */
+      #main-nav .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-shrink: 0;
+      }
+      #main-nav .nav-tools {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-shrink: 0;
+      }
+      #main-nav .nav-more-wrap { position: relative; flex-shrink: 0; }
+      #main-nav .nav-more-btn {
+        background: none;
+        border: none;
+        color: var(--c-muted, #888);
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+        font-family: inherit;
+        padding: 0.1rem 0.3rem;
+        border-radius: 4px;
+      }
+      #main-nav .nav-more-btn:hover { color: var(--c-text2, #ccc); background: var(--c-surface, #252526); }
+      #main-nav .nav-more-btn.nav-more-active { color: var(--c-text, #d4d4d4); font-weight: 600; }
+      #main-nav .nav-more-menu {
+        display: none;
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        min-width: 168px;
+        flex-direction: column;
+        background: var(--c-surface, #252526);
+        border: 1px solid var(--c-line2, #333);
+        border-radius: 6px;
+        padding: 0.3rem;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+        z-index: 400;
+      }
+      #main-nav .nav-more-menu.nav-more-open { display: flex; }
+      #main-nav .nav-more-menu a.nav-link {
+        display: block;
+        padding: 0.36rem 0.6rem;
+        border-bottom: none;
+        border-radius: 4px;
+      }
+      #main-nav .nav-more-menu a.nav-link:hover { background: var(--c-surface2, #2d2d2d); }
+      #main-nav .nav-more-menu a.nav-link.nav-active {
+        border-bottom: none;
+        color: var(--c-accent, #4ec9b0);
+        background: var(--c-surface2, #2d2d2d);
+      }
       #main-nav .nav-action-btn {
         background: var(--c-surface, #252526);
         border: 1px solid var(--c-line3, #3a3a3a);
@@ -154,14 +216,23 @@
     nav.innerHTML = `
       <span class="nav-brand">Buzzowl</span>
       ${subtitleHtml}
-      ${linksHtml}
+      <div class="nav-links" id="navLinks">${linksHtml}</div>
+      <div class="nav-more-wrap" id="navMoreWrap" style="display:none">
+        <button class="nav-more-btn" id="navMoreBtn" title="More pages"
+                aria-haspopup="true" aria-expanded="false">⋯</button>
+        <div class="nav-more-menu" id="navMoreMenu"></div>
+      </div>
       <div class="nav-spacer"></div>
-      ${actionsHtml}
-      <button id="wk-fb-btn" title="Send feedback">✉</button>
-      <button id="wk-theme-btn" title="Switch between the classic and new look" style="display:none"></button>
-      <span class="nav-user" id="navUserDisplay"></span>
-      <button class="nav-logout" id="navLogoutBtn" style="display:none">logout</button>
+      <div class="nav-tools" id="navTools">
+        ${actionsHtml}
+        <button id="wk-fb-btn" title="Send feedback">✉</button>
+        <button id="wk-theme-btn" title="Switch between the classic and new look" style="display:none"></button>
+        <span class="nav-user" id="navUserDisplay"></span>
+        <button class="nav-logout" id="navLogoutBtn" style="display:none">logout</button>
+      </div>
     `;
+
+    initNavOverflow();
 
     // Feedback modal — inject once into document.body
     if (!document.getElementById('wk-fb-overlay')) {
@@ -249,6 +320,113 @@
     } catch (_) {}
   };
 
+  // ── Nav overflow ──────────────────────────────────────────────────────
+  // The bar is a single nowrap flex row and every item has white-space:nowrap,
+  // so once brand + links + page actions + the user/logout cluster are wider
+  // than the viewport there is nothing left to give and the trailing controls
+  // (theme toggle, org chip, logout) are simply pushed off the right edge.
+  // Rather than let that happen, park the links that do not fit behind a "⋯"
+  // menu: the auth controls on the right stay reachable at any width, and
+  // every link is still one click away.
+
+  // The nav links in their canonical order, captured once at render time.
+  let _navLinkOrder = [];
+
+  function closeNavMore() {
+    const menu = document.getElementById('navMoreMenu');
+    const btn  = document.getElementById('navMoreBtn');
+    if (menu) menu.classList.remove('nav-more-open');
+    if (btn)  btn.setAttribute('aria-expanded', 'false');
+  }
+
+  function reflowNav() {
+    const nav   = document.getElementById('main-nav');
+    const links = document.getElementById('navLinks');
+    const wrap  = document.getElementById('navMoreWrap');
+    const menu  = document.getElementById('navMoreMenu');
+    const btn   = document.getElementById('navMoreBtn');
+    if (!nav || !links || !wrap || !menu) return;
+
+    // Reset: every link back into the bar, in the canonical order. Restoring
+    // from a remembered list rather than from the menu's own order matters —
+    // the admin-only links are revealed after the first reflow has already
+    // run, so the menu does not always hold a contiguous tail of the bar.
+    // appendChild moves existing nodes, so this re-sorts in place.
+    _navLinkOrder.forEach(el => links.appendChild(el));
+    closeNavMore();
+    wrap.style.display = 'none';
+    if (btn) btn.classList.remove('nav-more-active');
+
+    // Carbon renders #main-nav as a fixed vertical rail that scrolls on its
+    // own (and its <900px fallback scrolls horizontally), so nothing is ever
+    // pushed out of reach there — leave the links alone.
+    if (document.documentElement.getAttribute('data-theme') === 'carbon') return;
+
+    const fits = () => nav.scrollWidth <= nav.clientWidth;
+    if (fits()) return;
+
+    wrap.style.display = '';
+    // Hidden admin-only links measure zero and must not be parked in the menu,
+    // where they would stay invisible.
+    const items = Array.prototype.filter.call(
+      links.children, el => el.style.display !== 'none'
+    );
+    for (let i = items.length - 1; i >= 0 && !fits(); i--) {
+      menu.insertBefore(items[i], menu.firstChild);
+    }
+    if (!menu.children.length) { wrap.style.display = 'none'; return; }
+    // Keep the "you are here" cue when the active page got parked.
+    if (btn && menu.querySelector('.nav-active')) btn.classList.add('nav-more-active');
+  }
+
+  window.navbarReflow = reflowNav;
+
+  let _reflowTimer = null;
+  function scheduleReflow() {
+    clearTimeout(_reflowTimer);
+    _reflowTimer = setTimeout(reflowNav, 120);
+  }
+
+  function initNavOverflow() {
+    const links = document.getElementById('navLinks');
+    _navLinkOrder = links ? Array.prototype.slice.call(links.children) : [];
+    const btn = document.getElementById('navMoreBtn');
+    if (btn) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = document.getElementById('navMoreMenu');
+        const open = menu.classList.toggle('nav-more-open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    }
+    document.addEventListener('click', (e) => {
+      const wrap = document.getElementById('navMoreWrap');
+      if (wrap && !wrap.contains(e.target)) closeNavMore();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeNavMore();
+    });
+    window.addEventListener('resize', scheduleReflow);
+
+    // The bar keeps growing after this first measurement: pages fill the
+    // subtitle with the record's name once it loads, and action buttons
+    // relabel themselves ("Scan jobs" → "Scanning…"). Watch the two boxes that
+    // can change width and re-measure — observing them rather than the links
+    // box means reflowNav's own DOM moves cannot retrigger this.
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(scheduleReflow);
+      ['navSubtitle', 'navTools'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) ro.observe(el);
+      });
+    }
+    reflowNav();
+    // Web fonts can land after first paint and change every link's width.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(reflowNav).catch(() => {});
+    }
+  }
+
   async function loadNavbarUser() {
     const token = localStorage.getItem('wk_token');
     const userEl   = document.getElementById('navUserDisplay');
@@ -292,6 +470,9 @@
           gear.onmouseleave = () => { gear.style.color = '#444'; };
           userEl.parentNode.insertBefore(gear, userEl.nextSibling);
         }
+        // The org chip, logout, gear and admin links all only appear once
+        // /api/auth/me answers — that is when the bar reaches its real width.
+        reflowNav();
       } else {
         userEl.textContent = '';
         if (logoutEl) logoutEl.style.display = 'none';
@@ -313,6 +494,8 @@
     try { localStorage.setItem('wk_theme', carbon ? 'carbon' : 'classic'); } catch (_) {}
     window.wkThemeVariant = carbon ? 'carbon' : 'classic';
     try { window.wkRefreshThemeBtn(); } catch (_) {}
+    // Carbon swaps the bar for a vertical rail and back, so what fits changes.
+    try { window.navbarReflow(); } catch (_) {}
   };
 
   // Update the navbar design-toggle button's label to reflect the CURRENT theme

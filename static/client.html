@@ -193,6 +193,11 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
 
 .empty-state { color: var(--c-faint, #555); font-size: 0.8rem; font-style: italic; padding: 2.5rem; text-align: center; }
+/* Fresh client: one welcome instead of a stack of "nothing here" notices. */
+.fresh-empty { background: var(--c-surface, #252526); border: 1px solid var(--c-line, #2a2a2a); border-radius: 6px; padding: 2.6rem 1.8rem; text-align: center; }
+.fresh-empty-title { font-size: 0.95rem; font-weight: 600; color: var(--c-text, #d4d4d4); margin-bottom: 0.4rem; }
+.fresh-empty-body { font-size: 0.82rem; color: var(--c-muted, #888); line-height: 1.5; max-width: 30rem; margin: 0 auto 1.2rem; }
+.fresh-empty-actions { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
 .section-label { font-size:0.68rem; text-transform:uppercase; letter-spacing:0.09em; color:var(--c-faint, #555); margin-bottom:0.55rem; }
 .lr-card { background:var(--c-surface, #252526); border:1px solid var(--c-line, #2a2a2a); border-left:3px solid var(--c-blue, #569cd6); border-radius:6px; padding:0.85rem 1rem; }
 .lr-header { display:flex; align-items:center; gap:0.7rem; margin-bottom:0.35rem; }
@@ -332,6 +337,24 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 
       <!-- Overview -->
       <div class="tab-panel active" id="tab-overview">
+        <!-- Shown only while this client has nothing at all — see
+             updateOverviewEmptyState(). Replaces the jobs + brief sections
+             (and the sidebar's "no sources" line) with a single welcome. -->
+        <div id="overviewEmpty" style="display:none">
+          <div class="fresh-empty">
+            <div class="fresh-empty-title">Nothing researched yet</div>
+            <div class="fresh-empty-body">
+              This client is brand new — nothing has been gathered on them so far.
+              Start the research and the brief, open positions and monitored
+              sources will fill in here. Adding a meeting works too.
+            </div>
+            <div class="fresh-empty-actions">
+              <button class="btn btn-teal" onclick="triggerResearch()">↻ Run research</button>
+              <button class="btn" onclick="scanJobs()">Scan jobs</button>
+              <button class="btn" onclick="discoverSources(this)">&#x1F50D; Discover sources</button>
+            </div>
+          </div>
+        </div>
         <div id="matchSummarySection" style="display:none;margin-bottom:1.4rem">
           <h3 class="section-label" style="display:flex;align-items:center;gap:0.6rem">Product fit
             <a href="#" id="matchSummaryLink" style="color:var(--c-blue, #569cd6);font-size:0.72rem;text-decoration:none;font-weight:400">View full match →</a>
@@ -357,7 +380,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
           <h3 class="section-label">Latest Research</h3>
           <div id="latestResearchCard" class="lr-card"></div>
         </div>
-        <div>
+        <div id="briefSection">
           <div class="brief-header">
             <div>
               <h2 style="font-size:0.9rem;color:var(--c-text, #d4d4d4);margin-bottom:0.15rem">Account Intelligence Brief</h2>
@@ -687,6 +710,7 @@ function renderSources() {
     if (!el) return;
     if (!_sources.length) {
         el.innerHTML = '<span class="empty-state" style="padding:0.4rem 0;text-align:left">No sources monitored — click Discover</span>';
+        updateOverviewEmptyState();
         return;
     }
     el.innerHTML = _sources.map((s, i) => {
@@ -701,6 +725,7 @@ function renderSources() {
             <button data-idx="${i}" onclick="removeSource(this)" title="Stop monitoring" style="background:none;border:none;color:var(--c-faint, #555);cursor:pointer;font-size:0.72rem;padding:0 0.15rem">✕</button>
         </div>`;
     }).join('');
+    updateOverviewEmptyState();
 }
 
 async function saveSources() {
@@ -1092,6 +1117,7 @@ function showBrief(content, generatedAt) {
     el.innerHTML = marked.parse(content);
     processRenderedBrief(el);
     if (generatedAt) document.getElementById('briefMeta').textContent = `Generated ${String(generatedAt).slice(0,10)}`;
+    updateOverviewEmptyState();
 }
 
 function generateBrief() { _autoGenerateBrief(); }
@@ -1658,11 +1684,56 @@ function toggleLR(uid) {
     el.style.display = el.style.display === 'block' ? 'none' : 'block';
 }
 
+// ── Fresh-client empty state ──────────────────────────────────────────────
+// A brand-new client used to greet you with three separate "nothing here"
+// notices at once (open positions, brief, monitored sources), which reads as a
+// broken page rather than an empty one. While the account is genuinely empty we
+// show a single welcome instead. The moment ANY section has something, the
+// normal layout returns — the individual empty states are useful then, because
+// each one is a concrete next step against an account that already has content,
+// not part of a wall of nothing.
+let _overviewReady = false;
+
+function updateOverviewEmptyState() {
+    // The section loaders finish at different times, so evaluating before they
+    // have all reported would flash the welcome on an account that does have
+    // content. init() opens the gate once, after the first full pass.
+    if (!_overviewReady) return;
+    const shown = id => { const e = document.getElementById(id); return !!e && e.style.display !== 'none'; };
+    const jobsBody = document.getElementById('jobsBody');
+    // renderJobs() swaps the placeholder for real markup, so the presence of an
+    // .empty-state span is the reliable "still nothing" signal.
+    const hasJobs    = !!jobsBody && !jobsBody.querySelector('.empty-state');
+    const hasBrief   = shown('briefContent');
+    const hasSources = _sources.length > 0;
+    const hasAny = hasJobs || hasBrief || hasSources
+                || shown('matchSummarySection')
+                || shown('signalsSection')
+                || shown('latestResearchSection');
+
+    const fresh = !hasAny;
+    const set = (id, visible) => {
+        const e = document.getElementById(id);
+        if (e) e.style.display = visible ? '' : 'none';
+    };
+    set('overviewEmpty', fresh);
+    set('jobsSection',   !fresh);
+    set('briefSection',  !fresh);
+
+    // The sidebar's "No sources monitored" line is the third notice in the
+    // pile-up. Hide just the message while fresh — the Discover / Check now
+    // buttons and the add-URL field stay exactly where they are.
+    const srcEmpty = document.querySelector('#sourcesList .empty-state');
+    if (srcEmpty) srcEmpty.style.display = fresh ? 'none' : '';
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────
 async function init() {
     const ok = await checkAuth();
     if (!ok) return;
     await Promise.all([loadClient(), loadContacts(), loadSignals(), loadBrief(), loadLatestResearch(), loadMatchSummary(), loadJobs()]);
+    _overviewReady = true;
+    updateOverviewEmptyState();
 }
 
 // ── Open positions (jobs) → inferred needs → match ─────────────────────────
@@ -1674,6 +1745,7 @@ function renderJobs(d) {
     const needs = d.inferred_needs || [];
     if (!positions.length && !needs.length) {
         body.innerHTML = '<span class="empty-state" style="padding:0.4rem 0;text-align:left">No open positions found yet — click Scan jobs.</span>';
+        updateOverviewEmptyState();
         return;
     }
     const needMap = {};
@@ -1708,6 +1780,7 @@ function renderJobs(d) {
     }
     if (d.last_scanned) html += `<div style="color:var(--c-faint, #555);font-size:0.66rem;margin-top:0.5rem">Scanned ${new Date(d.last_scanned).toLocaleDateString()}</div>`;
     body.innerHTML = html;
+    updateOverviewEmptyState();
 }
 
 async function loadJobs() {
