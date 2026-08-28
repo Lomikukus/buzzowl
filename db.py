@@ -19,14 +19,17 @@ from ThreadPoolExecutor workers (e.g. inside _do_export).
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import math
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import asyncpg
 import requests
@@ -471,6 +474,10 @@ async def init_db(
         _embed_api_key = (
             os.environ.get("OPENROUTER_API_KEY", "") or os.environ.get("OPENROUTE", "")
         )
+    # Say it once, at boot, in plain words — an install with no embeddings key
+    # is a degraded install, not a broken one, and must not look like one.
+    if not embeddings_configured():
+        _log_embeddings_not_configured()
     # Fresh database: the pool's connection init registers the pgvector codec,
     # which needs the extension to exist BEFORE schema.sql runs — create it here
     # with a plain connection (idempotent; harmless on an initialised DB).
@@ -573,6 +580,13 @@ async def close_db() -> None:
 #             requires an api key — when embed_url is OpenRouter, the OpenRouter
 #             key is used automatically if EMBED_API_KEY is not set)
 #
+# Embeddings are OPTIONAL. When the openai backend has no key and points at a
+# remote provider, nothing is sent: get_embedding returns [] immediately, the
+# reason is stated once as INFO at boot, and search degrades to full-text only.
+# A key that IS set and gets rejected is a real fault and warns — but at most
+# once per _EMBED_WARN_INTERVAL_S per error signature, because /api/health
+# re-probes every minute (see _log_embed_failure).
+#
 # Oversized vectors are truncated + L2-renormalized client-side (_fit_dim) instead
 # of sending the non-standard `dimensions` request param — works on every gateway
 # and is exactly what OpenAI does server-side. Use MRL-trained models only
@@ -588,7 +602,19 @@ _embed_url: str = ""
 _embed_api_key: str = ""
 # Running counters surfaced by /api/health — embeddings failing silently means
 # the vector half of hybrid search is dead, so make failures observable.
-embed_stats: dict = {"ok": 0, "fail": 0, "last_error": None}
+# `skipped` counts calls that were never attempted because no key is configured
+# (a first-run install), which is not the same thing as a provider failing.
+embed_stats: dict = {"ok": 0, "fail": 0, "skipped": 0, "last_error": None}
+
+_NOT_CONFIGURED_ERROR = "embeddings not configured (no API key)"
+
+# Noise control (see _log_embed_failure / _log_embeddings_not_configured):
+#   not configured  → exactly one INFO for the lifetime of the process
+#   configured, failing → full WARNING the first time and then at most once per
+#                         window for the same error signature; DEBUG in between
+_EMBED_WARN_INTERVAL_S = 900.0  # 15 minutes
+_embed_unconfigured_logged: bool = False
+_embed_warn_state: dict = {"sig": None, "at": 0.0}
 
 
 def _resolve_embed_url() -> str:
@@ -599,6 +625,105 @@ def _resolve_embed_url() -> str:
         or "http://localhost:11434"
     )
     return url.rstrip("/")
+
+
+def _is_local_embed_url(url: str) -> bool:
+    """True for an endpoint served on this machine / this compose network.
+
+    Local OpenAI-compatible servers (Ollama's /v1, LM Studio, vLLM, LiteLLM)
+    take no credential — an empty key there is normal, not a misconfiguration,
+    so the call must still be attempted.
+    """
+    host = (urlsplit(url).hostname or "").lower()
+    if not host:
+        return True  # unparseable — never suppress a call over a parsing guess
+    if host == "localhost" or host.endswith(".localhost") or host == "host.docker.internal":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # A bare hostname with no dot is a container/LAN name (`ollama`,
+        # `lmstudio`, `litellm`), never a public provider.
+        return "." not in host
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def _embed_backend_needs_key() -> bool:
+    """Does the configured backend authenticate with an API key?
+
+    Only the `openai` backend sends an Authorization header at all, and only
+    when it points at a remote provider.
+    """
+    return _embed_backend == "openai" and not _is_local_embed_url(_resolve_embed_url())
+
+
+def embeddings_configured() -> bool:
+    """False only when the backend needs an API key and none is set."""
+    if not _embed_backend_needs_key():
+        return True
+    return bool((_embed_api_key or "").strip())
+
+
+def _embed_key_hint() -> str:
+    """The setting a user actually has to fill in for this endpoint."""
+    if "openrouter" in _resolve_embed_url():
+        return "OPENROUTER_API_KEY (or EMBED_API_KEY)"
+    return "EMBED_API_KEY (or embed_api_key in config.yaml)"
+
+
+def _log_embeddings_not_configured() -> None:
+    """One calm INFO per process — a fresh install is not a broken install.
+
+    Called from init_db so it lands with the rest of the boot output, and
+    lazily from get_embedding so CLI entrypoints that never run init_db (or
+    that bail before it) still explain themselves exactly once.
+    """
+    global _embed_unconfigured_logged
+    if _embed_unconfigured_logged:
+        return
+    _embed_unconfigured_logged = True
+    logger.info(
+        "Embeddings not configured (no API key for the '%s' backend at %s) — "
+        "vector search disabled, full-text search still works; "
+        "set %s to enable.",
+        _embed_backend, _resolve_embed_url(), _embed_key_hint(),
+    )
+
+
+def _embed_error_signature(exc: Exception) -> str:
+    """Stable identity for a failure, so repeats can be collapsed.
+
+    HTTP errors key on their status code (401 and 403 are different problems);
+    everything else keys on type + the head of the message.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is not None:
+        return f"{type(exc).__name__}:{status}"
+    return f"{type(exc).__name__}:{str(exc)[:120]}"
+
+
+def _log_embed_failure(base: str, exc: Exception) -> None:
+    """Warn once, then stay quiet about the same failure for the window.
+
+    A provider that is down stays down, and /api/health re-probes every minute
+    — without this, one misconfiguration fills the log forever. A different
+    error (new status code, new exception type) warns again immediately.
+    """
+    sig = f"{_embed_backend}|{base}|{_embed_error_signature(exc)}"
+    now = time.monotonic()
+    repeat = sig == _embed_warn_state["sig"]
+    if repeat and (now - _embed_warn_state["at"]) < _EMBED_WARN_INTERVAL_S:
+        logger.debug(
+            "Embedding failed (%s @ %s): %s [repeat suppressed]", _embed_backend, base, exc
+        )
+        return
+    _embed_warn_state["sig"] = sig
+    _embed_warn_state["at"] = now
+    logger.warning(
+        "Embedding failed (%s @ %s): %s — vector search degraded to full-text "
+        "only; further identical warnings suppressed for %d min",
+        _embed_backend, base, exc, int(_EMBED_WARN_INTERVAL_S // 60),
+    )
 
 
 def _fit_dim(vec: list[float]) -> list[float]:
@@ -626,6 +751,14 @@ def get_embedding(text: str, model: Optional[str] = None) -> list[float]:
     """
     use_model = model or _embed_model
     base = _resolve_embed_url()
+    # No key for a backend that needs one: don't call out at all. A 401 per
+    # write (and per /api/health probe) reads like a broken install when it is
+    # just an unconfigured optional feature.
+    if not embeddings_configured():
+        _log_embeddings_not_configured()
+        embed_stats["skipped"] += 1
+        embed_stats["last_error"] = _NOT_CONFIGURED_ERROR
+        return []
     try:
         if _embed_backend == "openai":
             resp = requests.post(
@@ -654,7 +787,7 @@ def get_embedding(text: str, model: Optional[str] = None) -> list[float]:
     except Exception as exc:
         embed_stats["fail"] += 1
         embed_stats["last_error"] = str(exc)
-        logger.warning("Embedding failed (%s @ %s): %s", _embed_backend, base, exc)
+        _log_embed_failure(base, exc)
         return []
 
 
