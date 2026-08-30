@@ -20,7 +20,7 @@ The system is built incrementally. Every layer is independently useful before th
 ## Guiding Principles
 
 - **Incremental** — each step ships something working. No big-bang scaffolding.
-- **Cloud-first for LLM** — all agent reasoning and summaries route through OpenRouter (any hosted model). Claude API is an opt-in alternative. Audio processing (Whisper, diarization) runs on-device.
+- **Cloud-first for LLM** — all agent reasoning and summaries route through OpenRouter (any hosted model). Claude API is an opt-in alternative. The server runs no speech-to-text itself; transcripts arrive by paste or external ingest.
 - **Open** — the knowledge base exposes itself via MCP so any compatible agent (Claude Code, OpenClaw, custom) can read and write to it.
 - **Proactive** — agents run on heartbeat schedules and event hooks, not just when triggered by a user.
 - **Traceable** — every piece of agent-written content is linked to the agent run that created it.
@@ -501,9 +501,7 @@ Every file written by an agent includes frontmatter `source: agent` and `agent_r
 
 | Layer | Technology |
 |---|---|
-| Transcription (live) | faster-whisper |
-| Transcription (post) | WhisperX + wav2vec2 alignment |
-| Speaker diarization | pyannote.audio 3.1 |
+| Transcription | none in-server — paste in the UI or `POST /api/transcript/ingest` from any external client |
 | Embeddings | Ollama `nomic-embed-text` (768 dims) — local only, embeddings are never sent to cloud |
 | AI summary / agents | OpenRouter (any hosted model, default) or Claude API (opt-in) |
 | Web backend | FastAPI + WebSocket |
@@ -511,7 +509,6 @@ Every file written by an agent includes frontmatter `source: agent` and `agent_r
 | MCP server | Python `mcp` SDK |
 | MCP tool servers | Brave Search MCP, Puppeteer MCP (external) |
 | Frontend | Vanilla JS + marked.js |
-| Audio capture | Web Audio API (16 kHz PCM) |
 | Vault / notes | Obsidian-compatible Markdown |
 | Scheduling | APScheduler |
 | Auth | passlib[bcrypt] + token sessions |
@@ -571,12 +568,8 @@ Each phase is independently shippable. Do not start the next phase until the cur
 ## Configuration (`config.yaml`)
 
 ```yaml
-# Transcription
-model: large-v2
-live_model: base
 language: en
-compute_type: int8
-hf_token: ""
+transcription_mode: app        # transcripts arrive via ingest/paste; 'local' is no longer supported
 
 # Vault
 vault_path: "/path/to/north-info"

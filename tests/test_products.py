@@ -7,7 +7,7 @@ bulk-mail generation, and multi-product mail.
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from starlette.testclient import TestClient
 
@@ -66,7 +66,6 @@ FAKE_PRODUCT = {
 def app_client():
     """Module-scoped TestClient with DB forced available and user stubbed."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -89,7 +88,6 @@ def app_client():
 def unauthed_client():
     """Per-test client with no dependency overrides to test auth guards."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),

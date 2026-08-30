@@ -2,7 +2,6 @@
 tests/test_api.py — FastAPI endpoint tests.
 
 Uses starlette TestClient with:
-  - Startup model loading mocked (no Whisper models loaded)
   - DB pool mocked (no PostgreSQL connection needed)
   - current_user dependency overridden for authenticated routes
 
@@ -11,7 +10,7 @@ Covers: auth endpoints, agent API, knowledge API basics, search.
 
 import pytest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from starlette.testclient import TestClient
 
@@ -38,24 +37,13 @@ FAKE_ORG = {"id": 1, "name": "North", "slug": "north"}
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _startup_patches():
-    """Return a context manager that mocks the expensive startup calls."""
-    return patch.multiple(
-        "server",
-        get_live_model=MagicMock(return_value=MagicMock()),
-        DB_AVAILABLE=True,
-    )
-
-
 @pytest.fixture(scope="module")
 def app_client():
     """Module-scoped TestClient with:
-    - Whisper model loading mocked
     - DB forced available
     - current_user overridden to return FAKE_USER
     """
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -82,7 +70,6 @@ def unauthed_client():
     app_client fixture is not affected.
     """
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),

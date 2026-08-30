@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bash tests/run_integration.sh           # all suites
-#   bash tests/run_integration.sh --fast    # skip ollama + slow suites
+#   bash tests/run_integration.sh --fast    # skip ollama suites
 #
 # Exits 0 if every enabled suite passes, 1 if any fail.
 
@@ -48,11 +48,6 @@ run_suite "Agents"     "-m 'not ollama and not slow'"  "tests/test_agents.py"
 # --- Ollama-dependent suites ---
 if [[ $FAST -eq 0 ]]; then
     run_suite "Entity Extraction (Ollama)" "-m ollama" "tests/test_entity_extraction.py"
-fi
-
-# --- Slow suites (WhisperX model load) ---
-if [[ $FAST -eq 0 ]]; then
-    run_suite "Transcription (slow)"  "-m slow" "tests/test_transcription.py"
 fi
 
 # --- Summary ---

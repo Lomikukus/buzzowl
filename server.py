@@ -9,7 +9,7 @@ This file is intentionally thin. All routes and business logic live in:
   routers/pipeline.py     — session lifecycle, promotion, background tasks
   routers/knowledge.py    — clients, contacts, documents, search
   routers/agents.py       — agent runs, research queue, /ws/agents
-  routers/transcription.py — live transcription, /ws, model loaders
+  routers/llm_config.py   — LLM provider status/config, OAuth endpoints
 """
 
 import asyncio
@@ -37,18 +37,16 @@ from context import (
     configure_rate_limits,
     console,
     db_module,
-    executor,
     limiter,
     pwd_context,
 )
-from routers import auth, pipeline, knowledge, agents, transcription, llm_config, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
+from routers import auth, pipeline, knowledge, agents, llm_config, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
 from routers.pipeline import (
     ensure_dirs,
     _migrate_legacy_dirs,
     _pipeline_sweep_loop,
     _start_heartbeat_scheduler,
 )
-from routers.transcription import get_live_model
 
 # ---------------------------------------------------------------------------
 # App
@@ -191,11 +189,12 @@ async def startup() -> None:
     _migrate_legacy_dirs()
     console.print(f"\n[bold]Buzzowl — live server[/bold]")
     loop = asyncio.get_event_loop()
-    if config.get("transcription_mode", "local") == "local":
-        console.print(f"  Default live model: [yellow]{config['live_model']}[/yellow]")
-        await loop.run_in_executor(executor, get_live_model, config["live_model"])
-    else:
-        console.print(f"  Transcription mode: [yellow]app[/yellow] — Whisper models not loaded")
+    console.print(f"  Transcription: [yellow]external ingest only[/yellow] (POST /api/transcript/ingest)")
+    if config.get("transcription_mode") == "local":
+        console.print(
+            "  [bold red]WARNING: transcription_mode 'local' is no longer supported — "
+            "in-server STT was removed; transcripts arrive via text ingest[/bold red]"
+        )
 
     if DB_AVAILABLE:
         db_module.set_main_loop(loop)
@@ -511,7 +510,6 @@ app.include_router(operator_router.router)
 app.include_router(pipeline.router)
 app.include_router(knowledge.router)
 app.include_router(agents.router)
-app.include_router(transcription.router)
 app.include_router(llm_config.router)
 app.include_router(chat.router)
 app.include_router(notifications.router)

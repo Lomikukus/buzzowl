@@ -955,20 +955,10 @@
 :root[data-theme="carbon"] #settingsPanel h2{
   font-family:var(--c-font-mono); text-transform:uppercase; letter-spacing:.04em;
 }
-:root[data-theme="carbon"] .settings-field label{
-  font-family:var(--c-font-mono); text-transform:uppercase;
-  letter-spacing:.05em; font-size:.68rem;
-}
-:root[data-theme="carbon"] .settings-field input[type=password],
-:root[data-theme="carbon"] .settings-field input[type=text],
-:root[data-theme="carbon"] #settingsSaveBtn,
 :root[data-theme="carbon"] #settingsCancelBtn{
   border-radius:0;
 }
 /* inline-styled controls carry border-radius:4px on the element itself */
-:root[data-theme="carbon"] #macTokenDisplay,
-:root[data-theme="carbon"] #macTokenShowBtn,
-:root[data-theme="carbon"] #macTokenCopyBtn,
 :root[data-theme="carbon"] #inviteUsername,
 :root[data-theme="carbon"] #invitePassword,
 :root[data-theme="carbon"] #inviteDisplay,

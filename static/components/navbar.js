@@ -178,7 +178,7 @@
     { href: '/',          label: 'Home',      key: 'home' },
     { href: '/today',     label: 'Today',     key: 'today' },
     { href: '/ranking',   label: 'Ranking',   key: 'ranking' },
-    { href: '/record',    label: 'Record',    key: 'record' },
+    { href: '/record',    label: 'Transcripts', key: 'record' },
     { href: '/knowledge', label: 'Knowledge', key: 'knowledge' },
     { href: '/clients',   label: 'Clients',   key: 'clients' },
     { href: '/products',  label: 'Products',  key: 'products' },

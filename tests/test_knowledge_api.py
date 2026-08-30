@@ -78,9 +78,8 @@ FAKE_FINDINGS = [
 
 @pytest.fixture(scope="module")
 def app_client():
-    """Module-scoped TestClient with Whisper/DB mocked and current_user overridden."""
+    """Module-scoped TestClient with DB mocked and current_user overridden."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -103,7 +102,6 @@ def app_client():
 def unauthed_client():
     """Per-test client with no dependency overrides — real auth guard active."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),

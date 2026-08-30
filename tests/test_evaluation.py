@@ -23,7 +23,6 @@ NOW = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
 @pytest.fixture(scope="module")
 def app_client():
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -43,7 +42,6 @@ def app_client():
 @pytest.fixture()
 def member_client():
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -67,7 +65,6 @@ def member_client():
 @pytest.fixture()
 def unauthed_client():
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -208,10 +205,6 @@ class TestAuthGuards:
     @pytest.mark.parametrize("path", ["/api/clients", "/api/people", "/api/search?q=test", "/api/sessions"])
     def test_reads_require_auth(self, unauthed_client, path):
         assert unauthed_client.get(path).status_code == 401
-
-    def test_settings_write_requires_admin(self, member_client):
-        r = member_client.post("/api/settings", json={"hf_token": "x"})
-        assert r.status_code == 403
 
     def test_research_trigger_requires_token(self, unauthed_client):
         r = unauthed_client.post("/api/research/trigger", json={"subject": "ACME"})

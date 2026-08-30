@@ -5,7 +5,7 @@
 <script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Buzzowl — Recorder</title>
+    <title>Buzzowl — Transcripts</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="/static/components/navbar.js?v=20260817c"></script>
     <style>
@@ -72,22 +72,11 @@
             max-height: 90vh; overflow-y: auto;
         }
         #settingsPanel h2 { font-size: 0.95rem; color: var(--c-bluehi, #9cdcfe); margin: 0; }
-        .settings-field { display: flex; flex-direction: column; gap: 0.4rem; }
-        .settings-field label { font-size: 0.78rem; color: var(--c-muted, #888); }
-        .settings-field input[type=password],
-        .settings-field input[type=text] {
-            background: var(--c-ink, #111); border: 1px solid var(--c-line2, #333); border-radius: 5px;
-            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.82rem; padding: 0.45rem 0.6rem;
-        }
-        .settings-field input:focus { outline: none; border-color: var(--c-blue, #569cd6); }
         .settings-instructions { font-size: 0.75rem; color: var(--c-muted2, #666); line-height: 1.6; }
         .settings-instructions a { color: var(--c-blue, #569cd6); }
         .settings-row { display: flex; gap: 0.6rem; justify-content: flex-end; }
-        #settingsSaveBtn { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); font-weight: 600; font-size: 0.82rem; padding: 0.4rem 1.1rem; border: none; border-radius: 5px; }
-        #settingsSaveBtn:hover { background: var(--c-accent2, #3ab89e); }
         #settingsCancelBtn { background: transparent; color: var(--c-muted2, #666); border: 1px solid var(--c-line2, #333); font-size: 0.82rem; padding: 0.4rem 1.1rem; border-radius: 5px; }
         #settingsCancelBtn:hover { color: var(--c-text3, #aaa); border-color: var(--c-muted2, #666); }
-        #settingsSaveStatus { font-size: 0.75rem; color: var(--c-accent, #4ec9b0); align-self: center; flex: 1; }
 
         /* ── Activity feed ── */
         #activityPanel {
@@ -321,19 +310,6 @@
     <div id="settingsOverlay">
         <div id="settingsPanel">
             <h2>Settings</h2>
-            <div class="settings-field">
-                <label>HuggingFace Token (for speaker diarization)</label>
-                <input type="password" id="hfTokenInput" placeholder="hf_…" autocomplete="off">
-            </div>
-            <div class="settings-field" style="margin-top:0.8rem;">
-                <label>Mac App Token — paste into Buzzowl Recorder → Settings → Auth Token</label>
-                <div style="display:flex; gap:0.4rem; align-items:center;">
-                    <input type="password" id="macTokenDisplay" readonly style="flex:1; cursor:default; background:#0a0a0a; color:var(--c-bluehi, #9cdcfe); border-color:var(--c-line, #2a2a2a);">
-                    <button id="macTokenShowBtn" style="background:transparent; border:1px solid var(--c-line2, #333); color:var(--c-muted, #888); font-size:0.78rem; padding:0.3rem 0.7rem; border-radius:4px; cursor:pointer;">Show</button>
-                    <button id="macTokenCopyBtn" style="background:var(--c-blue, #569cd6); border:none; color:var(--c-ink, #111); font-weight:600; font-size:0.78rem; padding:0.3rem 0.7rem; border-radius:4px; cursor:pointer;">Copy</button>
-                </div>
-                <span id="macTokenCopyStatus" style="font-size:0.72rem; color:var(--c-accent, #4ec9b0); min-height:1rem;"></span>
-            </div>
             <!-- pgweb DB browser (local debugging): `docker compose --profile debug up -d pgweb`
                  serves a DB UI on host port 5433. Intentionally not linked here — a hard
                  localhost link is wrong for any hosted deployment. -->
@@ -355,9 +331,7 @@
             </div>
             <div class="settings-row">
                 <a href="/settings" style="font-size:0.78rem;color:var(--c-blue, #569cd6);text-decoration:none;margin-right:auto" title="Open full settings page">⚙ Settings page →</a>
-                <span id="settingsSaveStatus"></span>
-                <button id="settingsCancelBtn">Cancel</button>
-                <button id="settingsSaveBtn">Save</button>
+                <button id="settingsCancelBtn">Close</button>
             </div>
         </div>
     </div>
@@ -568,28 +542,14 @@
 
         // ─── Settings ────────────────────────────────────────────────────────────
         const settingsOverlay    = document.getElementById('settingsOverlay');
-        const hfTokenInput       = document.getElementById('hfTokenInput');
-        const settingsSaveBtn    = document.getElementById('settingsSaveBtn');
         const settingsCancelBtn  = document.getElementById('settingsCancelBtn');
-        const settingsSaveStatus = document.getElementById('settingsSaveStatus');
-        const macTokenDisplay    = document.getElementById('macTokenDisplay');
-        const macTokenShowBtn    = document.getElementById('macTokenShowBtn');
-        const macTokenCopyBtn    = document.getElementById('macTokenCopyBtn');
-        const macTokenCopyStatus = document.getElementById('macTokenCopyStatus');
         const usersSection       = document.getElementById('usersSection');
         const usersList          = document.getElementById('usersList');
         const inviteBtn          = document.getElementById('inviteBtn');
         const inviteStatus       = document.getElementById('inviteStatus');
 
         document.getElementById('gearBtn').addEventListener('click', () => {
-            hfTokenInput.value = '';
-            settingsSaveStatus.textContent = '';
-            macTokenCopyStatus.textContent = '';
-            macTokenDisplay.type = 'password';
-            macTokenShowBtn.textContent = 'Show';
-            macTokenDisplay.value = getToken() || '';
             settingsOverlay.classList.add('open');
-            hfTokenInput.focus();
             const token = getToken();
             if (token) {
                 fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } })
@@ -609,42 +569,6 @@
         settingsCancelBtn.addEventListener('click', () => settingsOverlay.classList.remove('open'));
         settingsOverlay.addEventListener('click', e => {
             if (e.target === settingsOverlay) settingsOverlay.classList.remove('open');
-        });
-
-        settingsSaveBtn.addEventListener('click', async () => {
-            settingsSaveBtn.disabled = true;
-            settingsSaveStatus.textContent = 'Saving…';
-            try {
-                await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ hf_token: hfTokenInput.value.trim() }),
-                });
-                settingsSaveStatus.textContent = 'Saved ✓';
-                setTimeout(() => settingsOverlay.classList.remove('open'), 800);
-            } catch {
-                settingsSaveStatus.textContent = 'Error saving';
-            } finally {
-                settingsSaveBtn.disabled = false;
-            }
-        });
-
-        macTokenShowBtn.addEventListener('click', () => {
-            if (macTokenDisplay.type === 'password') {
-                macTokenDisplay.type = 'text';
-                macTokenShowBtn.textContent = 'Hide';
-            } else {
-                macTokenDisplay.type = 'password';
-                macTokenShowBtn.textContent = 'Show';
-            }
-        });
-
-        macTokenCopyBtn.addEventListener('click', async () => {
-            const t = getToken();
-            if (!t) return;
-            await navigator.clipboard.writeText(t);
-            macTokenCopyStatus.textContent = '✓ Copied — paste into Mac app Settings → Auth Token';
-            setTimeout(() => { macTokenCopyStatus.textContent = ''; }, 3000);
         });
 
         async function loadUsers() {
@@ -1059,26 +983,5 @@
         .ec-person { font-style: italic; }
         .ec-warn  { color: #c98a4a; font-size: 0.75rem; cursor: help; }
     </style>
-<script>
-// Ingest-only notice: without the transcribe build (INSTALL_TRANSCRIBE=1 +
-// TRANSCRIPTION_MODE=local) the server does no mic transcription — sessions
-// arrive via text ingest / the macOS app instead.
-(async () => {
-  try {
-    const t = localStorage.getItem('wk_token');
-    if (!t) return;
-    const r = await fetch('/api/status', { headers: { 'Authorization': 'Bearer ' + t } });
-    if (!r.ok) return;
-    const d = await r.json();
-    if (d.transcription_mode === 'local' && d.whisper_available) return;
-    const note = document.createElement('div');
-    note.style.cssText = 'margin:0.8rem auto;max-width:900px;padding:0.6rem 0.9rem;border:1px solid var(--c-warnline, #5a4a2a);border-radius:6px;background:var(--c-warntint, #2a2418);color:var(--c-warn, #d7ba7d);font-size:0.8rem';
-    note.textContent = d.transcription_mode !== 'local'
-      ? 'Ingest-only mode: this server does not transcribe microphone audio (transcription_mode: ' + d.transcription_mode + '). Paste text below or use the companion app; for in-Docker mic transcription rebuild with INSTALL_TRANSCRIBE=1 and set TRANSCRIPTION_MODE=local.'
-      : 'Live transcription unavailable: faster-whisper is not installed in this server build (rebuild with INSTALL_TRANSCRIBE=1).';
-    document.body.prepend(note);
-  } catch (e) { /* notice only */ }
-})();
-</script>
 </body>
 </html>
