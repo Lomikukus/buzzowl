@@ -59,6 +59,7 @@ set_value() {
         mv "$tmp" "$ENV_FILE"
     else
         printf '%s=%s\n' "$name" "$value" >> "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
     fi
 }
 

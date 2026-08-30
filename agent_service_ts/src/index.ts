@@ -361,8 +361,10 @@ const start = async () => {
           + 'AGENT_SERVICE_TOKEN is set (or ALLOW_INSECURE_INTERNAL=1 for local dev)');
       }
     } else {
-      // Never log the token value itself — just confirm auth is active.
-      console.log('[pi-agent] internal auth enabled (AGENT_SERVICE_TOKEN is configured)');
+      // Never log the token value itself — just confirm auth is active. Source
+      // -agnostic wording: the token may have resolved from AGENT_SERVICE_TOKEN
+      // or from config.yaml's agent_service_token (see config.ts).
+      console.log('[pi-agent] internal auth enabled (shared token configured)');
     }
 
     await app.listen({ port: config.port, host: '0.0.0.0' });

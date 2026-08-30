@@ -37,7 +37,11 @@ def _check_token(request: Request) -> None:
     - Token configured  → require exactly `Authorization: Bearer {token}`.
     - Token empty       → 401 ALWAYS, unless ALLOW_INSECURE_INTERNAL=1 (dev).
     """
-    token = config.get("agent_service_token", "")
+    # str(): an unquoted numeric token in config.yaml (agent_service_token:
+    # 12345678) parses as an int, which would never match the string Bearer
+    # header below and 401 forever -- agent_service_ts/src/config.ts already
+    # coerces the same case, so match that here.
+    token = str(config.get("agent_service_token", "") or "")
     if not token:
         if insecure_internal_allowed():
             return
