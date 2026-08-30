@@ -16,7 +16,7 @@ curl -fsS http://localhost:8000/api/health
 | The `camofox` build fails on `curl … camoufox-135.0.1-beta.24-lin.<arch>.zip` | the build arch does not match the host | x86_64 hosts need **both** `CAMOFOX_ARCH=x86_64` and `CAMOFOX_BUILD_ARCH=x86_64` in `.env`, then `docker compose build camofox` |
 | The `camofox` build fails cloning `github.com/jo-inc/camofox-browser.git` | no network/proxy access to GitHub from the Docker builder | build it on a connected host, or start without it: `docker compose up -d db searxng server agent-pi` |
 | Server log: *"agent_service_token not set — internal APIs disabled (401)"* | `AGENT_SERVICE_TOKEN` missing in `.env` | `openssl rand -hex 32` → `.env`, same value everywhere, `docker compose up -d` |
-| `agent-pi` log: *"AGENT_SERVICE_TOKEN not set — API disabled (401)"*, every agent run 401s | same missing `.env` value — `agent-pi` is fail-closed too | `openssl rand -hex 32` → `.env`, `docker compose up -d`. For local dev only, `ALLOW_INSECURE_INTERNAL=1` serves it unauthenticated |
+| `agent-pi` log: *"agent-pi is fail-closed: all requests will 401 until AGENT_SERVICE_TOKEN is set…"*, every agent run 401s | same missing `.env` value — `agent-pi` is fail-closed too | `./scripts/init-env.sh`, `docker compose up -d`. For local dev only, `ALLOW_INSECURE_INTERNAL=1` serves it unauthenticated |
 | Login page asks for a registration key you do not have | no admin exists yet | `docker compose logs server \| grep "FIRST RUN"` — the key is printed there. Or set `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` and restart |
 | Port 8000 already in use | something else is on it | stop it, or map another host port in `docker-compose.yml` (`"8010:8000"`) |
 | Everything starts, but nothing an agent does works | no usable LLM credential | `curl -s localhost:8000/api/llm/status`, then Settings → LLM providers |
@@ -98,7 +98,12 @@ and `agent-pi`, checked before either one ever reaches an LLM provider.
 - **Precedence.** The token can also live in `config.yaml`'s top-level
   `agent_service_token`, on both `server` and `agent-pi` — if set there, it
   wins over `AGENT_SERVICE_TOKEN` in `.env`/the environment, which is only the
-  fallback.
+  fallback. The untracked `config.local.yaml` overlay wins over `config.yaml`
+  the same way it does for the rest of the config — but only if it is
+  actually mounted: a token set only in `config.local.yaml` on the server side
+  has no effect on `agent-pi` unless that file is *also* bind-mounted into the
+  `agent-pi` service (both services have a commented-out mount for it in
+  `docker-compose.yml` — uncomment both, not just one).
 - **Fix.** Set `AGENT_SERVICE_TOKEN` in `.env` (`./scripts/init-env.sh` does
   this for you) — the *same* value is used by both `server` and `agent-pi`,
   since both read it from the one `.env`. Then apply it with
@@ -108,7 +113,10 @@ and `agent-pi`, checked before either one ever reaches an LLM provider.
 - **`ALLOW_INSECURE_INTERNAL=1`** disables the check on both `server` and
   `agent-pi` — every internal API and agent-pi endpoint then serves
   unauthenticated requests. Local dev only, never on an instance anyone else
-  can reach; it is not a substitute for setting the token.
+  can reach; it is not a substitute for setting the token. Careful: this is a
+  plain environment variable, so a stray `export ALLOW_INSECURE_INTERNAL=1`
+  left in your host shell also takes effect — Docker Compose lets a real
+  shell variable override the same name in `.env`.
 - **Rotating the token? Set `BUZZOWL_SECRET_KEY` first.** Per-org LLM keys
   (Settings › LLM) are encrypted at rest, and the encryption key falls back to
   `AGENT_SERVICE_TOKEN` whenever `BUZZOWL_SECRET_KEY` is unset. Rotating the

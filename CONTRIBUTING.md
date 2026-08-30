@@ -12,9 +12,8 @@ help most right now" below before opening a big PR.
 ```bash
 git clone https://github.com/Lomikukus/buzzowl
 cd buzzowl
-cp .env.example .env
-openssl rand -hex 32        # -> AGENT_SERVICE_TOKEN=<paste into .env>
-# add at least one LLM credential, e.g. OPENROUTER_API_KEY=<key> in .env
+./scripts/init-env.sh      # creates .env, fills AGENT_SERVICE_TOKEN/BUZZOWL_SECRET_KEY/SEARXNG_SECRET
+# then add at least one LLM credential to .env, e.g. OPENROUTER_API_KEY=<key>
 
 docker compose up -d
 # open http://localhost:8000/login

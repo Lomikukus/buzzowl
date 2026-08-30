@@ -62,9 +62,11 @@ Self-hosting Buzzowl? Before exposing an instance beyond your own machine:
   server's internal API and the whole `agent-pi` API are fail-closed and
   disabled (401) without it. `ALLOW_INSECURE_INTERNAL=1` is the only way to
   serve them unauthenticated; it is a local-dev backdoor, never for production.
-- **Set `BUZZOWL_SECRET_KEY`** in `.env` if you use per-org LLM keys (hosted/
-  multi-org setups) — without it, key encryption at rest falls back to
-  `AGENT_SERVICE_TOKEN`.
+- **Set `BUZZOWL_SECRET_KEY`** in `.env` on first install, whether or not you
+  are hosting multiple orgs yet — without it, per-org LLM key encryption at
+  rest silently falls back to deriving the key from `AGENT_SERVICE_TOKEN`, and
+  rotating that token later then orphans every stored key (unrecoverable —
+  they have to be re-entered by hand).
 - **Do not publish the database port.** It's commented out in
   `docker-compose.yml` by default (`db` has no `ports:` mapping) — leave it
   that way; only uncomment it for host-side debugging on a trusted machine.

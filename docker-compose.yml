@@ -246,6 +246,10 @@ services:
       - "127.0.0.1:8001:8001"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      # Optional untracked overlay (see docs): create config.local.yaml, then add
+      #   - ./config.local.yaml:/app/config.local.yaml:ro
+      # here via docker-compose.override.yml — keep in sync with the server's
+      # own commented-out mount above so both sides resolve the same token.
       # Subscription-OAuth credential store (chmod 600 JSON) — survives rebuilds
       - pi_oauth:/app/data
     environment:

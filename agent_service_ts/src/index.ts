@@ -360,6 +360,9 @@ const start = async () => {
         console.warn('[pi-agent] agent-pi is fail-closed: all requests will 401 until '
           + 'AGENT_SERVICE_TOKEN is set (or ALLOW_INSECURE_INTERNAL=1 for local dev)');
       }
+    } else {
+      // Never log the token value itself — just confirm auth is active.
+      console.log('[pi-agent] internal auth enabled (AGENT_SERVICE_TOKEN is configured)');
     }
 
     await app.listen({ port: config.port, host: '0.0.0.0' });

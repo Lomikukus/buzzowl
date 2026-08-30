@@ -75,7 +75,18 @@ function loadLlmBlock(): LlmYaml {
     }
     if (yamlAgentServiceToken === undefined) {
       const token = parsed?.agent_service_token;
-      if (typeof token === 'string' && token) yamlAgentServiceToken = token;
+      // An unquoted numeric-looking token (agent_service_token: 12345678)
+      // parses as a number, not a string. context.py's resolution treats any
+      // truthy config.yaml value as "configured" regardless of type, so
+      // dropping a number here (falling through to the env fallback) would
+      // silently disagree with the Python side about whether a token is set
+      // at all -- coerce it instead. Non-scalar values (object/array) are not
+      // a token under any interpretation, so those are ignored either way.
+      if (typeof token === 'string' && token) {
+        yamlAgentServiceToken = token;
+      } else if (typeof token === 'number') {
+        yamlAgentServiceToken = String(token);
+      }
     }
     const hosted = parsed?.hosted as { enforce_plans?: boolean } | undefined;
     if (hosted && typeof hosted === 'object') yamlHostedEnforce = !!hosted.enforce_plans;

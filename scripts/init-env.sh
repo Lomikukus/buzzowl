@@ -30,14 +30,20 @@ if [ ! -f "$ENV_FILE" ]; then
         exit 1
     fi
     cp "$EXAMPLE_FILE" "$ENV_FILE"
-    echo "Created $ENV_FILE from $EXAMPLE_FILE."
+    chmod 600 "$ENV_FILE"
+    echo "Created $ENV_FILE from $EXAMPLE_FILE (chmod 600 -- it holds secrets)."
 else
     echo "$ENV_FILE already exists — leaving it as-is, only filling missing secrets."
 fi
 
 # Current value of NAME in $ENV_FILE (empty if unset, blank, or commented out).
+# "|| true" matters: under `set -euo pipefail`, grep finding no match exits 1,
+# and pipefail propagates that as the whole pipeline's status even though
+# tail/cut both succeed on empty input -- without the guard, `set -e` would
+# silently kill the script the first time a var is entirely absent from an
+# existing .env (dead-code-ing the append branch in set_value below).
 get_value() {
-    grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d'=' -f2-
+    grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d'=' -f2- || true
 }
 
 # Set NAME=VALUE in $ENV_FILE: replaces an existing "NAME=..." line in place,
@@ -49,6 +55,7 @@ set_value() {
         awk -v name="$name" -v value="$value" \
             'BEGIN{FS=OFS="="} $1==name{$0=name"="value} {print}' \
             "$ENV_FILE" > "$tmp"
+        chmod 600 "$tmp"
         mv "$tmp" "$ENV_FILE"
     else
         printf '%s=%s\n' "$name" "$value" >> "$ENV_FILE"
