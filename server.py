@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import context
+import llm
 from context import (
     BASE_DIR,
     DB_AVAILABLE,
@@ -157,10 +158,6 @@ async def first_run_bootstrap() -> Optional[tuple[str, str]]:
                 display_name=admin_username,
                 password_hash=pwd_context.hash(admin_password),
                 role="admin",
-            )
-            console.print(
-                f"  First run: created org [cyan]{org_name}[/cyan] (slug: [cyan]{org_slug}[/cyan]) "
-                f"with admin user [cyan]{admin_username}[/cyan] — login at /login"
             )
             _boot_logger.info(
                 "First run: created org '%s' (slug %s) with admin user '%s'",
@@ -414,6 +411,13 @@ async def settings_page() -> HTMLResponse:
     return _html("settings.html")
 
 
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_wizard_page() -> HTMLResponse:
+    """First-run setup wizard. No auth on the route itself — the page guards
+    client-side (redirects to /login or / ) exactly like every other page."""
+    return _html("setup.html")
+
+
 # ---------------------------------------------------------------------------
 # Config endpoints
 # ---------------------------------------------------------------------------
@@ -499,6 +503,11 @@ async def health_check():
 
     pi_url = config.get("agent_service_url_pi", "")
     pi_ok = False
+    agent_token = config.get("agent_service_token", "")
+    # None (not False) when no token is configured — we never even attempted the
+    # authenticated call, so "unauthenticated" would be a lie and "reachable" is
+    # already covered by the plain `pi` check above.
+    pi_auth_ok: Optional[bool] = None
 
     async with httpx.AsyncClient() as client:
         if pi_url:
@@ -507,12 +516,34 @@ async def health_check():
                 pi_ok = r.status_code == 200
             except Exception:
                 pass
+        if agent_token:
+            try:
+                r = await client.get(
+                    f"{pi_url}/oauth/status",
+                    headers={"Authorization": f"Bearer {agent_token}"},
+                    timeout=2.0,
+                )
+                pi_auth_ok = r.status_code == 200   # 401 (bad/rotated token) → False, same as a timeout
+            except Exception:
+                pi_auth_ok = False
 
     embed_ok, embed_age = await _probe_embeddings()
+
+    # /api/health is unauthenticated and carries no org context, so this can
+    # only report PLATFORM-level LLM readiness (config.yaml / env — no org
+    # overlay applied). Named llm_platform, not llm_configured, so it is never
+    # confused with the per-org flag on GET /api/auth/me (routers/auth.py
+    # _org_flags), which is the one the UI actually gates on once logged in.
+    try:
+        llm_platform_ok = llm.status_cheap()
+    except Exception:
+        llm_platform_ok = False
 
     checks = {
         "db": db_ok,
         "pi": pi_ok,
+        "pi_auth": pi_auth_ok,
+        "llm_platform": llm_platform_ok,
         "embeddings": embed_ok,
         # Recorded once by the migration runner at startup — no query per poll.
         # None means the DB was unreachable at boot (migrations never ran).

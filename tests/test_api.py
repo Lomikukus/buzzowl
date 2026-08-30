@@ -207,6 +207,64 @@ class TestAuthGuard:
 
 
 # ---------------------------------------------------------------------------
+# WP9a: /api/auth/me org flags (llm_configured, setup_completed) — the
+# first-run wizard's client-side gate reads these off routers.auth._org_flags.
+# Exercised directly (not through the TestClient) so the org overlay / DB
+# calls stay fully controlled, same style as tests/test_plans.py.
+# ---------------------------------------------------------------------------
+
+class TestOrgFlags:
+    class _DB:
+        def __init__(self, settings=None, exc: Exception | None = None):
+            self._settings = dict(settings or {})
+            self._exc = exc
+
+        async def get_org_settings(self, org_id):
+            if self._exc is not None:
+                raise self._exc
+            return dict(self._settings)
+
+    async def _flags(self, monkeypatch, settings=None, llm_configured=True, exc=None):
+        import llm as _llm
+        from routers import auth as auth_router
+
+        monkeypatch.setattr(auth_router, "db_module", self._DB(settings, exc))
+        monkeypatch.setattr(_llm, "ensure_org_overlay", AsyncMock(return_value=None))
+        monkeypatch.setattr(_llm, "status_cheap", lambda **kw: llm_configured)
+        return await auth_router._org_flags(8)
+
+    async def test_llm_configured_true_with_a_working_provider(self, monkeypatch):
+        flags = await self._flags(monkeypatch, llm_configured=True)
+        assert flags["llm_configured"] is True
+
+    async def test_llm_configured_false_without_a_working_provider(self, monkeypatch):
+        flags = await self._flags(monkeypatch, llm_configured=False)
+        assert flags["llm_configured"] is False
+
+    async def test_setup_completed_false_when_key_absent(self, monkeypatch):
+        flags = await self._flags(monkeypatch, settings={})
+        assert flags["setup_completed"] is False
+
+    async def test_setup_completed_true_when_key_present(self, monkeypatch):
+        flags = await self._flags(monkeypatch, settings={"setup_completed_at": "2026-01-01T00:00:00+00:00"})
+        assert flags["setup_completed"] is True
+
+    async def test_plan_and_suspended_still_present_alongside_new_flags(self, monkeypatch):
+        flags = await self._flags(monkeypatch, settings={"plan": "premium", "suspended": True,
+                                                          "suspended_reason": "past due"})
+        assert flags["plan"] == "premium"
+        assert flags["suspended"] is True
+        assert flags["suspended_reason"] == "past due"
+        assert "llm_configured" in flags and "setup_completed" in flags
+
+    async def test_flags_tolerant_of_db_failure(self, monkeypatch):
+        """A DB hiccup must return {} (per the existing try/except contract),
+        never raise or 500 out of /api/auth/me."""
+        flags = await self._flags(monkeypatch, exc=RuntimeError("db down"))
+        assert flags == {}
+
+
+# ---------------------------------------------------------------------------
 # Agent API
 # ---------------------------------------------------------------------------
 
