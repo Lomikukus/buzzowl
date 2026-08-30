@@ -99,9 +99,10 @@ services:
       - "8000:8000"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      # Optional untracked overlay (see docs): create config.local.yaml, then add
+      # Optional untracked overlay (see docs): create config.local.yaml, then
+      # uncomment this line in docker-compose.override.yml or here; do it for
+      # BOTH services -- a token set only in one is not seen by the other.
       #   - ./config.local.yaml:/app/config.local.yaml:ro
-      # here and to agent-pi via a docker-compose.override.yml.
       - ./data:/app/data:rw
       - ./static:/app/static:ro
     environment:
@@ -120,7 +121,8 @@ services:
       - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
       # App-wide fallback limit for endpoints without their own (see context.py).
       - RATE_LIMIT_DEFAULT=${RATE_LIMIT_DEFAULT:-300/minute}
-      - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
+      - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN:-}
+      - ALLOW_INSECURE_INTERNAL=${ALLOW_INSECURE_INTERNAL:-}
       - BUZZOWL_SECRET_KEY=${BUZZOWL_SECRET_KEY:-}
       - HOSTED_OPERATOR_KEY=${HOSTED_OPERATOR_KEY:-}
       - HFTOKEN=${HFTOKEN:-}
@@ -245,6 +247,10 @@ services:
       - "127.0.0.1:8001:8001"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      # Optional untracked overlay (see docs): create config.local.yaml, then
+      # uncomment this line in docker-compose.override.yml or here; do it for
+      # BOTH services -- a token set only in one is not seen by the other.
+      #   - ./config.local.yaml:/app/config.local.yaml:ro
       # Subscription-OAuth credential store (chmod 600 JSON) — survives rebuilds
       - pi_oauth:/app/data
     environment:
@@ -268,7 +274,8 @@ services:
       - AGENT_SERVICE_PORT=8001
       - AGENT_MAX_CONCURRENT=${AGENT_MAX_CONCURRENT:-2}
       - MAIN_SERVER_URL=http://server:8000
-      - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN}
+      - AGENT_SERVICE_TOKEN=${AGENT_SERVICE_TOKEN:-}
+      - ALLOW_INSECURE_INTERNAL=${ALLOW_INSECURE_INTERNAL:-}
       - BUZZOWL_SECRET_KEY=${BUZZOWL_SECRET_KEY:-}
       - HOSTED_OPERATOR_KEY=${HOSTED_OPERATOR_KEY:-}
     extra_hosts:

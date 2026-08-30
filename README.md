@@ -90,10 +90,8 @@ about 4 GB across six containers) · ~15 GB disk · an LLM credential (an
 git clone https://github.com/Lomikukus/buzzowl.git
 cd buzzowl
 
-cp .env.example .env
-openssl rand -hex 32        # -> put it in .env as AGENT_SERVICE_TOKEN=
-openssl rand -hex 32        # -> put it in .env as BUZZOWL_SECRET_KEY=
-# and at least one LLM credential, e.g. OPENROUTER_API_KEY=sk-or-...
+./scripts/init-env.sh      # creates .env, fills AGENT_SERVICE_TOKEN/BUZZOWL_SECRET_KEY/SEARXNG_SECRET
+# then add at least one LLM credential to .env, e.g. OPENROUTER_API_KEY=sk-or-...
 
 docker compose up -d
 # open http://localhost:8000/login
