@@ -84,7 +84,7 @@ async def register(request: Request, body: dict):
     username         = body.get("username", "").strip()
     password         = body.get("password", "")
     display_name     = body.get("display_name", username).strip()
-    email            = body.get("email", "").strip() or None
+    email            = (body.get("email") or "").strip() or None
     registration_key = body.get("registration_key", "").strip()
     org_slug         = body.get("org_slug", "").strip() or re.sub(
         r"[^a-z0-9]+", "-", org_name.lower()
@@ -423,8 +423,12 @@ async def create_invite(body: dict, user: dict = Depends(current_user)):
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
-    role  = body.get("role", "member").strip()
-    email = body.get("email", "").strip() or None
+    # (body.get(...) or default) — not get(key, default) — because a body that
+    # explicitly sends {"email": null} (setup.html and settings.html both do,
+    # for an unlabeled invite row) makes .get() return None despite the
+    # default, and None.strip() raises a 500.
+    role  = (body.get("role") or "member").strip()
+    email = (body.get("email") or "").strip() or None
 
     if role not in ("admin", "member"):
         raise HTTPException(status_code=400, detail="role must be 'admin' or 'member'")
@@ -557,8 +561,8 @@ async def invite_user(body: dict, user: dict = Depends(current_user)):
     username     = body.get("username", "").strip()
     password     = body.get("password", "")
     display_name = body.get("display_name", username).strip()
-    email        = body.get("email", "").strip() or None
-    role         = body.get("role", "member").strip()
+    email        = (body.get("email") or "").strip() or None
+    role         = (body.get("role") or "member").strip()
 
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password are required")

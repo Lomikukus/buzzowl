@@ -130,7 +130,7 @@
                     <h4>Anthropic</h4>
                     <p class="desc">Claude via the Anthropic API.</p>
                     <div class="form-row"><label>API key</label><input class="form-input" type="password" id="anthropicApiKey" placeholder="sk-ant-…" autocomplete="new-password"></div>
-                    <div class="form-row"><label>Model</label><input class="form-input" id="anthropicModel" placeholder="claude-sonnet-4-5" autocomplete="off"></div>
+                    <div class="form-row"><label>Model</label><input class="form-input" id="anthropicModel" placeholder="claude-sonnet-4-6" autocomplete="off"></div>
                     <button class="btn" data-save="anthropic">Save</button>
                 </div>
                 <div class="option-card">
@@ -229,6 +229,15 @@
         }
 
         // ── Step 1: LLM provider ────────────────────────────────────────────────
+        // POST /api/org/llm is a full replace, not a patch (see
+        // routers/org_settings.py set_org_llm, and routers/llm_config.py's
+        // OAuth-complete handler which merges for the exact same reason before
+        // POSTing) — so every save here must merge with what this org already
+        // has, or a wizard card would silently wipe every other stored provider
+        // (their encrypted keys are gone for good) and every non-default role.
+        // _llmConfig holds the last {providers, roles} view fetched/saved.
+        let _llmConfig = { providers: {}, roles: {} };
+
         function llmProviderSummary(cfg) {
             const names = Object.keys((cfg || {}).providers || {});
             if (!names.length) return 'No provider configured yet.';
@@ -243,21 +252,39 @@
                 const r = await fetch('/api/org/llm', { headers: H() });
                 if (!r.ok) return;
                 const d = await r.json();
-                document.getElementById('llmStatus').textContent = llmProviderSummary(d.llm);
-            } catch (e) { /* leave status as-is */ }
+                _llmConfig = d.llm || { providers: {}, roles: {} };
+                document.getElementById('llmStatus').textContent = llmProviderSummary(_llmConfig);
+            } catch (e) { /* leave status as-is — _llmConfig stays whatever it was */ }
         }
 
         async function saveProvider(name, provider, model) {
             const status = document.getElementById('llmStatus');
             status.textContent = 'Saving…';
             try {
+                // Carry every OTHER already-stored provider forward untouched.
+                // GET /api/org/llm echoes api_key masked ("••••••••(stored)") plus
+                // has_key/needs_reconnect — none of those are real provider fields,
+                // so strip them: an omitted api_key tells merge_org_llm() to keep
+                // the stored (encrypted) key as-is, while forwarding the masked
+                // string back as a literal key would overwrite it with garbage.
+                const providers = {};
+                for (const [pname, p] of Object.entries(_llmConfig.providers || {})) {
+                    if (pname === name) continue;
+                    const { api_key, has_key, needs_reconnect, ...rest } = p;
+                    providers[pname] = rest;
+                }
+                providers[name] = provider;
+                // Keep every other role as-is; only 'default' is what this wizard sets.
+                const roles = { ...(_llmConfig.roles || {}), default: { provider: name, model } };
+
                 const r = await fetch('/api/org/llm', {
                     method: 'POST', headers: H(),
-                    body: JSON.stringify({ providers: { [name]: provider }, roles: { default: { provider: name, model } } }),
+                    body: JSON.stringify({ providers, roles }),
                 });
                 const d = await r.json();
                 if (!r.ok) { status.textContent = 'Error: ' + (d.detail || r.status); return; }
-                status.textContent = llmProviderSummary(d.llm);
+                _llmConfig = d.llm;
+                status.textContent = llmProviderSummary(_llmConfig);
             } catch (e) { status.textContent = 'Save failed: ' + e.message; }
         }
 
@@ -315,7 +342,11 @@
                 });
                 const d = await r.json();
                 if (!r.ok) { status.textContent = 'Error: ' + (d.detail || r.status); return; }
-                status.textContent = llmProviderSummary(d);   // flat shape: {ok, connected, providers, roles}
+                // Flat shape: {ok, connected, providers, roles} — the OAuth-complete
+                // endpoint already does its own merge server-side (see the comment
+                // on saveProvider above), so this is safe to adopt as-is.
+                _llmConfig = d;
+                status.textContent = llmProviderSummary(_llmConfig);
             } catch (e) { status.textContent = 'Connect failed: ' + e.message; }
             history.replaceState(null, '', location.pathname);
         }
@@ -337,7 +368,15 @@
         });
 
         // ── Step 2: org name + outreach identity ───────────────────────────────
+        // Fetched once — step1NextBtn calls loadStep2() every time step 1 -> 2 is
+        // crossed, and without this guard a Back-then-Next round trip would
+        // re-fetch and clobber whatever the admin had already typed into the
+        // identity fields on this visit.
+        let _step2Loaded = false;
+
         async function loadStep2() {
+            if (_step2Loaded) return;
+            _step2Loaded = true;
             try {
                 const r = await fetch('/api/auth/identity', { headers: H() });
                 if (!r.ok) return;
@@ -396,28 +435,34 @@
             if (btn) btn.closest('.invite-row').remove();
         });
 
-        document.getElementById('generateInvitesBtn').addEventListener('click', async () => {
-            const results = document.getElementById('inviteResults');
-            const rows = Array.from(document.querySelectorAll('#inviteRows .invite-row'));
-            for (const row of rows) {
-                const label = row.querySelector('[data-f="label"]').value.trim();
-                const role  = row.querySelector('[data-f="role"]').value;
-                const box = document.createElement('div');
-                box.className = 'key-box';
-                try {
-                    const r = await fetch('/api/auth/invite', {
-                        method: 'POST', headers: H(), body: JSON.stringify({ email: label || null, role }),
-                    });
-                    const d = await r.json();
-                    if (!r.ok) {
-                        box.innerHTML = `<div class="key-text" style="color:var(--c-red, #f14c4c)">Error${label ? ' (' + esc(label) + ')' : ''}: ${esc(d.detail || r.status)}</div>`;
-                    } else {
-                        box.innerHTML = `<div class="key-text">${label ? esc(label) + ': ' : ''}${esc(d.invite_key)}</div><button class="btn" data-copy="${esc(d.invite_key)}">Copy</button>`;
+        document.getElementById('generateInvitesBtn').addEventListener('click', async (ev) => {
+            const btn = ev.currentTarget;
+            btn.disabled = true;   // one request per row is already async; block a double-click too
+            try {
+                const results = document.getElementById('inviteResults');
+                const rows = Array.from(document.querySelectorAll('#inviteRows .invite-row'));
+                for (const row of rows) {
+                    const label = row.querySelector('[data-f="label"]').value.trim();
+                    const role  = row.querySelector('[data-f="role"]').value;
+                    const box = document.createElement('div');
+                    box.className = 'key-box';
+                    try {
+                        const r = await fetch('/api/auth/invite', {
+                            method: 'POST', headers: H(), body: JSON.stringify({ email: label || null, role }),
+                        });
+                        const d = await r.json();
+                        if (!r.ok) {
+                            box.innerHTML = `<div class="key-text" style="color:var(--c-red, #f14c4c)">Error${label ? ' (' + esc(label) + ')' : ''}: ${esc(d.detail || r.status)}</div>`;
+                        } else {
+                            box.innerHTML = `<div class="key-text">${label ? esc(label) + ': ' : ''}${esc(d.invite_key)}</div><button class="btn" data-copy="${esc(d.invite_key)}">Copy</button>`;
+                        }
+                    } catch (e) {
+                        box.innerHTML = `<div class="key-text" style="color:var(--c-red, #f14c4c)">Failed: ${esc(e.message)}</div>`;
                     }
-                } catch (e) {
-                    box.innerHTML = `<div class="key-text" style="color:var(--c-red, #f14c4c)">Failed: ${esc(e.message)}</div>`;
+                    results.appendChild(box);
                 }
-                results.appendChild(box);
+            } finally {
+                btn.disabled = false;
             }
         });
 

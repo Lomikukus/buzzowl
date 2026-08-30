@@ -265,6 +265,69 @@ class TestOrgFlags:
 
 
 # ---------------------------------------------------------------------------
+# WP9c review fix (B1): an explicit {"email": null} — which setup.html and
+# settings.html both send for an unlabeled invite row — must not 500.
+# body.get("email", "") only supplies the default when the key is ABSENT; a
+# key present with value null still yields None, and None.strip() raises.
+# ---------------------------------------------------------------------------
+
+class TestNullEmailDoesNotCrash:
+    def test_create_invite_accepts_null_email(self, app_client):
+        fake_inv = {"id": 1, "invite_key": "abc123", "role": "member", "email": None, "expires_at": None}
+        with patch("routers.auth.db_module.create_invitation", new_callable=AsyncMock, return_value=fake_inv):
+            resp = app_client.post(
+                "/api/auth/invite",
+                json={"email": None, "role": "member"},
+                headers={"Authorization": "Bearer fake"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["email"] is None
+
+    def test_create_invite_accepts_null_role_defaults_to_member(self, app_client):
+        fake_inv = {"id": 1, "invite_key": "abc123", "role": "member", "email": None, "expires_at": None}
+        with patch("routers.auth.db_module.create_invitation", new_callable=AsyncMock, return_value=fake_inv) as m:
+            resp = app_client.post(
+                "/api/auth/invite",
+                json={"email": None, "role": None},
+                headers={"Authorization": "Bearer fake"},
+            )
+        assert resp.status_code == 200
+        assert m.call_args.kwargs["role"] == "member"
+
+    def test_invite_user_accepts_null_email_and_role(self, app_client):
+        fake_user_row = {"id": 2, "username": "bob", "display_name": "bob", "role": "member"}
+        with (
+            patch("routers.auth.db_module.get_user_by_username", new_callable=AsyncMock, return_value=None),
+            patch("routers.auth.db_module.create_user", new_callable=AsyncMock, return_value=fake_user_row),
+        ):
+            resp = app_client.post(
+                "/api/auth/users",
+                json={"username": "bob", "password": "secret", "email": None, "role": None},
+                headers={"Authorization": "Bearer fake"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["user"]["username"] == "bob"
+
+    def test_register_accepts_null_email(self, app_client):
+        fake_user_row = {**FAKE_USER, "password_hash": "hashed"}
+        with (
+            patch("routers.auth.db_module.get_registration_key", new_callable=AsyncMock, return_value=FAKE_REG_KEY),
+            patch("routers.auth.db_module.get_org_by_slug", new_callable=AsyncMock, return_value=None),
+            patch("routers.auth.db_module.create_org", new_callable=AsyncMock, return_value=FAKE_ORG),
+            patch("routers.auth.db_module.create_user", new_callable=AsyncMock, return_value=fake_user_row),
+            patch("routers.auth.db_module.create_session_token", new_callable=AsyncMock),
+            patch("routers.auth.db_module.seed_default_heartbeats", new_callable=AsyncMock),
+            patch("routers.auth.db_module.consume_registration_key", new_callable=AsyncMock, return_value=True),
+        ):
+            resp = app_client.post("/api/auth/register", json={
+                "org_name": "North", "org_slug": "north",
+                "username": "konrad", "password": "secret",
+                "registration_key": "testkey123", "email": None,
+            })
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Agent API
 # ---------------------------------------------------------------------------
 

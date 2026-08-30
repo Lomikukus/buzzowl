@@ -626,7 +626,9 @@
                 const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
                 if (res.ok) {
                     const me = await res.json();
-                    if (me.user?.role === 'admin' && !me.org?.llm_configured && !me.org?.setup_completed) {
+                    // === false (not !x): a flags hiccup must leave the field
+                    // `undefined`, which must NOT bounce an existing admin here.
+                    if (me.user?.role === 'admin' && me.org?.llm_configured === false && me.org?.setup_completed === false) {
                         location.href = '/setup';
                         return true;
                     }

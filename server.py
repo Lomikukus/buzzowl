@@ -504,9 +504,10 @@ async def health_check():
     pi_url = config.get("agent_service_url_pi", "")
     pi_ok = False
     agent_token = config.get("agent_service_token", "")
-    # None (not False) when no token is configured — we never even attempted the
-    # authenticated call, so "unauthenticated" would be a lie and "reachable" is
-    # already covered by the plain `pi` check above.
+    # None (not False) when no token is configured, OR no agent_service_url_pi
+    # is set — either way we never even attempted the authenticated call, so
+    # "unauthenticated" would be a lie and "reachable" is already covered by
+    # the plain `pi` check above.
     pi_auth_ok: Optional[bool] = None
 
     async with httpx.AsyncClient() as client:
@@ -516,7 +517,7 @@ async def health_check():
                 pi_ok = r.status_code == 200
             except Exception:
                 pass
-        if agent_token:
+        if pi_url and agent_token:
             try:
                 r = await client.get(
                     f"{pi_url}/oauth/status",

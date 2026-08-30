@@ -602,15 +602,20 @@ async function doLogin() {
   document.getElementById('authOverlay').style.display = 'none';
   window.navbarRefreshUser?.();
   // WP9: a first-time admin (no LLM configured yet, wizard not done) goes to
-  // the setup wizard instead of staying on Settings.
-  const meRes = await fetch('/api/auth/me', { headers: H() });
-  if (meRes.ok) {
-    const me = await meRes.json();
-    if (me.user?.role === 'admin' && !me.org?.llm_configured && !me.org?.setup_completed) {
-      location.href = '/setup';
-      return;
+  // the setup wizard instead of staying on Settings. Both checks use
+  // `=== false`, not `!x` — a flags hiccup (routers/auth.py _org_flags
+  // returning {} on a DB error) must leave the field `undefined`, which must
+  // NOT bounce an existing admin to the wizard.
+  try {
+    const meRes = await fetch('/api/auth/me', { headers: H() });
+    if (meRes.ok) {
+      const me = await meRes.json();
+      if (me.user?.role === 'admin' && me.org?.llm_configured === false && me.org?.setup_completed === false) {
+        location.href = '/setup';
+        return;
+      }
     }
-  }
+  } catch (_) { /* fall through to Settings */ }
   init();
 }
 
