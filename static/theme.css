@@ -1,6 +1,8 @@
-/* Buzzowl — opt-in IBM Carbon theme. Applied only when
-   <html data-theme="carbon">. Classic users never see these values
-   (the source var() fallbacks hold the original palette). */
+/* Buzzowl — the IBM Carbon theme, now the only look. Applied via
+   <html data-theme="carbon">, hardcoded on every page. Pages still carry
+   their original var(--c-x, fallback) values inline; those fallbacks are
+   dead now that data-theme is never anything else, kept only because
+   stripping them is a separate cleanup. */
 
 @font-face{font-family:'IBM Plex Sans';font-weight:300;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-sans-300.woff2') format('woff2');}
 @font-face{font-family:'IBM Plex Sans';font-weight:400;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-sans-400.woff2') format('woff2');}
@@ -56,9 +58,9 @@
 :root[data-theme="carbon"] body{ -webkit-font-smoothing:antialiased; }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   CARBON RELAYOUT — structural changes for the opt-in redesign.
-   All rules are scoped to [data-theme="carbon"]; classic DOM is re-flowed,
-   never forked, so the classic look is unaffected.
+   CARBON RELAYOUT — structural changes for the (now only) look.
+   All rules stay scoped to [data-theme="carbon"] rather than forking the
+   DOM, even though that attribute is now permanently set on every page.
    ═══════════════════════════════════════════════════════════════════════ */
 :root[data-theme="carbon"]{ --c-rail: 216px; }
 

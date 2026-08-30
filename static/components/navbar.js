@@ -35,8 +35,9 @@
         text-overflow: ellipsis;
         max-width: 200px;
         /* Without this it is the one item the row can squeeze, so a crowded
-           bar shrank the record's name to "N..". Let the overflow menu take
-           the pressure instead; max-width still caps very long names. */
+           bar shrank the record's name to "N..". The bar (a scrolling rail,
+           or a horizontally-scrolling row under 900px) overflows instead of
+           reflowing; max-width still caps very long names. */
         flex-shrink: 0;
       }
       #main-nav a.nav-link {
@@ -55,11 +56,11 @@
         border-bottom-color: var(--c-accent, #4ec9b0);
       }
       #main-nav .nav-spacer { flex: 1; }
-      /* Links live in their own box so the overflow menu has something to
-         measure, and so the tools cluster on the right is never pushed out.
-         It must not shrink: a shrinkable box would slide silently under the
-         action buttons and hide the overflow from scrollWidth, leaving the
-         row looking broken instead of reflowing. */
+      /* Links live in their own box, separate from the tools cluster, so each
+         group lays out independently. Neither must shrink: every link and
+         button already has white-space:nowrap, so a shrinkable box would
+         just let its content get clipped instead of the bar's own scroll
+         (vertical on the rail, horizontal under 900px) taking the overflow. */
       #main-nav .nav-links {
         display: flex;
         align-items: center;
