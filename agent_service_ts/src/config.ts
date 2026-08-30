@@ -27,6 +27,10 @@ interface LlmYaml {
 // Top-level embed_dim from the same mounted config.yaml (captured while
 // scanning for the llm: block). undefined = not found in any candidate.
 let yamlEmbedDim: number | undefined;
+// Top-level agent_service_token from the same mounted config.yaml (captured
+// while scanning for the llm: block) — matches the Python side (context.py):
+// env wins, config.yaml is the fallback.
+let yamlAgentServiceToken: string | undefined;
 // hosted: block from config.yaml (Phase 6a) — only enforce_plans matters here.
 let yamlHostedEnforce = false;
 
@@ -68,6 +72,10 @@ function loadLlmBlock(): LlmYaml {
     if (yamlEmbedDim === undefined) {
       const dim = Number(parsed?.embed_dim);
       if (Number.isInteger(dim) && dim > 0) yamlEmbedDim = dim;
+    }
+    if (yamlAgentServiceToken === undefined) {
+      const token = parsed?.agent_service_token;
+      if (typeof token === 'string' && token) yamlAgentServiceToken = token;
     }
     const hosted = parsed?.hosted as { enforce_plans?: boolean } | undefined;
     if (hosted && typeof hosted === 'object') yamlHostedEnforce = !!hosted.enforce_plans;
@@ -189,7 +197,8 @@ export const config = {
   browserServiceUrl: (process.env.BROWSER_SERVICE_URL ?? 'http://browser-service:3000').replace(/\/$/, ''),
   // Camofox (anti-bot Firefox) — permanent part of Pi's production setup
   camofoxUrl: (process.env.CAMOFOX_URL ?? '').replace(/\/$/, ''),
-  serviceToken: process.env.AGENT_SERVICE_TOKEN ?? '',
+  // matches the Python side (context.py): env wins, config.yaml is the fallback
+  serviceToken: process.env.AGENT_SERVICE_TOKEN || yamlAgentServiceToken || '',
   // Explicit dev backdoor — same env var and semantics as the Python server
   // (server.py / routers/internal.py). Without a serviceToken the API is
   // fail-closed (401 on everything but /health); this is the only way to open it.

@@ -84,6 +84,35 @@ Each role shows its provider and whether the endpoint answered.
 - **Timeouts on big models** — a slow model can exceed the agent watchdog; use a
   faster model for the `research`/`triage` roles.
 
+### 401 "Internal APIs disabled" / "agent_service_token is not configured"
+
+This is not a provider key problem — it is the shared secret between `server`
+and `agent-pi`, checked before either one ever reaches an LLM provider.
+
+- **Why it happens.** Both containers are fail-closed: with no
+  `AGENT_SERVICE_TOKEN`, every internal endpoint (and, on `agent-pi`, every
+  request except `/health`) answers 401 rather than running unauthenticated.
+  A mismatch between the two containers' values 401s the same way as a
+  missing one — `server` calls `agent-pi` with its own token, and `agent-pi`
+  rejects anything that is not an exact match.
+- **Fix.** Set `AGENT_SERVICE_TOKEN` in `.env` (`./scripts/init-env.sh` does
+  this for you) — the *same* value is used by both `server` and `agent-pi`,
+  since both read it from the one `.env`. Then apply it with
+  `docker compose up -d`. **`docker compose restart` does NOT re-read `.env`**
+  — the containers keep running with whatever value they already loaded, so a
+  restart after editing `.env` looks like nothing changed.
+- **`ALLOW_INSECURE_INTERNAL=1`** disables the check on both `server` and
+  `agent-pi` — every internal API and agent-pi endpoint then serves
+  unauthenticated requests. Local dev only, never on an instance anyone else
+  can reach; it is not a substitute for setting the token.
+- **Rotating the token? Set `BUZZOWL_SECRET_KEY` first.** Per-org LLM keys
+  (Settings › LLM) are encrypted at rest, and the encryption key falls back to
+  `AGENT_SERVICE_TOKEN` whenever `BUZZOWL_SECRET_KEY` is unset. Rotating the
+  token without an explicit `BUZZOWL_SECRET_KEY` orphans every stored key —
+  they stop decrypting and have to be re-entered by hand, they cannot be
+  recovered. Set `BUZZOWL_SECRET_KEY` (`openssl rand -hex 32`) once, on first
+  install, before storing any org key, and never change it.
+
 ## Embeddings
 
 Embeddings are optional. Without them search runs full-text only — everything

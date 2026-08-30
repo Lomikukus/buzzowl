@@ -357,8 +357,8 @@ const start = async () => {
         console.warn('[pi-agent] WARNING: ALLOW_INSECURE_INTERNAL=1 — this API accepts '
           + 'UNAUTHENTICATED requests (dev only)');
       } else {
-        console.warn('[pi-agent] AGENT_SERVICE_TOKEN not set — API disabled (401). '
-          + 'Set AGENT_SERVICE_TOKEN, or ALLOW_INSECURE_INTERNAL=1 for local dev.');
+        console.warn('[pi-agent] agent-pi is fail-closed: all requests will 401 until '
+          + 'AGENT_SERVICE_TOKEN is set (or ALLOW_INSECURE_INTERNAL=1 for local dev)');
       }
     }
 
