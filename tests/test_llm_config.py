@@ -128,19 +128,29 @@ async def test_rejects_bad_headers_type(cfg):
 # Writability gate (config.yaml is mounted read-only in docker-compose)
 # ---------------------------------------------------------------------------
 
-async def test_post_403_when_config_not_writable(cfg):
+async def test_post_403_when_config_not_writable(cfg, monkeypatch):
+    # monkeypatch os.access rather than chmod(0o444): chmod-as-root (e.g. in a
+    # container/CI running as root) doesn't actually deny writes, making that
+    # style of test unreliable — os.access is what the handler calls anyway.
     shared, yaml_path = cfg
-    yaml_path.chmod(0o444)
-    try:
-        with pytest.raises(HTTPException) as exc:
-            await tr.save_llm_config(_valid_body(), user=ADMIN)
-        assert exc.value.status_code == 403
-        assert "read-only" in exc.value.detail
-        assert "Settings" in exc.value.detail   # points admins at the DB-backed alternative
-        # nothing was mutated
-        assert shared["llm"]["roles"]["default"]["model"] == "m1"
-    finally:
-        yaml_path.chmod(0o644)
+    monkeypatch.setattr(tr.os, "access", lambda path, mode: False)
+    with pytest.raises(HTTPException) as exc:
+        await tr.save_llm_config(_valid_body(), user=ADMIN)
+    assert exc.value.status_code == 403
+    assert "not writable" in exc.value.detail
+    assert "Settings" in exc.value.detail   # points admins at the DB-backed alternative
+    # nothing was mutated
+    assert shared["llm"]["roles"]["default"]["model"] == "m1"
+
+
+async def test_post_403_when_config_missing(cfg, monkeypatch):
+    # os.access on a missing path is also False — same 403, worded to cover both
+    shared, yaml_path = cfg
+    yaml_path.unlink()
+    with pytest.raises(HTTPException) as exc:
+        await tr.save_llm_config(_valid_body(), user=ADMIN)
+    assert exc.value.status_code == 403
+    assert "missing or not writable" in exc.value.detail
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +336,54 @@ async def test_openrouter_complete_keeps_existing_org_roles(cfg, monkeypatch):
     await tr.openrouter_oauth_complete({"code": "authcode"}, user=admin)
     # an org that already had roles keeps them — connect doesn't reassign 'default'
     assert fake_db.settings["llm"]["roles"]["default"] == {"provider": "anthropic", "model": "claude-x"}
+
+
+async def test_openrouter_complete_preserves_other_providers(cfg, monkeypatch):
+    """Regression for the blocker: connect used to build providers={"openrouter":
+    ...} only, and merge_org_llm() doesn't union providers by name — it patches
+    whatever incoming names and returns incoming as-is — so a bare connect used
+    to silently delete every other stored provider (and its encrypted key) the
+    org had, leaving roles dangling onto a provider that no longer exists."""
+    existing_key_plain = "sk-ant-existing-secret"
+    existing_llm = {
+        "providers": {
+            "anthropic": {"kind": "anthropic", "base_url": "",
+                          "api_key": tr.plans.encrypt_secret(existing_key_plain), "headers": {}},
+        },
+        "roles": {"default": {"provider": "anthropic", "model": "claude-x"},
+                  "chat": {"provider": "anthropic", "model": "claude-haiku"}},
+    }
+    fake_db = _FakeOrgDB(llm=existing_llm)
+    monkeypatch.setattr(tr, "DB_AVAILABLE", True)
+    monkeypatch.setattr(tr, "db_module", fake_db)
+    monkeypatch.setattr(tr.llm, "invalidate_org_overlay", lambda org_id=None: None)
+    admin = {"role": "admin", "id": 1, "org_id": 42}
+    await tr.openrouter_oauth_start({"callback_url": "http://localhost:8000/settings"}, user=admin)
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"key": "sk-or-v1-provisioned"}
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None): return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    result = await tr.openrouter_oauth_complete({"code": "authcode"}, user=admin)
+
+    provs = fake_db.settings["llm"]["providers"]
+    # the pre-existing provider survives the connect...
+    assert set(provs.keys()) == {"anthropic", "openrouter"}
+    # ...and its encrypted key still decrypts to the original plaintext
+    assert tr.plans.decrypt_secret(provs["anthropic"]["api_key"]) == existing_key_plain
+    # the new provider is there too, encrypted, never echoed back raw
+    assert provs["openrouter"]["api_key"].startswith("enc:v1:")
+    assert "sk-or-v1-provisioned" not in str(result)
+    # roles that pointed at the surviving provider are untouched
+    assert fake_db.settings["llm"]["roles"]["chat"] == {"provider": "anthropic", "model": "claude-haiku"}
 
 
 async def test_openrouter_complete_503_without_db(cfg, monkeypatch):

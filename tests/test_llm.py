@@ -252,28 +252,47 @@ def test_status_cheap_false_when_no_key_anywhere(monkeypatch):
 
 
 def test_status_cheap_org_overlay(llm_config):
+    """status_cheap() mirrors resolve()'s branch structure exactly — it must
+    answer for whatever provider resolve() would actually pick, not "does any
+    provider anywhere have a key"."""
     import time
-    llm._org_overlays[7] = (time.monotonic() + 60, {
-        "plan": "light", "enforce": True,
-        "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
-        "roles": {"default": {"provider": "own", "model": "m"}},
-    })
+
+    def seed(ov):
+        llm._org_overlays[7] = (time.monotonic() + 60, ov)
+
     try:
+        # light org, own provider with a real key -> resolve() picks it, key present
+        seed({"plan": "light", "enforce": True,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+              "roles": {"default": {"provider": "own", "model": "m"}}})
         assert llm.status_cheap(7) is True
-        # a light org with no usable key of its own, enforced -> no platform fallback
-        llm._org_overlays[7] = (time.monotonic() + 60, {
-            "plan": "light", "enforce": True, "providers": {}, "roles": {},
-        })
+
+        # DANGEROUS ROW: light org, own provider present but its key is EMPTY,
+        # not enforced. resolve() still picks the org's own (keyless) provider
+        # here — it never reaches the platform — so the call would fail; a
+        # status that checked the platform instead would lie about that.
+        seed({"plan": "light", "enforce": False,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": ""}},
+              "roles": {"default": {"provider": "own", "model": "m"}}})
         assert llm.status_cheap(7) is False
-        # not enforced -> falls back to the platform check
-        llm._org_overlays[7] = (time.monotonic() + 60, {
-            "plan": "light", "enforce": False, "providers": {}, "roles": {},
-        })
+
+        # same shape, enforced -> also False (resolve() picks the same keyless provider)
+        seed({"plan": "light", "enforce": True,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": ""}},
+              "roles": {"default": {"provider": "own", "model": "m"}}})
+        assert llm.status_cheap(7) is False
+
+        # light org with no providers of its own at all, enforced -> resolve()
+        # refuses outright, never reaches the platform
+        seed({"plan": "light", "enforce": True, "providers": {}, "roles": {}})
+        assert llm.status_cheap(7) is False
+
+        # same, but not enforced -> resolve() falls back to the platform
+        seed({"plan": "light", "enforce": False, "providers": {}, "roles": {}})
         assert llm.status_cheap(7) is True
+
         # premium org -> platform check regardless of its own (empty) providers
-        llm._org_overlays[7] = (time.monotonic() + 60, {
-            "plan": "premium", "enforce": True, "providers": {}, "roles": {},
-        })
+        seed({"plan": "premium", "enforce": True, "providers": {}, "roles": {}})
         assert llm.status_cheap(7) is True
     finally:
         llm.invalidate_org_overlay(7)

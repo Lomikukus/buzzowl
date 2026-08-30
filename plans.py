@@ -204,11 +204,14 @@ def sanitize_org_llm(block: dict) -> dict:
 
 
 def merge_org_llm(existing: dict, incoming: dict) -> dict:
-    """Keep stored (encrypted) keys when the client sends an empty/masked api_key."""
+    """Keep stored (encrypted) keys — and headers — when the client sends an
+    empty/masked api_key, or omits headers, for a provider that already had them."""
     ex_p = ((existing or {}).get("providers") or {})
     for name, p in (incoming.get("providers") or {}).items():
         if not p.get("api_key") and name in ex_p and ex_p[name].get("api_key"):
             p["api_key"] = ex_p[name]["api_key"]
+        if not p.get("headers") and name in ex_p and ex_p[name].get("headers"):
+            p["headers"] = ex_p[name]["headers"]
     return incoming
 
 

@@ -752,28 +752,44 @@ def status() -> list[dict]:
 
 
 def status_cheap(org_id: Optional[int] = None) -> bool:
-    """True if some provider — the org's own (via its cached overlay) or the
-    platform's — has a resolvable key. No network I/O, unlike status(): only
+    """True if the provider resolve() would actually pick for the 'default'
+    role has a resolvable key. No network I/O, unlike status(): only
     resolve_key() (inline value / env var lookup) is checked, never a request.
 
-    Cheap enough to call on every request as an "is anything configured at
-    all" gate, e.g. before offering a chat surface or showing a setup nag.
+    Mirrors resolve()'s branch structure exactly rather than asking "does ANY
+    provider have a key" — a light org whose own provider is misconfigured
+    (present but keyless) must read False here too, even when the platform
+    has a perfectly good key: resolve() picks the org's own (keyless)
+    provider in that case and the call fails, so a status that quietly
+    checked the platform instead would lie.
+
+    Reads the cached org overlay only (no I/O) — callers should
+    `await ensure_org_overlay(org_id)` first if the cache may be stale.
     """
-    ov = _org_overlay_sync(org_id) if org_id is not None else None
-    if ov and ov.get("plan") != "premium":
-        for name in (ov.get("providers") or {}):
-            try:
-                if _get_provider_from(ov, name).resolve_key():
-                    return True
-            except LLMError:
-                continue
-        if ov.get("enforce"):
-            return False   # light org: no usable key of its own, platform fallback blocked
+    if not isinstance(org_id, int) or isinstance(org_id, bool):
+        org_id = None
+    ov = _org_overlay_sync(org_id)
+    if ov:
+        if ov.get("plan") == "premium":
+            pass   # budget aside, premium always falls through to the platform check
+        elif ov.get("providers"):
+            roles = ov.get("roles") or {}
+            entry = roles.get("default") or {}
+            pname = entry.get("provider") or next(iter(ov["providers"]))
+            if pname in ov["providers"]:
+                try:
+                    return bool(_get_provider_from(ov, pname).resolve_key())
+                except LLMError:
+                    return False
+            # pname not in ov["providers"]: falls through to the platform check
+            # below, exactly like resolve() does in this same edge case
+        elif ov.get("enforce"):
+            return False   # resolve() refuses outright here, never reaches the platform
     block = _effective_config()
-    for name in (block.get("providers") or {}):
-        try:
-            if _get_provider(name).resolve_key():
-                return True
-        except LLMError:
-            continue
-    return False
+    roles = block.get("roles") or {}
+    entry = roles.get("default") or {}
+    provider_name = entry.get("provider") or _FALLBACK_PROVIDER
+    try:
+        return bool(_get_provider(provider_name).resolve_key())
+    except LLMError:
+        return False

@@ -49,6 +49,21 @@ def test_sanitize_and_merge_keeps_stored_key():
     assert plans.sanitize_org_llm({"providers": {"x": {"kind": "pi"}}})["providers"] == {}
 
 
+def test_merge_org_llm_keeps_stored_headers_when_incoming_omits_them():
+    stored = plans.sanitize_org_llm({"providers": {"pi-like": {"kind": "openai-compat", "base_url": "https://x",
+                                                               "api_key": "sk-1", "headers": {"pi_provider": "openai-codex"}}},
+                                     "roles": {}})
+    assert stored["providers"]["pi-like"]["headers"] == {"pi_provider": "openai-codex"}
+    # a later save that doesn't mention headers at all (e.g. a UI form with no
+    # headers field) must not silently wipe them, same bug class as the
+    # config.yaml round-trip fix
+    incoming = plans.sanitize_org_llm({"providers": {"pi-like": {"kind": "openai-compat", "base_url": "https://x", "api_key": ""}},
+                                       "roles": {}})
+    assert incoming["providers"]["pi-like"]["headers"] == {}    # sanitize defaults to empty
+    merged = plans.merge_org_llm(stored, incoming)
+    assert merged["providers"]["pi-like"]["headers"] == {"pi_provider": "openai-codex"}
+
+
 # ---------------------------------------------------------------------------
 # Key rotation: a ciphertext that no longer opens must never escape as an
 # exception — the org behaves as if it had stored no key at all.

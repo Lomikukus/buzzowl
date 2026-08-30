@@ -116,8 +116,8 @@ async def save_llm_config(body: dict, user: dict = Depends(current_user)):
         # per-org override instead (routers/org_settings.py GET/POST /api/org/llm).
         raise HTTPException(
             status_code=403,
-            detail="config.yaml is read-only on this install — workspace LLM settings "
-                   "are stored in the database instead (Settings › LLM Providers)")
+            detail="config.yaml is missing or not writable on this install — workspace "
+                   "LLM settings are stored in the database instead (Settings › LLM Providers)")
 
     providers = body.get("providers")
     roles = body.get("roles")
@@ -271,12 +271,17 @@ async def openrouter_oauth_complete(body: dict, user: dict = Depends(current_use
         default_model = (platform_roles.get("default") or {}).get("model") or llm._FALLBACK_MODEL
         new_roles = {"default": {"provider": "openrouter", "model": default_model}}
 
-    new_block = {
-        "providers": {"openrouter": {"kind": "openai-compat",
-                                     "base_url": "https://openrouter.ai/api/v1",
-                                     "api_key": key}},
-        "roles": new_roles,
-    }
+    # Keep every other provider the org already had — merge_org_llm() does not
+    # union providers by name, it only patches whatever keys 'incoming' names,
+    # so an incoming dict with just 'openrouter' would drop the rest outright
+    # (and any role still pointing at a dropped provider silently falls through
+    # to the platform providers in llm.resolve(), i.e. a hosted org's calls
+    # start spending platform money instead of erroring).
+    providers = dict(existing_llm.get("providers") or {})
+    providers["openrouter"] = {"kind": "openai-compat",
+                               "base_url": "https://openrouter.ai/api/v1",
+                               "api_key": key}
+    new_block = {"providers": providers, "roles": new_roles}
     incoming = plans.sanitize_org_llm(new_block)
     merged = plans.merge_org_llm(existing_llm, incoming)
     await db_module.update_org_settings(org_id, {"llm": merged})
@@ -305,7 +310,7 @@ async def _pi_oauth_forward(method: str, path: str, payload: Optional[dict],
             detail="Subscription logins are disabled — set llm_oauth_gray_flows: true "
                    "in config.yaml after reviewing the provider's terms of service.")
     token = config.get("agent_service_token", "")
-    if not token and os.environ.get("ALLOW_INSECURE_INTERNAL", "") not in ("1", "true"):
+    if not token and os.environ.get("ALLOW_INSECURE_INTERNAL", "") != "1":
         raise HTTPException(
             status_code=503,
             detail="AGENT_SERVICE_TOKEN is not configured — the agent service refuses all "
