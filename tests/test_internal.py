@@ -11,7 +11,7 @@ Auth: Bearer {agent_service_token}. When the token is empty (dev), auth is skipp
 import datetime as _dt
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from starlette.testclient import TestClient
 
@@ -24,7 +24,6 @@ from starlette.testclient import TestClient
 def app_client():
     """Module-scoped TestClient with DB forced available (no user auth — token-guarded)."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),

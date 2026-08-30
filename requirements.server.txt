@@ -1,5 +1,5 @@
-# Server-only requirements — no whisperx/PyTorch (transcription runs on Mac, not server)
-# Audio transcription disabled via TRANSCRIPTION_MODE=app in docker-compose
+# Server-only requirements — no speech-to-text stack. Transcripts arrive via
+# POST /api/transcript/ingest or are pasted in the UI; the server never runs ASR.
 numpy
 rich
 pyyaml

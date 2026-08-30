@@ -18,7 +18,7 @@ import asyncio
 import json
 import shutil
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -362,7 +362,6 @@ class TestPipelineSweep:
 def pipeline_client():
     """TestClient for pipeline endpoint tests — startup patched, no auth overrides."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", False),

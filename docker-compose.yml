@@ -90,10 +90,6 @@ services:
   server:
     build:
       context: .
-      args:
-        # 1 = bake faster-whisper into the image for in-Docker live
-        # transcription (then also set TRANSCRIPTION_MODE=local in .env)
-        INSTALL_TRANSCRIBE: "${INSTALL_TRANSCRIBE:-0}"
     container_name: buzzowl_server
     ports:
       - "8000:8000"
@@ -125,7 +121,6 @@ services:
       - ALLOW_INSECURE_INTERNAL=${ALLOW_INSECURE_INTERNAL:-}
       - BUZZOWL_SECRET_KEY=${BUZZOWL_SECRET_KEY:-}
       - HOSTED_OPERATOR_KEY=${HOSTED_OPERATOR_KEY:-}
-      - HFTOKEN=${HFTOKEN:-}
       - TELEGRAMBOT=${TELEGRAMBOT:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       # New name first; OPENROUTE is the legacy key still present in old .env files.
@@ -178,7 +173,7 @@ services:
       retries: 3
       # Boot is slow: entrypoint waits for the DB and applies schema.sql on a
       # fresh install, then startup() initialises the pool, runs the first-run
-      # bootstrap and (with TRANSCRIPTION_MODE=local) loads a Whisper model.
+      # bootstrap and applies migrations.
       start_period: 180s
     # Reserve memory so the API server stays responsive during a browser burst.
     mem_reservation: 320m

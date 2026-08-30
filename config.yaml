@@ -1,17 +1,8 @@
-model: large-v2        # WhisperX model size for file transcription (tiny, base, small, medium, large-v2)
-live_model: base       # faster-whisper model for live mic transcription (tiny or base recommended)
 language: en           # auto-detect, or force "en" / "de"
-compute_type: int8     # int8 for CPU/Apple Silicon; float16 for CUDA
 
-# Speaker diarization — requires a HuggingFace token
-# 1. Create an account at huggingface.co
-# 2. Accept terms at huggingface.co/pyannote/speaker-diarization-3.1
-# 3. Accept terms at huggingface.co/pyannote/segmentation-3.0
-# 4. Generate a token at huggingface.co/settings/tokens and paste it below
-hf_token: ""
-
-# AI summarization — used for streaming summary during live transcription only.
-# All other reasoning/generation uses the configured brain (openrouter/claude).
+# Ollama model for local-only paths: the Telegram bot's fallback chat backend
+# (notifications.py) and legacy agent scripts (agents/_legacy/). All other
+# reasoning/generation uses the configured brain (openrouter/claude).
 ollama_model: qwen3.5
 
 # Pipeline brain — used for session summarization and entity extraction
@@ -26,7 +17,7 @@ pipeline_model: deepseek/deepseek-v4-flash   # model name for the chosen brain (
 db_url: "postgresql://whisper:whisper@localhost:5432/whisper"
 db_pool_min: 2
 db_pool_max: 20
-executor_workers: 8     # ThreadPoolExecutor size (transcription, vault writes)
+executor_workers: 8     # ThreadPoolExecutor size (session promotion, vault writes)
 
 # Retention — nightly pruning of OPERATIONAL TELEMETRY only (see docs/backup-restore.md).
 # Knowledge is never pruned: documents, clients, contacts, deals and meetings are
@@ -184,8 +175,7 @@ agent_num_ctx: 16384          # leaf agents: enrichment, research, osint
 orchestrator_num_ctx: 32768   # orchestrator (think=True) needs headroom for reasoning tokens
 
 # Transcription mode
-# local = browser mic → faster-whisper on server (default)
-# app   = buzzowl-mac sends POST /api/transcript/ingest; server does no Whisper inference
+# app   = transcripts arrive via POST /api/transcript/ingest or paste; 'local' is no longer supported
 transcription_mode: app
 
 # Pipeline gate

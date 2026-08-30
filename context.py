@@ -5,14 +5,11 @@ Every other module imports from here. This module has no project-level imports
 so there are no circular dependencies.
 
 Exports:
-  config            — live config dict (mutated by /api/settings, not replaced)
+  config            — live config dict (mutated by routers/llm_config.py's POST /api/llm/config, not replaced)
   BASE_DIR          — project root Path
-  SAMPLE_RATE       — 16000 Hz, constant
   console           — Rich console for coloured logging
   executor          — ThreadPoolExecutor for CPU-bound work
   pwd_context       — bcrypt context for password hashing
-  _model_cache      — shared model cache (keyed "live:name" / "post:name" / etc.)
-  _model_lock       — Lock protecting _model_cache
   _metadata_lock    — Lock protecting session metadata JSON files
   DB_AVAILABLE      — True if asyncpg/db.py loaded successfully
   db_module         — db module reference (None if unavailable)
@@ -43,7 +40,6 @@ from rich.console import Console
 # Constants
 # ---------------------------------------------------------------------------
 
-SAMPLE_RATE = 16000
 BASE_DIR = Path(__file__).parent
 
 # ---------------------------------------------------------------------------
@@ -55,16 +51,8 @@ console = Console()
 # bcrypt context — used only in auth.py but kept here to avoid a separate module
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# WhisperX / faster-whisper model cache.
-# Keys: "live:{name}", "post:{name}", "align:{lang_code}", "diarize"
-_model_cache: dict = {}
-_model_lock = threading.Lock()
-
 # Prevents concurrent JSON reads/writes to the same staged session directory
 _metadata_lock = threading.Lock()
-
-# Active browser WebSocket connections — used to broadcast live text from the Mac app
-_live_ws_connections: dict = {}   # WebSocket -> org_id (multi-tenant: broadcasts are org-scoped)
 
 
 # ---------------------------------------------------------------------------
@@ -89,10 +77,6 @@ def load_config() -> dict:
     """
     load_dotenv(BASE_DIR / ".env")
     defaults: dict = {
-        "live_model":     "base",
-        "model":          "large-v2",
-        "compute_type":   "int8",
-        "hf_token":       "",
         "ollama_model":   "llama3.2",
         "vault_path":     "",
     }
@@ -109,9 +93,6 @@ def load_config() -> dict:
         with open(local_path) as f:
             overlay = yaml.safe_load(f) or {}
         _deep_merge(defaults, overlay)
-    # Prefer .env HFTOKEN over config.yaml when the yaml value is blank
-    if not defaults.get("hf_token"):
-        defaults["hf_token"] = os.environ.get("HFTOKEN", "")
     # Prefer .env AGENT_SERVICE_TOKEN over config.yaml when the yaml value is blank
     if not defaults.get("agent_service_token"):
         defaults["agent_service_token"] = os.environ.get("AGENT_SERVICE_TOKEN", "")
@@ -146,11 +127,11 @@ def load_config() -> dict:
     return defaults
 
 
-# Live config dict — mutated in place by /api/settings; never replaced.
+# Live config dict — mutated in place by routers/llm_config.py's POST /api/llm/config; never replaced.
 config: dict = load_config()
 
-# Thread pool: transcription (CPU-bound) and vault writes run here.
-# 2 workers caused queueing stalls when a post-pass and an export overlapped;
+# Thread pool: session promotion (staging -> vault) and other blocking I/O run here.
+# 2 workers caused queueing stalls when a promotion and an export overlapped;
 # overridable via executor_workers in config.yaml.
 executor = ThreadPoolExecutor(max_workers=int(config.get("executor_workers", 8)))
 

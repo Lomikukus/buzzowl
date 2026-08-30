@@ -71,7 +71,6 @@ def _make_pool_mock(fetchrow_return=None, execute_return="UPDATE 1"):
 def app_client():
     """Module-scoped TestClient with DB forced available and user stubbed."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -94,7 +93,6 @@ def app_client():
 def unauthed_client():
     """Per-test client with no dependency overrides to test auth guards."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),

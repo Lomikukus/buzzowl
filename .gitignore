@@ -12,10 +12,6 @@ raw_audio/
 raw_transcripts/
 summaries/
 !tests/fixtures/summaries/
-test-audio/*.m4a
-test-audio/*.wav
-test-audio/*.mp3
-test-audio/*.mp4
 
 # Models and cache
 *.bin

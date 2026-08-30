@@ -1,6 +1,8 @@
-/* Buzzowl — opt-in IBM Carbon theme. Applied only when
-   <html data-theme="carbon">. Classic users never see these values
-   (the source var() fallbacks hold the original palette). */
+/* Buzzowl — the IBM Carbon theme, now the only look. Applied via
+   <html data-theme="carbon">, hardcoded on every page. Pages still carry
+   their original var(--c-x, fallback) values inline; those fallbacks are
+   dead now that data-theme is never anything else, kept only because
+   stripping them is a separate cleanup. */
 
 @font-face{font-family:'IBM Plex Sans';font-weight:300;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-sans-300.woff2') format('woff2');}
 @font-face{font-family:'IBM Plex Sans';font-weight:400;font-style:normal;font-display:swap;src:url('/static/fonts/ibm-plex-sans-400.woff2') format('woff2');}
@@ -56,9 +58,9 @@
 :root[data-theme="carbon"] body{ -webkit-font-smoothing:antialiased; }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   CARBON RELAYOUT — structural changes for the opt-in redesign.
-   All rules are scoped to [data-theme="carbon"]; classic DOM is re-flowed,
-   never forked, so the classic look is unaffected.
+   CARBON RELAYOUT — structural changes for the (now only) look.
+   All rules stay scoped to [data-theme="carbon"] rather than forking the
+   DOM, even though that attribute is now permanently set on every page.
    ═══════════════════════════════════════════════════════════════════════ */
 :root[data-theme="carbon"]{ --c-rail: 216px; }
 
@@ -89,17 +91,14 @@
 :root[data-theme="carbon"] #main-nav .nav-spacer{ flex:1 1 auto; min-height:12px; }
 :root[data-theme="carbon"] #main-nav .nav-action-btn{ margin:3px 14px; text-align:left; }
 :root[data-theme="carbon"] #main-nav #wk-fb-btn{ align-self:flex-start; margin-left:14px; }
-:root[data-theme="carbon"] #main-nav #wk-theme-btn{ margin:8px 14px 6px; border-radius:0; text-align:center; }
 :root[data-theme="carbon"] #main-nav .nav-user{ padding:6px 18px 0; }
 :root[data-theme="carbon"] #main-nav .nav-logout{ padding:2px 18px; text-align:left; }
 :root[data-theme="carbon"] #main-nav #navSettingsGear{ margin-left:14px; }
-/* The classic bar groups links and the user/logout cluster into wrappers so a
-   "⋯" overflow menu can park what does not fit. The rail has no horizontal
-   limit (it scrolls vertically), so dissolve both wrappers back into the
-   column with display:contents and keep the overflow button out of it. */
+/* The bar groups links and the user/logout cluster into wrappers for the
+   flex row layout. The rail stacks everything in a column instead, so
+   dissolve both wrappers back into it with display:contents. */
 :root[data-theme="carbon"] #main-nav .nav-links,
 :root[data-theme="carbon"] #main-nav .nav-tools{ display:contents; }
-:root[data-theme="carbon"] #main-nav .nav-more-wrap{ display:none !important; }
 
 /* shift page content clear of the fixed rail — only where the rail exists
    (contact.html mounts its nav differently, so :has() spares it). */
@@ -955,20 +954,10 @@
 :root[data-theme="carbon"] #settingsPanel h2{
   font-family:var(--c-font-mono); text-transform:uppercase; letter-spacing:.04em;
 }
-:root[data-theme="carbon"] .settings-field label{
-  font-family:var(--c-font-mono); text-transform:uppercase;
-  letter-spacing:.05em; font-size:.68rem;
-}
-:root[data-theme="carbon"] .settings-field input[type=password],
-:root[data-theme="carbon"] .settings-field input[type=text],
-:root[data-theme="carbon"] #settingsSaveBtn,
 :root[data-theme="carbon"] #settingsCancelBtn{
   border-radius:0;
 }
 /* inline-styled controls carry border-radius:4px on the element itself */
-:root[data-theme="carbon"] #macTokenDisplay,
-:root[data-theme="carbon"] #macTokenShowBtn,
-:root[data-theme="carbon"] #macTokenCopyBtn,
 :root[data-theme="carbon"] #inviteUsername,
 :root[data-theme="carbon"] #invitePassword,
 :root[data-theme="carbon"] #inviteDisplay,

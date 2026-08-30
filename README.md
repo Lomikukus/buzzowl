@@ -223,27 +223,15 @@ Full system design, schema DDL, and agent patterns: see
 
 ## Transcription
 
-The Docker deployment does **not** transcribe audio by default — it ingests text:
+Buzzowl does not run speech-to-text itself. A transcript reaches it one of two ways:
 
-- **App mode (default, `transcription_mode: app`)** — a native macOS companion app
-  records and transcribes locally on Apple Silicon, then posts finished transcripts
-  to `POST /api/transcript/ingest` (authenticated with a per-user token from
-  Settings). The server does no Whisper inference.
-- **In-Docker live transcription (optional)** — set `INSTALL_TRANSCRIBE=1` and
-  `TRANSCRIPTION_MODE=local` in `.env`, then `docker compose up -d --build server`:
-  the browser microphone streams to faster-whisper inside the container (CPU only,
-  no WhisperX post-pass). It is a build argument, not a Compose profile.
-- **Local mode (`transcription_mode: local`)** — run `python server.py` directly on
-  a Mac: browser mic → faster-whisper live transcription, then a WhisperX post-pass
-  with speaker diarization (requires a HuggingFace token for the pyannote models,
-  set as `hf_token` or the `HFTOKEN` env var).
+- **Paste** — type or paste a finished transcript into the UI at `/record`.
+- **External ingest** — any client that already has a transcript (recorded and
+  transcribed by whatever tool you like) posts it to
+  `POST /api/transcript/ingest` (authenticated with a per-user token from
+  Settings), or polls `GET /api/transcript/session/{id}` for processing status.
 
-There is also a CLI for batch work:
-
-```bash
-python transcribe.py path/to/audio.mp4 --language en
-# flags: --model large-v2, --no-diarize, --no-summary
-```
+Either path stages the session and kicks off the same enrichment pipeline.
 
 ## Configuration
 
@@ -259,7 +247,7 @@ Two places:
 - **`.env`** (from `.env.example`) — secrets and per-deployment values:
   `AGENT_SERVICE_TOKEN` (required, shared secret between server and agent
   service), LLM/API keys, optional `ADMIN_USERNAME`/`ADMIN_PASSWORD` bootstrap,
-  optional `HFTOKEN`, SMTP and Telegram credentials.
+  SMTP and Telegram credentials.
 
 Precedence: environment variables override `config.yaml` where both exist.
 
@@ -281,7 +269,7 @@ Precedence: environment variables override `config.yaml` where both exist.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-ci.txt   # everything except the heavy WhisperX stack
+pip install -r requirements-ci.txt   # same as requirements.txt (what CI installs)
 
 # run the server against a local Docker Postgres
 docker compose up -d db

@@ -152,7 +152,7 @@ def _legacy_synthesis(cfg: dict) -> dict:
 def _effective_config() -> dict:
     """Return the llm: block, synthesizing one from legacy keys if absent.
 
-    Reads context.config live on every call — /api/settings mutates it in place.
+    Reads context.config live on every call — routers/llm_config.py's POST /api/llm/config mutates it in place.
     """
     cfg = context.config
     block = cfg.get("llm")

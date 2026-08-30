@@ -33,7 +33,6 @@ from context import (
     DB_AVAILABLE,
     SCHEDULER_AVAILABLE,
     _metadata_lock,
-    _model_cache,
     config,
     console,
     db_module,
@@ -3143,7 +3142,7 @@ async def get_pipeline_session(session_id: str):
 
 @router.get("/api/transcript/session/{session_id}")
 async def get_transcript_session(session_id: str):
-    """Poll processing status of an ingest session. Used by the Mac app for reconnect."""
+    """Poll processing status of an ingest session. Used by external ingest clients for reconnect."""
     meta = _read_session_metadata(session_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -3183,10 +3182,10 @@ class _TranscriptChunk(BaseModel):
 
 @router.post("/api/transcript/ingest")
 async def ingest_transcript_chunk(body: _TranscriptChunk, request: Request):
-    """Receive a transcript chunk from the Mac app (buzzowl-mac).
+    """Receive a transcript chunk from an external ingest client.
 
     Chunks are buffered in memory. On is_final=True the full transcript is staged
-    and the standard enrichment pipeline fires — identical to a browser recording session.
+    and the standard enrichment pipeline fires.
     Auth: Bearer user session token (same as current_user). Dev-mode open when DB unavailable
     and agent_service_token is blank.
     """
@@ -3214,19 +3213,6 @@ async def ingest_transcript_chunk(body: _TranscriptChunk, request: Request):
     chunk = body.transcript_chunk.strip()
     if chunk:
         _transcript_buffers.setdefault(session_id, []).append(chunk)
-        # Broadcast to any browser clients connected via /ws so live transcript updates
-        dead: set = set()
-        msg = json.dumps({"type": "live", "text": chunk, "start": 0, "end": 0})
-        # Only browsers of the SAME org may see this transcript (multi-tenant).
-        for ws, ws_org in list(context._live_ws_connections.items()):
-            if ws_org is not None and org_id is not None and ws_org != org_id:
-                continue
-            try:
-                await ws.send_text(msg)
-            except Exception:
-                dead.add(ws)
-        for ws in dead:
-            context._live_ws_connections.pop(ws, None)
 
     if not body.is_final:
         return {"ok": True}

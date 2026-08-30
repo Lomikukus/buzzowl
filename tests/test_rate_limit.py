@@ -17,7 +17,7 @@ flaking; the tests below swap in their own tiny limiter and restore it after.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from starlette.testclient import TestClient
 
@@ -38,7 +38,6 @@ def app_client():
     """Module-scoped TestClient with DB forced available (no auth overrides —
     these tests only need routes to exist, not to succeed)."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),

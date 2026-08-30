@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Buzzowl — live transcription web server
+Buzzowl — sales knowledge web server
 Usage: python server.py  →  open http://localhost:8000
 
 This file is intentionally thin. All routes and business logic live in:
@@ -9,7 +9,7 @@ This file is intentionally thin. All routes and business logic live in:
   routers/pipeline.py     — session lifecycle, promotion, background tasks
   routers/knowledge.py    — clients, contacts, documents, search
   routers/agents.py       — agent runs, research queue, /ws/agents
-  routers/transcription.py — live transcription, /ws, model loaders
+  routers/llm_config.py   — LLM provider status/config, OAuth endpoints
 """
 
 import asyncio
@@ -37,18 +37,16 @@ from context import (
     configure_rate_limits,
     console,
     db_module,
-    executor,
     limiter,
     pwd_context,
 )
-from routers import auth, pipeline, knowledge, agents, transcription, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
+from routers import auth, pipeline, knowledge, agents, llm_config, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
 from routers.pipeline import (
     ensure_dirs,
     _migrate_legacy_dirs,
     _pipeline_sweep_loop,
     _start_heartbeat_scheduler,
 )
-from routers.transcription import get_live_model
 
 # ---------------------------------------------------------------------------
 # App
@@ -111,7 +109,17 @@ if RATE_LIMIT_AVAILABLE:
 _boot_logger = logging.getLogger("wk.server")
 
 
-async def first_run_bootstrap() -> None:
+def _print_key_banner(key: str) -> None:
+    """Boxed yellow banner for the first-run registration key. Shared by the
+    inline print inside first_run_bootstrap() and the re-print right before
+    the "Ready." line in startup() — same style both times."""
+    banner = f"FIRST RUN: no organisation exists yet — register at /login with key {key}"
+    console.print(f"\n[bold yellow]{'=' * 74}[/bold yellow]")
+    console.print(f"[bold yellow]{banner}[/bold yellow]")
+    console.print(f"[bold yellow]{'=' * 74}[/bold yellow]\n")
+
+
+async def first_run_bootstrap() -> Optional[tuple[str, str]]:
     """Make a fresh install reachable. Runs once at startup, after init_db.
 
     Only acts when the orgs table is empty:
@@ -123,12 +131,17 @@ async def first_run_bootstrap() -> None:
 
     Idempotent and race-safe enough for the single-process server; best-effort —
     any failure is logged and never blocks startup.
+
+    Returns a notice describing what happened, so startup() can re-print it as
+    the very last thing before "Ready.": ("key", key_string) for the
+    registration-key branch, ("admin", username) for the env-admin branch, or
+    None when an org already existed (or bootstrap could not run / failed).
     """
     if not DB_AVAILABLE or db_module is None or not db_module._pool:
-        return
+        return None
     try:
         if await db_module.get_first_org():
-            return
+            return None
 
         admin_username = (os.environ.get("ADMIN_USERNAME") or "").strip()
         admin_password = os.environ.get("ADMIN_PASSWORD") or ""
@@ -153,6 +166,7 @@ async def first_run_bootstrap() -> None:
                 "First run: created org '%s' (slug %s) with admin user '%s'",
                 org_name, org_slug, admin_username,
             )
+            return ("admin", admin_username)
         else:
             # No admin credentials in the environment — issue a registration key
             # instead (inline insert; no dependency on scripts/manage_registration.py).
@@ -172,13 +186,14 @@ async def first_run_bootstrap() -> None:
                         "INSERT INTO registration_keys (reg_key, label) VALUES ($1, $2)",
                         key, "first-run bootstrap",
                     )
-            banner = f"FIRST RUN: no organisation exists yet — register at /login with key {key}"
-            console.print(f"\n[bold yellow]{'=' * 74}[/bold yellow]")
-            console.print(f"[bold yellow]{banner}[/bold yellow]")
-            console.print(f"[bold yellow]{'=' * 74}[/bold yellow]\n")
+            # Belt and suspenders: print here too, for early visibility if
+            # something later in startup() crashes before the re-print below.
+            _print_key_banner(key)
             _boot_logger.warning("First run: register at /login with key %s", key)
+            return ("key", key)
     except Exception as exc:
         _boot_logger.warning("First-run bootstrap skipped: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -189,14 +204,16 @@ async def first_run_bootstrap() -> None:
 async def startup() -> None:
     ensure_dirs()
     _migrate_legacy_dirs()
-    console.print(f"\n[bold]Buzzowl — live server[/bold]")
+    console.print(f"\n[bold]Buzzowl — server[/bold]")
     loop = asyncio.get_event_loop()
-    if config.get("transcription_mode", "local") == "local":
-        console.print(f"  Default live model: [yellow]{config['live_model']}[/yellow]")
-        await loop.run_in_executor(executor, get_live_model, config["live_model"])
-    else:
-        console.print(f"  Transcription mode: [yellow]app[/yellow] — Whisper models not loaded")
+    console.print(f"  Transcription: [yellow]external ingest only[/yellow] (POST /api/transcript/ingest)")
+    if config.get("transcription_mode") == "local":
+        console.print(
+            "  [bold red]WARNING: transcription_mode 'local' is no longer supported — "
+            "in-server STT was removed; transcripts arrive via text ingest[/bold red]"
+        )
 
+    first_run_notice: Optional[tuple[str, str]] = None
     if DB_AVAILABLE:
         db_module.set_main_loop(loop)
         await db_module.init_db(
@@ -209,7 +226,7 @@ async def startup() -> None:
             pool_min=int(config.get("db_pool_min", 2)),
             pool_max=int(config.get("db_pool_max", 20)),
         )
-        await first_run_bootstrap()
+        first_run_notice = await first_run_bootstrap()
 
     # Internal-API security posture: with no agent_service_token the internal
     # endpoints fail closed (401) unless the explicit dev backdoor is set.
@@ -257,6 +274,16 @@ async def startup() -> None:
         except Exception as _fexc:
             console.print(f"  [yellow]Federation not started: {_fexc}[/yellow]")
 
+    # Re-print the first-run notice as the very last thing before "Ready." —
+    # it's easy to miss scrolled up above the rest of the startup log, so it
+    # gets one more shot at being the last thing an operator sees.
+    if first_run_notice is not None:
+        kind, value = first_run_notice
+        if kind == "key":
+            _print_key_banner(value)
+        elif kind == "admin":
+            console.print(f"  First run: admin [cyan]'{value}'[/cyan] is ready — log in at /login")
+
     console.print(f"  Ready. Open [cyan]http://localhost:8000[/cyan]\n")
 
 
@@ -298,7 +325,7 @@ async def login_page() -> HTMLResponse:
 
 
 @app.get("/record", response_class=HTMLResponse)
-async def get_recorder() -> HTMLResponse:
+async def get_transcripts_page() -> HTMLResponse:
     return _html("index.html")
 
 
@@ -511,7 +538,7 @@ app.include_router(operator_router.router)
 app.include_router(pipeline.router)
 app.include_router(knowledge.router)
 app.include_router(agents.router)
-app.include_router(transcription.router)
+app.include_router(llm_config.router)
 app.include_router(chat.router)
 app.include_router(notifications.router)
 app.include_router(internal.router)

@@ -339,7 +339,6 @@ class TestComputeQueue:
 @pytest.fixture(scope="module")
 def app_client():
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
@@ -424,7 +423,6 @@ class TestApi:
 
     def test_unauthed_get_is_401(self):
         with (
-            patch("server.get_live_model", return_value=MagicMock()),
             patch("server.db_module.init_db", new_callable=AsyncMock),
             patch("server.db_module.close_db", new_callable=AsyncMock),
             patch("server.DB_AVAILABLE", True),

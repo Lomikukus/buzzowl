@@ -24,8 +24,7 @@ docker compose up -d
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt      # or requirements-ci.txt for a lighter,
-                                      # no-WhisperX/torch install for server-only work
+pip install -r requirements.txt      # requirements-ci.txt is equivalent (what CI installs)
 
 docker compose up -d db              # Postgres + pgvector only
 python server.py
@@ -49,9 +48,9 @@ python -m pytest -q -p no:cacheprovider \
   --ignore=tests/test_db.py
 ```
 
-Markers: `slow` (loads WhisperX models) and `ollama` (needs a local Ollama) are
-skipped in the fast suite by default — use `-m "not slow and not ollama"` if
-you're running the full `tests/` path directly instead of the ignore flags above.
+Marker: `ollama` (needs a local Ollama) is skipped in the fast suite by default
+— use `-m "not ollama"` if you're running the full `tests/` path directly
+instead of the ignore flags above.
 
 Two files need a live Postgres and are excluded from the command above:
 `tests/test_search_integration.py` and `tests/test_db.py`. To run them:

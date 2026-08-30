@@ -3,7 +3,7 @@
 #
 # Usage:
 #   bash tests/run_integration.sh           # all suites
-#   bash tests/run_integration.sh --fast    # skip ollama + slow suites
+#   bash tests/run_integration.sh --fast    # skip ollama suites
 #
 # Exits 0 if every enabled suite passes, 1 if any fail.
 
@@ -39,20 +39,15 @@ run_suite() {
 }
 
 # --- Always-on suites (no external deps) ---
-run_suite "Pipeline"   "-m 'not ollama and not slow'"  "tests/test_pipeline.py"
-run_suite "Search"     "-m 'not ollama and not slow'"  "tests/test_search_integration.py"
-run_suite "DB"         "-m 'not ollama and not slow'"  "tests/test_db.py"
-run_suite "API"        "-m 'not ollama and not slow'"  "tests/test_api.py"
-run_suite "Agents"     "-m 'not ollama and not slow'"  "tests/test_agents.py"
+run_suite "Pipeline"   "-m 'not ollama'"  "tests/test_pipeline.py"
+run_suite "Search"     "-m 'not ollama'"  "tests/test_search_integration.py"
+run_suite "DB"         "-m 'not ollama'"  "tests/test_db.py"
+run_suite "API"        "-m 'not ollama'"  "tests/test_api.py"
+run_suite "Agents"     "-m 'not ollama'"  "tests/test_agents.py"
 
 # --- Ollama-dependent suites ---
 if [[ $FAST -eq 0 ]]; then
     run_suite "Entity Extraction (Ollama)" "-m ollama" "tests/test_entity_extraction.py"
-fi
-
-# --- Slow suites (WhisperX model load) ---
-if [[ $FAST -eq 0 ]]; then
-    run_suite "Transcription (slow)"  "-m slow" "tests/test_transcription.py"
 fi
 
 # --- Summary ---

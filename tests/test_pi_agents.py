@@ -59,7 +59,6 @@ def _dev_backdoor(monkeypatch):
 def app_client():
     """Module-scoped TestClient with DB forced available and user stubbed."""
     with (
-        patch("server.get_live_model", return_value=MagicMock()),
         patch("server.db_module.init_db", new_callable=AsyncMock),
         patch("server.db_module.close_db", new_callable=AsyncMock),
         patch("server.DB_AVAILABLE", True),
