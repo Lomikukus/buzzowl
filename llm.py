@@ -749,3 +749,31 @@ def status() -> list[dict]:
             info["reachable"] = None   # not probed
         out.append(info)
     return out
+
+
+def status_cheap(org_id: Optional[int] = None) -> bool:
+    """True if some provider — the org's own (via its cached overlay) or the
+    platform's — has a resolvable key. No network I/O, unlike status(): only
+    resolve_key() (inline value / env var lookup) is checked, never a request.
+
+    Cheap enough to call on every request as an "is anything configured at
+    all" gate, e.g. before offering a chat surface or showing a setup nag.
+    """
+    ov = _org_overlay_sync(org_id) if org_id is not None else None
+    if ov and ov.get("plan") != "premium":
+        for name in (ov.get("providers") or {}):
+            try:
+                if _get_provider_from(ov, name).resolve_key():
+                    return True
+            except LLMError:
+                continue
+        if ov.get("enforce"):
+            return False   # light org: no usable key of its own, platform fallback blocked
+    block = _effective_config()
+    for name in (block.get("providers") or {}):
+        try:
+            if _get_provider(name).resolve_key():
+                return True
+        except LLMError:
+            continue
+    return False

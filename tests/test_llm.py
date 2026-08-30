@@ -239,6 +239,46 @@ def test_status_reports_providers(llm_config):
     assert "default" in entries["fake"]["roles"]
 
 
+def test_status_cheap_platform_only(llm_config):
+    assert llm.status_cheap() is True                 # platform 'fake' provider has a key
+
+
+def test_status_cheap_false_when_no_key_anywhere(monkeypatch):
+    monkeypatch.setattr(context, "config", {
+        "llm": {"providers": {"bare": {"kind": "openai-compat", "base_url": "http://x"}},
+                "roles": {"default": {"provider": "bare", "model": "m"}}},
+    })
+    assert llm.status_cheap() is False
+
+
+def test_status_cheap_org_overlay(llm_config):
+    import time
+    llm._org_overlays[7] = (time.monotonic() + 60, {
+        "plan": "light", "enforce": True,
+        "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+        "roles": {"default": {"provider": "own", "model": "m"}},
+    })
+    try:
+        assert llm.status_cheap(7) is True
+        # a light org with no usable key of its own, enforced -> no platform fallback
+        llm._org_overlays[7] = (time.monotonic() + 60, {
+            "plan": "light", "enforce": True, "providers": {}, "roles": {},
+        })
+        assert llm.status_cheap(7) is False
+        # not enforced -> falls back to the platform check
+        llm._org_overlays[7] = (time.monotonic() + 60, {
+            "plan": "light", "enforce": False, "providers": {}, "roles": {},
+        })
+        assert llm.status_cheap(7) is True
+        # premium org -> platform check regardless of its own (empty) providers
+        llm._org_overlays[7] = (time.monotonic() + 60, {
+            "plan": "premium", "enforce": True, "providers": {}, "roles": {},
+        })
+        assert llm.status_cheap(7) is True
+    finally:
+        llm.invalidate_org_overlay(7)
+
+
 # ---------------------------------------------------------------------------
 # Streaming
 # ---------------------------------------------------------------------------
