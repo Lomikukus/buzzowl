@@ -95,6 +95,10 @@ and `agent-pi`, checked before either one ever reaches an LLM provider.
   A mismatch between the two containers' values 401s the same way as a
   missing one — `server` calls `agent-pi` with its own token, and `agent-pi`
   rejects anything that is not an exact match.
+- **Precedence.** The token can also live in `config.yaml`'s top-level
+  `agent_service_token`, on both `server` and `agent-pi` — if set there, it
+  wins over `AGENT_SERVICE_TOKEN` in `.env`/the environment, which is only the
+  fallback.
 - **Fix.** Set `AGENT_SERVICE_TOKEN` in `.env` (`./scripts/init-env.sh` does
   this for you) — the *same* value is used by both `server` and `agent-pi`,
   since both read it from the one `.env`. Then apply it with

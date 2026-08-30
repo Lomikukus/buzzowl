@@ -29,7 +29,7 @@ interface LlmYaml {
 let yamlEmbedDim: number | undefined;
 // Top-level agent_service_token from the same mounted config.yaml (captured
 // while scanning for the llm: block) — matches the Python side (context.py):
-// env wins, config.yaml is the fallback.
+// config.yaml wins when set, environment is the fallback.
 let yamlAgentServiceToken: string | undefined;
 // hosted: block from config.yaml (Phase 6a) — only enforce_plans matters here.
 let yamlHostedEnforce = false;
@@ -197,8 +197,8 @@ export const config = {
   browserServiceUrl: (process.env.BROWSER_SERVICE_URL ?? 'http://browser-service:3000').replace(/\/$/, ''),
   // Camofox (anti-bot Firefox) — permanent part of Pi's production setup
   camofoxUrl: (process.env.CAMOFOX_URL ?? '').replace(/\/$/, ''),
-  // matches the Python side (context.py): env wins, config.yaml is the fallback
-  serviceToken: process.env.AGENT_SERVICE_TOKEN || yamlAgentServiceToken || '',
+  // matches the Python side (context.py): config.yaml wins when set, environment is the fallback
+  serviceToken: yamlAgentServiceToken || process.env.AGENT_SERVICE_TOKEN || '',
   // Explicit dev backdoor — same env var and semantics as the Python server
   // (server.py / routers/internal.py). Without a serviceToken the API is
   // fail-closed (401 on everything but /health); this is the only way to open it.
