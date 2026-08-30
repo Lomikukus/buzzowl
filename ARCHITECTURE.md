@@ -11,7 +11,7 @@
 
 ## Vision
 
-A **research and knowledge sharing platform for sales teams**. Captures knowledge from meetings (audio → transcript → summary), enriches it through autonomous agent research, and makes it searchable and actionable — all visualised through an Obsidian vault and accessible to any MCP-compatible agent.
+A **research and knowledge sharing platform for sales teams**. Captures knowledge from meetings (transcript → summary), enriches it through autonomous agent research, and makes it searchable and actionable — all visualised through an Obsidian vault and accessible to any MCP-compatible agent.
 
 The system is built incrementally. Every layer is independently useful before the next is added.
 

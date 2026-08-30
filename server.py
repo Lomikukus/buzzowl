@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Buzzowl — live transcription web server
+Buzzowl — sales knowledge web server
 Usage: python server.py  →  open http://localhost:8000
 
 This file is intentionally thin. All routes and business logic live in:
@@ -187,7 +187,7 @@ async def first_run_bootstrap() -> None:
 async def startup() -> None:
     ensure_dirs()
     _migrate_legacy_dirs()
-    console.print(f"\n[bold]Buzzowl — live server[/bold]")
+    console.print(f"\n[bold]Buzzowl — server[/bold]")
     loop = asyncio.get_event_loop()
     console.print(f"  Transcription: [yellow]external ingest only[/yellow] (POST /api/transcript/ingest)")
     if config.get("transcription_mode") == "local":
@@ -297,7 +297,7 @@ async def login_page() -> HTMLResponse:
 
 
 @app.get("/record", response_class=HTMLResponse)
-async def get_recorder() -> HTMLResponse:
+async def get_transcripts_page() -> HTMLResponse:
     return _html("index.html")
 
 

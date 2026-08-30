@@ -271,7 +271,7 @@ Precedence: environment variables override `config.yaml` where both exist.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-ci.txt   # server + test dependencies
+pip install -r requirements-ci.txt   # same as requirements.txt (what CI installs)
 
 # run the server against a local Docker Postgres
 docker compose up -d db

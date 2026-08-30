@@ -2,7 +2,7 @@
 routers/llm_config.py — LLM provider status, admin config editor, and OAuth
 connect flows (OpenRouter PKCE + Pi subscription-login proxy).
 
-Extracted from routers/transcription.py (WP1, no behavior change):
+Moved from the former routers/transcription.py (removed):
   GET  /api/llm/status                       (+ legacy alias GET /api/ollama)
   GET  /api/llm/config
   POST /api/llm/config

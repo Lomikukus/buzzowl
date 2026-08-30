@@ -1,7 +1,8 @@
 language: en           # auto-detect, or force "en" / "de"
 
-# AI summarization — used for streaming summary during live transcription only.
-# All other reasoning/generation uses the configured brain (openrouter/claude).
+# Ollama model for local-only paths: the Telegram bot's fallback chat backend
+# (notifications.py) and legacy agent scripts (agents/_legacy/). All other
+# reasoning/generation uses the configured brain (openrouter/claude).
 ollama_model: qwen3.5
 
 # Pipeline brain — used for session summarization and entity extraction
@@ -16,7 +17,7 @@ pipeline_model: deepseek/deepseek-v4-flash   # model name for the chosen brain (
 db_url: "postgresql://whisper:whisper@localhost:5432/whisper"
 db_pool_min: 2
 db_pool_max: 20
-executor_workers: 8     # ThreadPoolExecutor size (transcription, vault writes)
+executor_workers: 8     # ThreadPoolExecutor size (session promotion, vault writes)
 
 # Retention — nightly pruning of OPERATIONAL TELEMETRY only (see docs/backup-restore.md).
 # Knowledge is never pruned: documents, clients, contacts, deals and meetings are

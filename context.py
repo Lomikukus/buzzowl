@@ -5,7 +5,7 @@ Every other module imports from here. This module has no project-level imports
 so there are no circular dependencies.
 
 Exports:
-  config            — live config dict (mutated by /api/settings, not replaced)
+  config            — live config dict (mutated by routers/llm_config.py's POST /api/llm/config, not replaced)
   BASE_DIR          — project root Path
   console           — Rich console for coloured logging
   executor          — ThreadPoolExecutor for CPU-bound work
@@ -127,11 +127,11 @@ def load_config() -> dict:
     return defaults
 
 
-# Live config dict — mutated in place by /api/settings; never replaced.
+# Live config dict — mutated in place by routers/llm_config.py's POST /api/llm/config; never replaced.
 config: dict = load_config()
 
-# Thread pool: transcription (CPU-bound) and vault writes run here.
-# 2 workers caused queueing stalls when a post-pass and an export overlapped;
+# Thread pool: session promotion (staging -> vault) and other blocking I/O run here.
+# 2 workers caused queueing stalls when a promotion and an export overlapped;
 # overridable via executor_workers in config.yaml.
 executor = ThreadPoolExecutor(max_workers=int(config.get("executor_workers", 8)))
 

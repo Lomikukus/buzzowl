@@ -25,7 +25,7 @@ docker compose up -d
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt      # or requirements-ci.txt for server + test only
+pip install -r requirements.txt      # requirements-ci.txt is equivalent (what CI installs)
 
 docker compose up -d db              # Postgres + pgvector only
 python server.py

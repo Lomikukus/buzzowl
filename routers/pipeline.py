@@ -3185,7 +3185,7 @@ async def ingest_transcript_chunk(body: _TranscriptChunk, request: Request):
     """Receive a transcript chunk from an external ingest client.
 
     Chunks are buffered in memory. On is_final=True the full transcript is staged
-    and the standard enrichment pipeline fires — identical to a browser recording session.
+    and the standard enrichment pipeline fires.
     Auth: Bearer user session token (same as current_user). Dev-mode open when DB unavailable
     and agent_service_token is blank.
     """

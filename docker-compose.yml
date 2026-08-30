@@ -171,7 +171,7 @@ services:
       retries: 3
       # Boot is slow: entrypoint waits for the DB and applies schema.sql on a
       # fresh install, then startup() initialises the pool, runs the first-run
-      # bootstrap and (with TRANSCRIPTION_MODE=local) loads a Whisper model.
+      # bootstrap and applies migrations.
       start_period: 180s
     # Reserve memory so the API server stays responsive during a browser burst.
     mem_reservation: 320m
