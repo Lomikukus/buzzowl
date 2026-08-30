@@ -2,6 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Deterministic log ordering under docker compose (no stdout buffering delay).
+ENV PYTHONUNBUFFERED=1
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev postgresql-client \
     && rm -rf /var/lib/apt/lists/*

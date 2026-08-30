@@ -109,7 +109,17 @@ if RATE_LIMIT_AVAILABLE:
 _boot_logger = logging.getLogger("wk.server")
 
 
-async def first_run_bootstrap() -> None:
+def _print_key_banner(key: str) -> None:
+    """Boxed yellow banner for the first-run registration key. Shared by the
+    inline print inside first_run_bootstrap() and the re-print right before
+    the "Ready." line in startup() — same style both times."""
+    banner = f"FIRST RUN: no organisation exists yet — register at /login with key {key}"
+    console.print(f"\n[bold yellow]{'=' * 74}[/bold yellow]")
+    console.print(f"[bold yellow]{banner}[/bold yellow]")
+    console.print(f"[bold yellow]{'=' * 74}[/bold yellow]\n")
+
+
+async def first_run_bootstrap() -> Optional[tuple[str, str]]:
     """Make a fresh install reachable. Runs once at startup, after init_db.
 
     Only acts when the orgs table is empty:
@@ -121,12 +131,17 @@ async def first_run_bootstrap() -> None:
 
     Idempotent and race-safe enough for the single-process server; best-effort —
     any failure is logged and never blocks startup.
+
+    Returns a notice describing what happened, so startup() can re-print it as
+    the very last thing before "Ready.": ("key", key_string) for the
+    registration-key branch, ("admin", username) for the env-admin branch, or
+    None when an org already existed (or bootstrap could not run / failed).
     """
     if not DB_AVAILABLE or db_module is None or not db_module._pool:
-        return
+        return None
     try:
         if await db_module.get_first_org():
-            return
+            return None
 
         admin_username = (os.environ.get("ADMIN_USERNAME") or "").strip()
         admin_password = os.environ.get("ADMIN_PASSWORD") or ""
@@ -151,6 +166,7 @@ async def first_run_bootstrap() -> None:
                 "First run: created org '%s' (slug %s) with admin user '%s'",
                 org_name, org_slug, admin_username,
             )
+            return ("admin", admin_username)
         else:
             # No admin credentials in the environment — issue a registration key
             # instead (inline insert; no dependency on scripts/manage_registration.py).
@@ -170,13 +186,14 @@ async def first_run_bootstrap() -> None:
                         "INSERT INTO registration_keys (reg_key, label) VALUES ($1, $2)",
                         key, "first-run bootstrap",
                     )
-            banner = f"FIRST RUN: no organisation exists yet — register at /login with key {key}"
-            console.print(f"\n[bold yellow]{'=' * 74}[/bold yellow]")
-            console.print(f"[bold yellow]{banner}[/bold yellow]")
-            console.print(f"[bold yellow]{'=' * 74}[/bold yellow]\n")
+            # Belt and suspenders: print here too, for early visibility if
+            # something later in startup() crashes before the re-print below.
+            _print_key_banner(key)
             _boot_logger.warning("First run: register at /login with key %s", key)
+            return ("key", key)
     except Exception as exc:
         _boot_logger.warning("First-run bootstrap skipped: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +213,7 @@ async def startup() -> None:
             "in-server STT was removed; transcripts arrive via text ingest[/bold red]"
         )
 
+    first_run_notice: Optional[tuple[str, str]] = None
     if DB_AVAILABLE:
         db_module.set_main_loop(loop)
         await db_module.init_db(
@@ -208,7 +226,7 @@ async def startup() -> None:
             pool_min=int(config.get("db_pool_min", 2)),
             pool_max=int(config.get("db_pool_max", 20)),
         )
-        await first_run_bootstrap()
+        first_run_notice = await first_run_bootstrap()
 
     # Internal-API security posture: with no agent_service_token the internal
     # endpoints fail closed (401) unless the explicit dev backdoor is set.
@@ -255,6 +273,16 @@ async def startup() -> None:
                 console.print("  Federation: [green]runtime scheduled[/green]")
         except Exception as _fexc:
             console.print(f"  [yellow]Federation not started: {_fexc}[/yellow]")
+
+    # Re-print the first-run notice as the very last thing before "Ready." —
+    # it's easy to miss scrolled up above the rest of the startup log, so it
+    # gets one more shot at being the last thing an operator sees.
+    if first_run_notice is not None:
+        kind, value = first_run_notice
+        if kind == "key":
+            _print_key_banner(value)
+        elif kind == "admin":
+            console.print(f"  First run: admin [cyan]'{value}'[/cyan] is ready — log in at /login")
 
     console.print(f"  Ready. Open [cyan]http://localhost:8000[/cyan]\n")
 
