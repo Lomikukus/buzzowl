@@ -367,7 +367,8 @@ tr:hover td { background: var(--c-linefaint, #222); }
       <h2>Plan &amp; usage</h2>
       <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
         <b>Light</b> = this workspace brings its own LLM key (configured below, encrypted at rest, never shown again).
-        <b>Premium</b> = the platform's providers, metered against a monthly budget. Every LLM call —
+        <b>Premium</b> is the hosted offering at buzzowl.app — the platform's providers, metered against a monthly
+        budget. This install is self-hosted ("light") and uses the workspace's own keys. Every LLM call —
         chat, research agents, pipeline, summaries — is counted per workspace.
       </p>
       <div id="planBox" style="display:grid;grid-template-columns:auto 1fr;gap:0.5rem 1rem;max-width:720px;align-items:center;font-size:0.8rem">
@@ -874,12 +875,9 @@ async function loadPlan() {
   const sw = document.getElementById('planSwitch');
   sw.innerHTML = _plan.hosted_mode
     ? '<span style="color:var(--c-muted2,#666)">plan changes are handled by the operator</span>'
-    : `<button class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem" onclick="switchPlan('${_plan.plan === 'light' ? 'premium' : 'light'}')">switch to ${_plan.plan === 'light' ? 'premium' : 'light'}</button>`;
-}
-async function switchPlan(plan) {
-  const r = await fetch('/api/org/plan', { method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) });
-  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.detail || 'could not change plan'); }
-  loadPlan();
+    : (_plan.self_hosted && _plan.plan === 'light'
+      ? `<a class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem;text-decoration:none" href="${_llmEsc(_plan.premium_url)}" target="_blank" rel="noopener">✦ Premium</a>`
+      : '');
 }
 
 // ── LLM Providers (admin) — this workspace's own providers, /api/org/llm ──

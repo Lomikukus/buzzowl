@@ -106,14 +106,26 @@ def _hosted() -> dict:
     return (_config or {}).get("hosted") or {}
 
 
+def _operator_key() -> str:
+    return _hosted().get("operator_key") or _os.environ.get("HOSTED_OPERATOR_KEY", "")
+
+
+def _operator_key_matches(request_headers) -> bool:
+    key = _operator_key()
+    return bool(key) and request_headers.get("x-operator-key", "") == key
+
+
 def _operator_ok(request_headers) -> bool:
-    """Plan/budget changes are billing events. In hosted mode (signup enabled) they
-    need the operator key (config hosted.operator_key or env HOSTED_OPERATOR_KEY);
-    on a self-hosted install the org admin decides."""
+    """Budget-change gate (unchanged semantics): in hosted mode (signup enabled)
+    a budget edit needs the operator key (config hosted.operator_key or env
+    HOSTED_OPERATOR_KEY); on a self-hosted install the org admin decides.
+
+    The `plan` field itself is gated separately (see set_plan) — premium is
+    an upsell on self-hosted installs, so switching plan always needs the
+    operator key, in both hosted and self-hosted mode."""
     if not _hosted().get("signup_enabled"):
         return True
-    key = _hosted().get("operator_key") or _os.environ.get("HOSTED_OPERATOR_KEY", "")
-    return bool(key) and request_headers.get("x-operator-key", "") == key
+    return _operator_key_matches(request_headers)
 
 
 @router.get("/plan")
@@ -128,6 +140,7 @@ async def get_plan(user: dict = Depends(current_user)):
     # Stored keys that no longer decrypt (encryption key changed) count as absent.
     broken = sorted(n for n, p in own.items()
                     if p.get("api_key") and not _plans.key_readable(p.get("api_key", "")))
+    hosted = _hosted()
     return {
         "plan": _plans.plan_of(settings),
         "plans": list(_plans.PLANS),
@@ -135,7 +148,12 @@ async def get_plan(user: dict = Depends(current_user)):
         "month_cost_usd": round(month_cost, 4),
         "budget_used_pct": round(100 * month_cost / budget, 1) if budget else None,
         "enforce_plans": _plans.enforce_plans(_config),
-        "hosted_mode": bool(_hosted().get("signup_enabled")),
+        "hosted_mode": bool(hosted.get("signup_enabled")),
+        # Self-hosted installs sell premium as an upsell link, not a self-service
+        # switch (see set_plan) — the frontend uses these two to decide whether
+        # to render the switch (hosted) or the "✦ Premium" link (self-hosted).
+        "self_hosted": not hosted.get("signup_enabled"),
+        "premium_url": hosted.get("premium_url") or "https://buzzowl.app",
         "has_own_providers": bool(own) and len(broken) < len(own),
         "keys_need_reconnect": broken,
         "usage": usage,
@@ -144,17 +162,31 @@ async def get_plan(user: dict = Depends(current_user)):
 
 @router.post("/plan")
 async def set_plan(body: dict, request: Request, user: dict = Depends(current_user)):
+    """Budget edits stay self-service for a self-hosted admin (no operator key
+    needed — see _operator_ok). Changing `plan` itself is a different story:
+    premium is the hosted offering at buzzowl.app, so on every install —
+    hosted or self-hosted — it always needs the operator key. The operator
+    control-plane route (routers/operator.py POST /orgs/{id}/plan) is the
+    real self-service-free path for that; this endpoint just refuses cleanly
+    with an upsell instead of quietly flipping the plan for free."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    if not _operator_ok(request.headers):
-        raise HTTPException(status_code=403, detail="plan changes are done by the operator on this deployment")
     patch: dict = {}
     if "plan" in body:
+        if not _operator_key():
+            raise HTTPException(
+                status_code=403,
+                detail="Self-service plan changes are disabled on this install. "
+                       "Premium is available at https://buzzowl.app")
+        if not _operator_key_matches(request.headers):
+            raise HTTPException(status_code=403, detail="a valid x-operator-key header is required to change plan")
         p = str(body.get("plan") or "").lower()
         if p not in _plans.PLANS:
             raise HTTPException(status_code=400, detail="plan must be light|premium")
         patch["plan"] = p
     if "llm_budget_usd_per_month" in body:
+        if not _operator_ok(request.headers):
+            raise HTTPException(status_code=403, detail="plan changes are done by the operator on this deployment")
         v = body.get("llm_budget_usd_per_month")
         if v in (None, ""):
             patch["llm_budget_usd_per_month"] = None

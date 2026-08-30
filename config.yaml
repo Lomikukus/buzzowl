@@ -264,7 +264,11 @@ hosted:
   enforce_plans: false       # true → a light org WITHOUT its own LLM provider is refused (no platform spend);
                              #        false (self-host default) → falls back to the llm: block above
   premium_monthly_budget_usd: 20   # default monthly cap for premium orgs (per-org override in org settings)
-  # operator_key: ""         # required for plan/budget changes when signup_enabled (or env HOSTED_OPERATOR_KEY)
+  # operator_key: ""         # required to change an org's `plan` on ANY install (self-hosted included —
+                              # premium is an upsell, not self-service); a budget-only edit still needs it
+                              # only when signup_enabled (or env HOSTED_OPERATOR_KEY)
+  # premium_url: ""          # override the "✦ Premium" upsell link shown on self-hosted installs
+                              # (default: https://buzzowl.app)
 # Per-org LLM keys are stored encrypted (AES-256-GCM) with a key derived from env
 # BUZZOWL_SECRET_KEY (falls back to AGENT_SERVICE_TOKEN). Set BUZZOWL_SECRET_KEY on
 # hosted deployments and never rotate it without re-entering keys.

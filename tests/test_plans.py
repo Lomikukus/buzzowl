@@ -163,6 +163,109 @@ async def test_plan_endpoint_reports_reconnect_instead_of_500(monkeypatch):
     assert out["plan"] == "light"
 
 
+# ---------------------------------------------------------------------------
+# WP8: premium is an upsell link on self-hosted installs — POST /api/org/plan
+# always needs the operator key to change `plan`; a budget-only edit doesn't.
+# ---------------------------------------------------------------------------
+
+class _FakePlanDB:
+    """Minimal org-settings DB stand-in for the /api/org/plan handlers."""
+
+    def __init__(self, settings=None):
+        self.settings = dict(settings or {"plan": "light"})
+
+    async def get_org_settings(self, org_id):
+        return dict(self.settings)
+
+    async def update_org_settings(self, org_id, patch):
+        self.settings.update(patch)
+        return dict(self.settings)
+
+    async def llm_usage_summary(self, org_id, days=31):
+        return {"month": {"cost_usd": 0.0}}
+
+
+class _FakeRequest:
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+
+
+ADMIN_8 = {"org_id": 8, "role": "admin"}
+
+
+async def test_set_plan_without_operator_key_on_self_hosted_is_refused(monkeypatch):
+    """(a) Self-hosted, no operator key configured at all: changing `plan`
+    always 403s with the upsell detail, never silently succeeds."""
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})   # self-hosted, no operator_key at all
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium"}, _FakeRequest(), user=ADMIN_8)
+    assert exc.value.status_code == 403
+    assert "Self-service plan changes are disabled" in exc.value.detail
+    assert "https://buzzowl.app" in exc.value.detail
+    assert fake_db.settings.get("plan") != "premium"    # nothing was mutated
+
+
+async def test_set_plan_with_valid_operator_key_works(monkeypatch):
+    """(b) A valid x-operator-key header lets the plan change through, on a
+    self-hosted install too (an operator-driven upgrade, not self-service)."""
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {"operator_key": "op-secret"}})
+
+    out = await os_router.set_plan({"plan": "premium"}, _FakeRequest({"x-operator-key": "op-secret"}), user=ADMIN_8)
+    assert fake_db.settings["plan"] == "premium"
+    assert out["plan"] == "premium"
+
+
+async def test_set_plan_budget_only_works_without_operator_key(monkeypatch):
+    """(c) A self-hosted admin can still self-serve a budget-only change with
+    no operator key at all — only the `plan` field itself is gated."""
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})   # no operator_key configured anywhere
+
+    out = await os_router.set_plan({"llm_budget_usd_per_month": 15}, _FakeRequest(), user=ADMIN_8)
+    assert fake_db.settings["llm_budget_usd_per_month"] == 15.0
+    assert out["budget_usd"] == 15.0
+    assert fake_db.settings.get("plan") == "light"      # untouched
+
+
+async def test_get_plan_includes_premium_url_and_self_hosted(monkeypatch):
+    """(d) GET /api/org/plan reports premium_url + self_hosted so the
+    settings UI can decide between the operator note and the upsell link."""
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})
+    out = await os_router.get_plan(user=ADMIN_8)
+    assert out["self_hosted"] is True
+    assert out["premium_url"] == "https://buzzowl.app"
+    assert out["hosted_mode"] is False
+
+    monkeypatch.setattr(os_router, "_config",
+                        {"hosted": {"signup_enabled": True, "premium_url": "https://custom.example"}})
+    out2 = await os_router.get_plan(user=ADMIN_8)
+    assert out2["self_hosted"] is False
+    assert out2["premium_url"] == "https://custom.example"
+    assert out2["hosted_mode"] is True
+
+
 def test_plan_and_budget():
     assert plans.plan_of({}) == "light" and plans.plan_of({"plan": "premium"}) == "premium"
     assert plans.budget_usd({"plan": "light"}, {}) is None
