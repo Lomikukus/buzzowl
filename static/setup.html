@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="carbon">
+<head>
+<link rel="stylesheet" href="/static/theme.css?v=20260830a">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buzzowl — Setup</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+            background: var(--c-bg, #1e1e1e);
+            color: var(--c-text, #d4d4d4);
+            min-height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+            padding: 1.5rem;
+        }
+
+        button { font-family: inherit; cursor: pointer; transition: background 0.15s; }
+        button:disabled { opacity: 0.4; cursor: default; }
+
+        #wizardCard {
+            background: var(--c-surface, #252526); border: 1px solid var(--c-line2, #333); border-radius: 10px;
+            padding: 1.8rem 2rem; width: 760px; max-width: 96vw;
+            display: flex; flex-direction: column; gap: 1rem;
+        }
+
+        .wizard-head { display: flex; align-items: baseline; justify-content: space-between; }
+        .wizard-head h2 { font-size: 1.15rem; color: var(--c-bluehi, #9cdcfe); }
+        .skip-link { font-size: 0.78rem; color: var(--c-muted, #888); text-decoration: none; }
+        .skip-link:hover { color: var(--c-text2, #ccc); text-decoration: underline; }
+
+        /* Step indicator */
+        .step-indicator { display: flex; gap: 1.75rem; padding-bottom: 0.9rem; border-bottom: 1px solid var(--c-line, #2a2a2a); }
+        .step-dot { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; color: var(--c-faint, #555); }
+        .step-dot .num {
+            width: 1.4rem; height: 1.4rem; border-radius: 50%; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            border: 1px solid var(--c-line2, #333); font-weight: 600; font-size: 0.72rem;
+        }
+        .step-dot.active { color: var(--c-text, #d4d4d4); }
+        .step-dot.active .num { border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+        .step-dot.done .num { background: var(--c-accenttint, #1a3a2e); border-color: var(--c-accent, #4ec9b0); color: var(--c-accent, #4ec9b0); }
+
+        .wizard-step h3 { font-size: 0.95rem; margin-bottom: 0.3rem; }
+        .wizard-step h4 { font-size: 0.82rem; margin: 0.9rem 0 0.4rem; color: var(--c-muted2, #777); }
+        .hint { font-size: 0.78rem; color: var(--c-muted, #888); margin-bottom: 0.9rem; }
+
+        /* Option cards (step 1) */
+        .option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0.9rem; }
+        .option-card {
+            border: 1px solid var(--c-line2, #333); border-radius: 8px; padding: 0.9rem;
+            display: flex; flex-direction: column; gap: 0.5rem; background: var(--c-bg2, #1a1a1a);
+        }
+        .option-card h4 { margin: 0; font-size: 0.85rem; color: var(--c-text, #d4d4d4); }
+        .option-card .desc { font-size: 0.72rem; color: var(--c-muted, #888); margin: -0.2rem 0 0.1rem; }
+
+        .form-row { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.1rem; }
+        .form-row label { font-size: 0.7rem; color: var(--c-muted2, #777); }
+        .form-input, .form-select {
+            background: var(--c-ink, #111); border: 1px solid var(--c-line2, #333); border-radius: 5px;
+            color: var(--c-text, #d4d4d4); font-family: inherit; font-size: 0.8rem; padding: 0.4rem 0.6rem; width: 100%;
+        }
+        textarea.form-input { resize: vertical; min-height: 60px; }
+        .form-input:focus, .form-select:focus { outline: none; border-color: var(--c-blue, #569cd6); }
+
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.3rem;
+            padding: 0.4rem 0.85rem; border-radius: 5px; border: 1px solid var(--c-line2, #333);
+            background: transparent; color: var(--c-text, #d4d4d4); font-size: 0.8rem;
+        }
+        .btn:hover:not(:disabled) { background: var(--c-line, #2a2a2a); }
+        .btn.primary { background: var(--c-accent, #4ec9b0); color: var(--c-ink, #111); font-weight: 600; border-color: var(--c-accent, #4ec9b0); }
+        .btn.primary:hover:not(:disabled) { background: var(--c-accent2, #3ab89e); }
+
+        .status-line { font-size: 0.78rem; color: var(--c-muted, #888); min-height: 1.1rem; margin-top: 0.6rem; }
+        .test-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
+        #testResult { font-size: 0.78rem; color: var(--c-muted2, #777); }
+
+        .wizard-actions { display: flex; justify-content: space-between; margin-top: 1.4rem; padding-top: 0.9rem; border-top: 1px solid var(--c-line, #2a2a2a); }
+
+        /* Step 3 invite rows */
+        .invite-row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; }
+        .invite-row .form-input { flex: 1; }
+        .invite-row .form-select { width: auto; }
+
+        .key-box { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+        .key-text {
+            flex: 1; background: var(--c-ink, #111); border: 1px solid var(--c-line, #2a2a2a); color: var(--c-accent, #4ec9b0);
+            padding: 0.4rem 0.65rem; border-radius: 4px; font-family: var(--c-font-mono, monospace); font-size: 0.78rem;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="wizardCard" style="display:none">
+        <div class="wizard-head">
+            <h2>Welcome to Buzzowl</h2>
+            <a href="#" id="skipSetupLink" class="skip-link">Skip setup</a>
+        </div>
+
+        <div class="step-indicator">
+            <div class="step-dot active" data-step="1"><span class="num">1</span><span>Connect an AI model</span></div>
+            <div class="step-dot" data-step="2"><span class="num">2</span><span>Your organisation</span></div>
+            <div class="step-dot" data-step="3"><span class="num">3</span><span>Invite your team</span></div>
+        </div>
+
+        <!-- Step 1: Connect an AI model -->
+        <div class="wizard-step" id="step1">
+            <h3>Connect an AI model</h3>
+            <p class="hint">Chat, research and summaries need an LLM provider. Pick one below — you can change this any time under Settings › LLM Providers.</p>
+            <div class="option-grid">
+                <div class="option-card">
+                    <h4>OpenRouter</h4>
+                    <p class="desc">One click, no key to copy or paste.</p>
+                    <button class="btn primary" id="connectOpenRouterBtn">Connect OpenRouter</button>
+                </div>
+                <div class="option-card">
+                    <h4>Own key</h4>
+                    <p class="desc">Any OpenAI-compatible endpoint.</p>
+                    <div class="form-row"><label>Name</label><input class="form-input" id="ownName" placeholder="openai" autocomplete="off"></div>
+                    <div class="form-row"><label>Base URL</label><input class="form-input" id="ownBaseUrl" value="https://api.openai.com/v1" autocomplete="off"></div>
+                    <div class="form-row"><label>API key</label><input class="form-input" type="password" id="ownApiKey" placeholder="sk-…" autocomplete="new-password"></div>
+                    <div class="form-row"><label>Model</label><input class="form-input" id="ownModel" placeholder="gpt-4o-mini" autocomplete="off"></div>
+                    <button class="btn" data-save="own">Save</button>
+                </div>
+                <div class="option-card">
+                    <h4>Anthropic</h4>
+                    <p class="desc">Claude via the Anthropic API.</p>
+                    <div class="form-row"><label>API key</label><input class="form-input" type="password" id="anthropicApiKey" placeholder="sk-ant-…" autocomplete="new-password"></div>
+                    <div class="form-row"><label>Model</label><input class="form-input" id="anthropicModel" placeholder="claude-sonnet-4-6" autocomplete="off"></div>
+                    <button class="btn" data-save="anthropic">Save</button>
+                </div>
+                <div class="option-card">
+                    <h4>Local Ollama</h4>
+                    <p class="desc">Fully local — nothing leaves this machine.</p>
+                    <div class="form-row"><label>Base URL</label><input class="form-input" id="ollamaBaseUrl" value="http://host.docker.internal:11434/v1" autocomplete="off"></div>
+                    <div class="form-row"><label>Model</label><input class="form-input" id="ollamaModel" placeholder="qwen3.5" autocomplete="off"></div>
+                    <button class="btn" data-save="ollama">Save</button>
+                </div>
+            </div>
+            <div class="status-line" id="llmStatus"></div>
+            <div class="test-row">
+                <button class="btn" id="testLlmBtn">Test connection</button>
+                <span id="testResult"></span>
+            </div>
+            <div class="wizard-actions">
+                <span></span>
+                <button class="btn primary" id="step1NextBtn">Next</button>
+            </div>
+        </div>
+
+        <!-- Step 2: Your organisation -->
+        <div class="wizard-step" id="step2" style="display:none">
+            <h3>Your organisation</h3>
+            <div class="form-row"><label>Organisation name</label><input class="form-input" id="orgNameInput"></div>
+            <div><button class="btn" id="saveOrgNameBtn">Save name</button></div>
+
+            <h4>Your outreach identity</h4>
+            <p class="hint" style="margin-bottom:0.5rem">Used as the sender name / reply-to / signature on outreach mail you send. Leave blank to use your account defaults.</p>
+            <div class="form-row"><label>Display name</label><input class="form-input" id="identName" placeholder="Alice Smith"></div>
+            <div class="form-row"><label>Reply-to</label><input class="form-input" id="identReply" placeholder="alice@example.com"></div>
+            <div class="form-row"><label>Signature</label><textarea class="form-input" id="identSig" placeholder="Best,&#10;Alice"></textarea></div>
+            <div><button class="btn" id="saveIdentityBtn">Save identity</button></div>
+
+            <div class="status-line" id="step2Status"></div>
+            <div class="wizard-actions">
+                <button class="btn" id="step2BackBtn">Back</button>
+                <button class="btn primary" id="step2NextBtn">Next</button>
+            </div>
+        </div>
+
+        <!-- Step 3: Invite your team -->
+        <div class="wizard-step" id="step3" style="display:none">
+            <h3>Invite your team</h3>
+            <p class="hint">Generate one-time invite keys — share each with the person it's meant for. They redeem it in the "Join" tab on the login screen.</p>
+            <div id="inviteRows"></div>
+            <div style="margin-bottom:0.9rem"><button class="btn" id="addInviteRowBtn">+ Add another</button></div>
+            <div><button class="btn primary" id="generateInvitesBtn">Generate invite keys</button></div>
+            <div id="inviteResults"></div>
+            <div class="wizard-actions">
+                <button class="btn" id="step3BackBtn">Back</button>
+                <button class="btn primary" id="finishBtn">Finish</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const TOKEN_KEY = 'wk_token';
+        const getToken  = () => localStorage.getItem(TOKEN_KEY);
+
+        function H() {
+            return { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' };
+        }
+
+        function esc(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        // ── Client-side guard: admin only, same token handling as every other page ──
+        async function guard() {
+            const token = getToken();
+            if (!token) { location.href = '/login'; return null; }
+            let me;
+            try {
+                const r = await fetch('/api/auth/me', { headers: H() });
+                if (!r.ok) { location.href = '/login'; return null; }
+                me = await r.json();
+            } catch (e) {
+                location.href = '/login';
+                return null;
+            }
+            if (me.user?.role !== 'admin') { location.href = '/'; return null; }
+            return me;
+        }
+
+        // ── Step navigation ──────────────────────────────────────────────────────
+        function showStep(n) {
+            document.querySelectorAll('.wizard-step').forEach(el => { el.style.display = 'none'; });
+            document.getElementById('step' + n).style.display = '';
+            document.querySelectorAll('.step-dot').forEach(el => {
+                const s = Number(el.dataset.step);
+                el.classList.toggle('active', s === n);
+                el.classList.toggle('done', s < n);
+            });
+        }
+
+        // ── Step 1: LLM provider ────────────────────────────────────────────────
+        // POST /api/org/llm is a full replace, not a patch (see
+        // routers/org_settings.py set_org_llm, and routers/llm_config.py's
+        // OAuth-complete handler which merges for the exact same reason before
+        // POSTing) — so every save here must merge with what this org already
+        // has, or a wizard card would silently wipe every other stored provider
+        // (their encrypted keys are gone for good) and every non-default role.
+        // _llmConfig holds the last {providers, roles} view fetched/saved.
+        // _llmConfigLoaded is only true once that view is CONFIRMED current —
+        // saveProvider() refuses to merge-and-POST against an unconfirmed
+        // (still-default, or possibly stale-from-a-failed-refetch) base, since
+        // that merge is exactly what stops a save from wiping other providers.
+        let _llmConfig = { providers: {}, roles: {} };
+        let _llmConfigLoaded = false;
+
+        function llmProviderSummary(cfg) {
+            const names = Object.keys((cfg || {}).providers || {});
+            if (!names.length) return 'No provider configured yet.';
+            return 'Configured: ' + names.map(n => {
+                const p = cfg.providers[n];
+                return `${n} (${p.kind}${p.has_key ? '' : ', no key'})`;
+            }).join(', ');
+        }
+
+        // Returns true once _llmConfig reflects a real server response, false
+        // on any failure (non-OK status or a thrown network error) — callers
+        // that need a confirmed base (saveProvider()) key off this, not just
+        // "did this run".
+        async function refreshLlmStatus() {
+            try {
+                const r = await fetch('/api/org/llm', { headers: H() });
+                if (!r.ok) return false;
+                const d = await r.json();
+                _llmConfig = d.llm || { providers: {}, roles: {} };
+                _llmConfigLoaded = true;
+                document.getElementById('llmStatus').textContent = llmProviderSummary(_llmConfig);
+                return true;
+            } catch (e) { return false; /* leave status as-is — _llmConfig stays whatever it was */ }
+        }
+
+        async function saveProvider(name, provider, model) {
+            const status = document.getElementById('llmStatus');
+            // Never merge-and-POST against an unconfirmed base: a click before
+            // boot()'s initial refreshLlmStatus() resolves (or after it failed)
+            // would merge against the {providers:{},roles:{}} placeholder and
+            // wipe every already-stored provider — which is exactly the bug this
+            // merge exists to prevent. One retry here before giving up.
+            if (!_llmConfigLoaded && !(await refreshLlmStatus())) {
+                status.textContent = "Could not read this workspace's current LLM settings — not saving, that would overwrite them. Reload and try again.";
+                return;
+            }
+            status.textContent = 'Saving…';
+            try {
+                // Carry every OTHER already-stored provider forward untouched.
+                // GET /api/org/llm echoes api_key masked ("••••••••(stored)") plus
+                // has_key/needs_reconnect — none of those are real provider fields,
+                // so strip them: an omitted api_key tells merge_org_llm() to keep
+                // the stored (encrypted) key as-is, while forwarding the masked
+                // string back as a literal key would overwrite it with garbage.
+                const providers = {};
+                for (const [pname, p] of Object.entries(_llmConfig.providers || {})) {
+                    if (pname === name) continue;
+                    const { api_key, has_key, needs_reconnect, ...rest } = p;
+                    providers[pname] = rest;
+                }
+                providers[name] = provider;
+                // Keep every other role as-is; only 'default' is what this wizard sets.
+                const roles = { ...(_llmConfig.roles || {}), default: { provider: name, model } };
+
+                const r = await fetch('/api/org/llm', {
+                    method: 'POST', headers: H(),
+                    body: JSON.stringify({ providers, roles }),
+                });
+                const d = await r.json();
+                if (!r.ok) { status.textContent = 'Error: ' + (d.detail || r.status); return; }
+                _llmConfig = d.llm || { providers: {}, roles: {} };
+                _llmConfigLoaded = true;
+                status.textContent = llmProviderSummary(_llmConfig);
+            } catch (e) { status.textContent = 'Save failed: ' + e.message; }
+        }
+
+        document.querySelector('[data-save="own"]').addEventListener('click', () => {
+            const name    = document.getElementById('ownName').value.trim() || 'openai';
+            const baseUrl = document.getElementById('ownBaseUrl').value.trim();
+            const apiKey  = document.getElementById('ownApiKey').value.trim();
+            const model   = document.getElementById('ownModel').value.trim();
+            if (!apiKey || !model) { document.getElementById('llmStatus').textContent = 'API key and model are required.'; return; }
+            const provider = { kind: 'openai-compat', api_key: apiKey };
+            if (baseUrl) provider.base_url = baseUrl;
+            saveProvider(name, provider, model);
+        });
+
+        document.querySelector('[data-save="anthropic"]').addEventListener('click', () => {
+            const apiKey = document.getElementById('anthropicApiKey').value.trim();
+            const model  = document.getElementById('anthropicModel').value.trim();
+            if (!apiKey || !model) { document.getElementById('llmStatus').textContent = 'API key and model are required.'; return; }
+            // No base_url: the anthropic SDK adapter (llm.py _anthropic_client) only
+            // sets one when explicitly given, defaulting to api.anthropic.com otherwise —
+            // exactly what a first-run wizard wants, so there is nothing to preset here.
+            saveProvider('anthropic', { kind: 'anthropic', api_key: apiKey }, model);
+        });
+
+        document.querySelector('[data-save="ollama"]').addEventListener('click', () => {
+            const baseUrl = document.getElementById('ollamaBaseUrl').value.trim();
+            const model   = document.getElementById('ollamaModel').value.trim();
+            if (!model) { document.getElementById('llmStatus').textContent = 'Model is required.'; return; }
+            // Local servers need a non-empty dummy key (see config.yaml's own ollama
+            // block) — "ollama" is never sent anywhere but the local base_url.
+            saveProvider('ollama', { kind: 'openai-compat', base_url: baseUrl, api_key: 'ollama' }, model);
+        });
+
+        async function connectOpenRouter() {
+            const status = document.getElementById('llmStatus');
+            status.textContent = 'Opening OpenRouter…';
+            try {
+                const r = await fetch('/api/llm/oauth/openrouter/start', {
+                    method: 'POST', headers: H(),
+                    body: JSON.stringify({ callback_url: location.origin + '/setup' }),
+                });
+                const d = await r.json();
+                if (!r.ok) { status.textContent = 'Error: ' + (d.detail || r.status); return; }
+                status.textContent = 'Complete the login in the OpenRouter tab — you will be sent back here.';
+                location.href = d.auth_url;
+            } catch (e) { status.textContent = 'Connect failed: ' + e.message; }
+        }
+
+        async function finishOpenRouterConnect(code) {
+            const status = document.getElementById('llmStatus');
+            status.textContent = 'Finishing OpenRouter connect…';
+            try {
+                const r = await fetch('/api/llm/oauth/openrouter/complete', {
+                    method: 'POST', headers: H(), body: JSON.stringify({ code }),
+                });
+                const d = await r.json();
+                if (!r.ok) { status.textContent = 'Error: ' + (d.detail || r.status); return; }
+                // Flat shape: {ok, connected, providers, roles} — the OAuth-complete
+                // endpoint already does its own merge server-side (see the comment
+                // on saveProvider above), so this is safe to adopt as-is.
+                _llmConfig = d || { providers: {}, roles: {} };
+                _llmConfigLoaded = true;
+                status.textContent = llmProviderSummary(_llmConfig);
+            } catch (e) { status.textContent = 'Connect failed: ' + e.message; }
+            history.replaceState(null, '', location.pathname);
+        }
+
+        document.getElementById('connectOpenRouterBtn').addEventListener('click', connectOpenRouter);
+
+        document.getElementById('testLlmBtn').addEventListener('click', async () => {
+            const out = document.getElementById('testResult');
+            out.textContent = 'Testing…';
+            try {
+                const r = await fetch('/api/org/llm/test', {
+                    method: 'POST', headers: H(), body: JSON.stringify({ role: 'default' }),
+                });
+                const d = await r.json();
+                out.textContent = d.ok
+                    ? `OK via ${d.provider} / ${d.model}: "${d.reply}"`
+                    : ('Failed: ' + (d.error || d.detail || r.status));
+            } catch (e) { out.textContent = 'Failed: ' + e.message; }
+        });
+
+        // ── Step 2: org name + outreach identity ───────────────────────────────
+        // Fetched once — step1NextBtn calls loadStep2() every time step 1 -> 2 is
+        // crossed, and without this guard a Back-then-Next round trip would
+        // re-fetch and clobber whatever the admin had already typed into the
+        // identity fields on this visit.
+        let _step2Loaded = false;
+
+        async function loadStep2() {
+            if (_step2Loaded) return;
+            _step2Loaded = true;
+            try {
+                const r = await fetch('/api/auth/identity', { headers: H() });
+                if (!r.ok) return;
+                const { identity } = await r.json();
+                document.getElementById('identName').value  = identity.display_name || '';
+                document.getElementById('identReply').value = identity.reply_to || '';
+                document.getElementById('identSig').value   = identity.signature || '';
+            } catch (e) { /* fields stay empty */ }
+        }
+
+        document.getElementById('saveOrgNameBtn').addEventListener('click', async () => {
+            const status = document.getElementById('step2Status');
+            const name = document.getElementById('orgNameInput').value.trim();
+            status.textContent = 'Saving…';
+            try {
+                const r = await fetch('/api/org', { method: 'PATCH', headers: H(), body: JSON.stringify({ name }) });
+                const d = await r.json();
+                status.textContent = r.ok ? 'Organisation name saved.' : 'Error: ' + (d.detail || r.status);
+            } catch (e) { status.textContent = 'Save failed: ' + e.message; }
+        });
+
+        document.getElementById('saveIdentityBtn').addEventListener('click', async () => {
+            const status = document.getElementById('step2Status');
+            status.textContent = 'Saving…';
+            try {
+                const r = await fetch('/api/auth/identity', {
+                    method: 'PATCH', headers: H(),
+                    body: JSON.stringify({
+                        display_name: document.getElementById('identName').value,
+                        reply_to:     document.getElementById('identReply').value,
+                        signature:    document.getElementById('identSig').value,
+                    }),
+                });
+                const d = await r.json();
+                status.textContent = r.ok ? 'Identity saved.' : 'Error: ' + (d.detail || r.status);
+            } catch (e) { status.textContent = 'Save failed: ' + e.message; }
+        });
+
+        // ── Step 3: invites ─────────────────────────────────────────────────────
+        function addInviteRow() {
+            const div = document.createElement('div');
+            div.className = 'invite-row';
+            div.innerHTML = `
+                <input class="form-input" data-f="label" placeholder="Name or email (optional label)" autocomplete="off">
+                <select class="form-select" data-f="role">
+                    <option value="member" selected>Member</option>
+                    <option value="admin">Admin</option>
+                </select>
+                <button class="btn" data-remove-row title="Remove">✕</button>`;
+            document.getElementById('inviteRows').appendChild(div);
+        }
+
+        document.getElementById('addInviteRowBtn').addEventListener('click', addInviteRow);
+        document.getElementById('inviteRows').addEventListener('click', (ev) => {
+            const btn = ev.target.closest('[data-remove-row]');
+            if (btn) btn.closest('.invite-row').remove();
+        });
+
+        document.getElementById('generateInvitesBtn').addEventListener('click', async (ev) => {
+            const btn = ev.currentTarget;
+            btn.disabled = true;   // one request per row is already async; block a double-click too
+            try {
+                const results = document.getElementById('inviteResults');
+                const rows = Array.from(document.querySelectorAll('#inviteRows .invite-row'));
+                for (const row of rows) {
+                    const label = row.querySelector('[data-f="label"]').value.trim();
+                    const role  = row.querySelector('[data-f="role"]').value;
+                    const box = document.createElement('div');
+                    box.className = 'key-box';
+                    try {
+                        const r = await fetch('/api/auth/invite', {
+                            method: 'POST', headers: H(), body: JSON.stringify({ email: label || null, role }),
+                        });
+                        const d = await r.json();
+                        if (!r.ok) {
+                            box.innerHTML = `<div class="key-text" style="color:var(--c-red, #f14c4c)">Error${label ? ' (' + esc(label) + ')' : ''}: ${esc(d.detail || r.status)}</div>`;
+                        } else {
+                            box.innerHTML = `<div class="key-text">${label ? esc(label) + ': ' : ''}${esc(d.invite_key)}</div><button class="btn" data-copy="${esc(d.invite_key)}">Copy</button>`;
+                        }
+                    } catch (e) {
+                        box.innerHTML = `<div class="key-text" style="color:var(--c-red, #f14c4c)">Failed: ${esc(e.message)}</div>`;
+                    }
+                    results.appendChild(box);
+                }
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        document.getElementById('inviteResults').addEventListener('click', (ev) => {
+            const btn = ev.target.closest('[data-copy]');
+            if (!btn) return;
+            navigator.clipboard.writeText(btn.dataset.copy).then(() => {
+                const prev = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = prev; }, 1500);
+            });
+        });
+
+        // ── Navigation, finish, skip ────────────────────────────────────────────
+        document.getElementById('step1NextBtn').addEventListener('click', () => { showStep(2); loadStep2(); });
+        document.getElementById('step2BackBtn').addEventListener('click', () => showStep(1));
+        document.getElementById('step2NextBtn').addEventListener('click', () => showStep(3));
+        document.getElementById('step3BackBtn').addEventListener('click', () => showStep(2));
+
+        async function finishSetup() {
+            try {
+                await fetch('/api/org/setup', { method: 'POST', headers: H(), body: JSON.stringify({ completed: true }) });
+            } catch (e) { /* still leave — nothing more the wizard can do here */ }
+            location.href = '/';
+        }
+        document.getElementById('finishBtn').addEventListener('click', finishSetup);
+        document.getElementById('skipSetupLink').addEventListener('click', (ev) => { ev.preventDefault(); finishSetup(); });
+
+        // ── Boot ────────────────────────────────────────────────────────────────
+        (async function boot() {
+            const me = await guard();
+            if (!me) return;
+            document.getElementById('wizardCard').style.display = '';
+            document.getElementById('orgNameInput').value = me.org?.name || '';
+            addInviteRow();
+            await refreshLlmStatus();   // awaited: _llmConfigLoaded must be settled before any save click can race it
+            showStep(1);
+
+            const orCode = new URLSearchParams(location.search).get('code');
+            if (orCode) await finishOpenRouterConnect(orCode);
+        })();
+    </script>
+</body>
+</html>

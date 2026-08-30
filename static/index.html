@@ -441,6 +441,25 @@
             return t ? { 'Authorization': `Bearer ${t}` } : {};
         };
 
+        // WP9: a first-time admin (no LLM configured yet, wizard not done) lands
+        // on the setup wizard instead of the dashboard — one extra /api/auth/me
+        // call right after login/register/join.
+        async function redirectAfterLogin(token) {
+            try {
+                const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+                if (res.ok) {
+                    const me = await res.json();
+                    // === false (not !x): a flags hiccup must leave the field
+                    // `undefined`, which must NOT bounce an existing admin here.
+                    if (me.user?.role === 'admin' && me.org?.llm_configured === false && me.org?.setup_completed === false) {
+                        location.href = '/setup';
+                        return;
+                    }
+                }
+            } catch (_) { /* fall through to the dashboard */ }
+            location.href = '/';
+        }
+
         const loginOverlay   = document.getElementById('loginOverlay');
         const loginError     = document.getElementById('loginError');
         const loginSubmitBtn = document.getElementById('loginSubmitBtn');
@@ -524,8 +543,9 @@
                     loginError.textContent = d.detail || 'Authentication failed';
                 } else {
                     setToken(d.token);
-                    // Land on the dashboard home after login (recorder is now /record).
-                    location.href = '/';
+                    // Land on the dashboard home after login (recorder is now /record) —
+                    // unless this is a first-time admin, who goes to /setup instead.
+                    await redirectAfterLogin(d.token);
                     return;
                 }
             } catch { loginError.textContent = 'Could not reach server'; }

@@ -12,6 +12,7 @@ import contextlib
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import server
@@ -185,3 +186,102 @@ class TestHealthPayload:
         assert result["status"] == "degraded"
         assert result["checks"]["embeddings"] is False
         assert result["checks"]["embed_checked_ago_s"] is None
+
+
+# ---------------------------------------------------------------------------
+# WP9a: llm_platform + pi_auth
+# ---------------------------------------------------------------------------
+
+class TestHealthLlmPlatform:
+    """llm_platform is the PLATFORM-level llm.status_cheap() reading (no org
+    overlay — /api/health is unauthenticated and has no org context)."""
+
+    def test_true_when_status_cheap_true(self):
+        embed = _CountingEmbed()
+        with _health_env(embed), patch("server.llm.status_cheap", return_value=True):
+            result = _call_health()
+        assert result["checks"]["llm_platform"] is True
+
+    def test_false_when_status_cheap_false(self):
+        embed = _CountingEmbed()
+        with _health_env(embed), patch("server.llm.status_cheap", return_value=False):
+            result = _call_health()
+        assert result["checks"]["llm_platform"] is False
+
+    def test_never_raises_when_status_cheap_blows_up(self):
+        embed = _CountingEmbed()
+        with (
+            _health_env(embed),
+            patch("server.llm.status_cheap", side_effect=RuntimeError("boom")),
+        ):
+            result = _call_health()   # must not raise
+        assert result["checks"]["llm_platform"] is False
+
+
+class TestHealthPiAuth:
+    """pi_auth: authenticated GET {agent_service_url_pi}/oauth/status.
+    None when no agent_service_token OR no agent_service_url_pi is configured
+    (never attempted either way), True on 200, False on 401/timeout/any other
+    failure."""
+
+    def test_null_when_no_token_configured(self):
+        embed = _CountingEmbed()
+        with _health_env(embed):   # _health_env's config={} has no token
+            result = _call_health()
+        assert result["checks"]["pi_auth"] is None
+
+    def test_true_on_200(self):
+        embed = _CountingEmbed()
+        pool = MagicMock()
+        pool.fetchval = AsyncMock(return_value=1)
+        fake_resp = MagicMock(status_code=200)
+        with (
+            patch("server.DB_AVAILABLE", True),
+            # Both agent_service_url_pi and agent_service_token must be set —
+            # the pi_auth call is gated on both (see server.py's `if pi_url and
+            # agent_token:`), so a missing URL would leave it None, not True.
+            patch("server.config", {"agent_service_url_pi": "http://pi", "agent_service_token": "tok"}),
+            patch("server.db_module._pool", pool),
+            patch("server.db_module.embed_text", embed),
+            patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=fake_resp),
+        ):
+            result = _call_health()
+        assert result["checks"]["pi_auth"] is True
+
+    def test_false_on_401(self):
+        embed = _CountingEmbed()
+        pool = MagicMock()
+        pool.fetchval = AsyncMock(return_value=1)
+        fake_resp = MagicMock(status_code=401)
+        with (
+            patch("server.DB_AVAILABLE", True),
+            patch("server.config", {"agent_service_url_pi": "http://pi", "agent_service_token": "tok"}),
+            patch("server.db_module._pool", pool),
+            patch("server.db_module.embed_text", embed),
+            patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=fake_resp),
+        ):
+            result = _call_health()
+        assert result["checks"]["pi_auth"] is False
+
+    def test_false_on_timeout(self):
+        embed = _CountingEmbed()
+        pool = MagicMock()
+        pool.fetchval = AsyncMock(return_value=1)
+        with (
+            patch("server.DB_AVAILABLE", True),
+            patch("server.config", {"agent_service_url_pi": "http://pi", "agent_service_token": "tok"}),
+            patch("server.db_module._pool", pool),
+            patch("server.db_module.embed_text", embed),
+            patch("httpx.AsyncClient.get", new_callable=AsyncMock,
+                  side_effect=httpx.TimeoutException("timed out")),
+        ):
+            result = _call_health()   # must not raise
+        assert result["checks"]["pi_auth"] is False
+
+    def test_null_when_token_set_but_no_pi_url_configured(self):
+        """Minor #3: without agent_service_url_pi there is nowhere to send the
+        authenticated call — must read None (never attempted), not False."""
+        embed = _CountingEmbed()
+        with _health_env(embed), patch("server.config", {"agent_service_token": "tok"}):
+            result = _call_health()
+        assert result["checks"]["pi_auth"] is None

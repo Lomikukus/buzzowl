@@ -618,6 +618,25 @@
             return t ? { 'Authorization': `Bearer ${t}` } : {};
         };
 
+        // WP9: a first-time admin (no LLM configured yet, wizard not done) is
+        // sent to the setup wizard instead of staying on this page after login.
+        // Returns true when it redirected (caller should stop, not load the page).
+        async function redirectAfterLoginIfFirstRun(token) {
+            try {
+                const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+                if (res.ok) {
+                    const me = await res.json();
+                    // === false (not !x): a flags hiccup must leave the field
+                    // `undefined`, which must NOT bounce an existing admin here.
+                    if (me.user?.role === 'admin' && me.org?.llm_configured === false && me.org?.setup_completed === false) {
+                        location.href = '/setup';
+                        return true;
+                    }
+                }
+            } catch (_) { /* fall through — stay on this page */ }
+            return false;
+        }
+
         const loginOverlay   = document.getElementById('loginOverlay');
         const loginError     = document.getElementById('loginError');
         const loginSubmitBtn = document.getElementById('loginSubmitBtn');
@@ -686,6 +705,7 @@
                     loginError.textContent = d.detail || 'Authentication failed';
                 } else {
                     setToken(d.token);
+                    if (await redirectAfterLoginIfFirstRun(d.token)) return;
                     hideLoginOverlay();
                     window.navbarRefreshUser?.();
                     loadDashboard();

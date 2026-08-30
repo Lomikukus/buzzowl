@@ -309,6 +309,125 @@ async def test_get_plan_includes_premium_url_and_self_hosted(monkeypatch):
     assert out2["hosted_mode"] is True
 
 
+# ---------------------------------------------------------------------------
+# WP9a: PATCH /api/org (rename) + POST /api/org/setup (first-run wizard done)
+# ---------------------------------------------------------------------------
+
+class _FakeOrgProfileDB:
+    """Minimal DB stand-in for update_org / complete_setup."""
+
+    def __init__(self, name="Acme", settings=None):
+        self.org = {"id": 8, "name": name, "slug": "acme"}
+        self.settings = dict(settings or {})
+
+    async def update_org_name(self, org_id, name):
+        self.org["name"] = name
+        return dict(self.org)
+
+    async def update_org_settings(self, org_id, patch):
+        self.settings.update(patch)
+        return dict(self.settings)
+
+
+MEMBER_8 = {"org_id": 8, "role": "member"}
+
+
+async def test_update_org_requires_admin(monkeypatch):
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakeOrgProfileDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.update_org({"name": "New Name"}, user=MEMBER_8)
+    assert exc.value.status_code == 403
+    assert fake_db.org["name"] == "Acme"
+
+
+async def test_update_org_rejects_empty_name(monkeypatch):
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakeOrgProfileDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.update_org({"name": "   "}, user=ADMIN_8)
+    assert exc.value.status_code == 400
+
+
+async def test_update_org_rejects_too_long_name(monkeypatch):
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakeOrgProfileDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.update_org({"name": "x" * 121}, user=ADMIN_8)
+    assert exc.value.status_code == 400
+    assert fake_db.org["name"] == "Acme"
+
+
+async def test_update_org_trims_and_saves(monkeypatch):
+    from routers import org_settings as os_router
+
+    fake_db = _FakeOrgProfileDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    out = await os_router.update_org({"name": "  Acme Corp  "}, user=ADMIN_8)
+    assert out["ok"] is True
+    assert out["org"]["name"] == "Acme Corp"
+    assert fake_db.org["name"] == "Acme Corp"
+
+
+async def test_complete_setup_requires_admin(monkeypatch):
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakeOrgProfileDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.complete_setup({"completed": True}, user=MEMBER_8)
+    assert exc.value.status_code == 403
+    assert "setup_completed_at" not in fake_db.settings
+
+
+async def test_complete_setup_requires_completed_true(monkeypatch):
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakeOrgProfileDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.complete_setup({}, user=ADMIN_8)
+    assert exc.value.status_code == 400
+    assert "setup_completed_at" not in fake_db.settings
+
+
+async def test_complete_setup_writes_iso_timestamp(monkeypatch):
+    from datetime import datetime
+    from routers import org_settings as os_router
+
+    fake_db = _FakeOrgProfileDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    out = await os_router.complete_setup({"completed": True}, user=ADMIN_8)
+    assert out["ok"] is True
+    assert "setup_completed_at" in fake_db.settings
+    datetime.fromisoformat(fake_db.settings["setup_completed_at"])   # parseable ISO string
+
+
 def test_plan_and_budget():
     assert plans.plan_of({}) == "light" and plans.plan_of({"plan": "premium"}) == "premium"
     assert plans.budget_usd({"plan": "light"}, {}) is None

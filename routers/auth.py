@@ -84,7 +84,7 @@ async def register(request: Request, body: dict):
     username         = body.get("username", "").strip()
     password         = body.get("password", "")
     display_name     = body.get("display_name", username).strip()
-    email            = body.get("email", "").strip() or None
+    email            = (body.get("email") or "").strip() or None
     registration_key = body.get("registration_key", "").strip()
     org_slug         = body.get("org_slug", "").strip() or re.sub(
         r"[^a-z0-9]+", "-", org_name.lower()
@@ -223,12 +223,24 @@ async def me(user: dict = Depends(current_user)):
 
 
 async def _org_flags(org_id: int) -> dict:
-    """plan + suspended for the UI (banner / plan badge); tolerant when DB helpers are absent."""
+    """plan + suspended + llm_configured + setup_completed for the UI (banner /
+    plan badge / first-run wizard); tolerant when DB helpers are absent.
+
+    llm_configured mirrors llm.resolve()'s own branch structure for this org's
+    default role (llm.status_cheap) rather than a naive "any provider has a
+    key" check. status_cheap() only reads the cached org overlay (no I/O, so
+    it stays usable from a hot GET), so ensure_org_overlay() is awaited here
+    first — this function is already async, so there is no sync/async split
+    to work around like there would be if _org_flags were a plain function."""
     try:
+        import llm as _llm
         import plans as _plans
         s = await db_module.get_org_settings(org_id)
+        await _llm.ensure_org_overlay(org_id)
         return {"plan": _plans.plan_of(s), "suspended": bool(s.get("suspended")),
-                "suspended_reason": s.get("suspended_reason") or None}
+                "suspended_reason": s.get("suspended_reason") or None,
+                "llm_configured": _llm.status_cheap(org_id=org_id),
+                "setup_completed": bool(s.get("setup_completed_at"))}
     except Exception:
         return {}
 
@@ -411,8 +423,12 @@ async def create_invite(body: dict, user: dict = Depends(current_user)):
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
-    role  = body.get("role", "member").strip()
-    email = body.get("email", "").strip() or None
+    # (body.get(...) or default) — not get(key, default) — because a body that
+    # explicitly sends {"email": null} (setup.html and settings.html both do,
+    # for an unlabeled invite row) makes .get() return None despite the
+    # default, and None.strip() raises a 500.
+    role  = (body.get("role") or "member").strip()
+    email = (body.get("email") or "").strip() or None
 
     if role not in ("admin", "member"):
         raise HTTPException(status_code=400, detail="role must be 'admin' or 'member'")
@@ -545,8 +561,8 @@ async def invite_user(body: dict, user: dict = Depends(current_user)):
     username     = body.get("username", "").strip()
     password     = body.get("password", "")
     display_name = body.get("display_name", username).strip()
-    email        = body.get("email", "").strip() or None
-    role         = body.get("role", "member").strip()
+    email        = (body.get("email") or "").strip() or None
+    role         = (body.get("role") or "member").strip()
 
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password are required")

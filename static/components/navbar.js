@@ -128,6 +128,18 @@
       .wk-fb-btn-cancel { padding:0.3rem 0.8rem;border-radius:4px;font-size:0.8rem;cursor:pointer;font-family:inherit;border:1px solid var(--c-line2, #333);background:var(--c-surface, #252526);color:var(--c-text, #d4d4d4); }
       .wk-fb-btn-send { padding:0.3rem 0.8rem;border-radius:4px;font-size:0.8rem;cursor:pointer;font-family:inherit;border:1px solid var(--c-orange, #ce9178);background:var(--c-accenttint, #1a3a2e);color:var(--c-orange, #ce9178); }
       #wk-fb-status { font-size:0.76rem;min-height:1rem;color:var(--c-muted, #888); }
+      /* No-LLM-configured banner (WP9) — DOM-injected as #main-nav's sibling,
+         never into nav.innerHTML, so it survives every initNavbar() re-render. */
+      #wk-llm-banner {
+        display:flex; align-items:center; gap:0.6rem; padding:0.5rem 1.2rem;
+        font-family:var(--c-font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+        font-size:0.8rem; background:var(--c-orangetint, #2c1a0d); color:var(--c-orange, #ce9178);
+        border-bottom:1px solid var(--c-orange, #ce9178);
+      }
+      #wk-llm-banner a { color:inherit; font-weight:600; text-decoration:underline; }
+      #wk-llm-banner .wk-llm-banner-text { flex:1; }
+      #wk-llm-banner button { background:none;border:none;color:inherit;font-size:0.85rem;cursor:pointer;padding:0 0.2rem;opacity:0.8;font-family:inherit; }
+      #wk-llm-banner button:hover { opacity:1; }
     `;
     document.head.appendChild(s);
   }
@@ -270,6 +282,52 @@
     } catch (_) {}
   };
 
+  // ── No-LLM-configured banner (WP9) ────────────────────────────────────────
+  const LLM_BANNER_ID = 'wk-llm-banner';
+  const LLM_BANNER_HIDDEN_KEY = 'wk_llm_banner_hidden';
+
+  function removeLlmBanner() {
+    const el = document.getElementById(LLM_BANNER_ID);
+    if (el) el.remove();
+  }
+
+  function showLlmBanner(role) {
+    if (location.pathname === '/setup') return;         // the wizard IS the fix — don't nag on it
+    if (localStorage.getItem(LLM_BANNER_HIDDEN_KEY) === '1') return;
+    if (document.getElementById(LLM_BANNER_ID)) return;  // already shown
+
+    const banner = document.createElement('div');
+    banner.id = LLM_BANNER_ID;
+    const text = document.createElement('span');
+    text.className = 'wk-llm-banner-text';
+    if (role === 'admin') {
+      text.innerHTML = 'No AI model is configured — chat, research and summaries are off. <a href="/setup">Set it up</a>.';
+    } else {
+      text.textContent = 'No AI model is configured yet — ask your workspace admin.';
+    }
+    const dismiss = document.createElement('button');
+    dismiss.textContent = '✕';
+    dismiss.title = 'Dismiss';
+    dismiss.addEventListener('click', () => {
+      localStorage.setItem(LLM_BANNER_HIDDEN_KEY, '1');
+      removeLlmBanner();
+    });
+    banner.appendChild(text);
+    banner.appendChild(dismiss);
+
+    // Injected as #main-nav's sibling, never into nav.innerHTML (that gets
+    // wholesale-replaced on every initNavbar() call) — works whether the nav
+    // is mounted under .page or directly under <body> (see theme.css's two
+    // mutually-exclusive rail-offset rules), since either parent already
+    // reserves the rail's width via padding-left.
+    const nav = document.getElementById('main-nav');
+    if (nav && nav.parentNode) {
+      nav.parentNode.insertBefore(banner, nav.nextSibling);
+    } else {
+      document.body.insertBefore(banner, document.body.firstChild);
+    }
+  }
+
   async function loadNavbarUser() {
     const token = localStorage.getItem('wk_token');
     const userEl   = document.getElementById('navUserDisplay');
@@ -306,6 +364,14 @@
           gear.onmouseenter = () => { gear.style.color = '#9cdcfe'; };
           gear.onmouseleave = () => { gear.style.color = '#444'; };
           userEl.parentNode.insertBefore(gear, userEl.nextSibling);
+        }
+        // No-LLM-configured banner: show while it's false, auto-clear the
+        // dismissal (and drop a stale banner) the moment it becomes true.
+        if (d.org && d.org.llm_configured === false) {
+          showLlmBanner(d.user.role);
+        } else if (d.org && d.org.llm_configured === true) {
+          localStorage.removeItem(LLM_BANNER_HIDDEN_KEY);
+          removeLlmBanner();
         }
       } else {
         userEl.textContent = '';

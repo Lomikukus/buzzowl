@@ -864,6 +864,18 @@ async def create_org(name: str, slug: str) -> dict:
         return dict(row)
 
 
+async def update_org_name(org_id: int, name: str) -> dict:
+    """Rename an org (admin only — Settings and the first-run setup wizard)."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE orgs SET name = $2 WHERE id = $1 RETURNING id, name, slug",
+            org_id, name,
+        )
+        return dict(row) if row else {}
+
+
 async def get_org_settings(org_id: int) -> dict:
     """Per-org settings JSONB (autonomy level, budgets, ...). {} when unset/DB down."""
     if not _pool:

@@ -2,11 +2,15 @@
 routers/org_settings.py — per-org settings (autonomy level, budgets, kill
 switch) + the autonomy audit surface.
 
+  PATCH /api/org                    (admin)          rename the org
+  POST  /api/org/setup              (admin)          mark the first-run wizard done
   GET  /api/org/settings            (member: read)   effective settings
   POST /api/org/settings            (admin)          shallow-merge patch
   GET  /api/org/autonomy/status     (member)         level, budget used/max, kill switch
   GET  /api/org/autonomy/decisions  (member)         recent decision log (skips + actions)
 """
+
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -17,6 +21,39 @@ from routers.auth import current_user
 router = APIRouter(prefix="/api/org")
 
 _ALLOWED_KEYS = set(autonomy.DEFAULT_SETTINGS)
+
+
+# ---------------------------------------------------------------------------
+# Org profile + first-run setup wizard completion flag
+# ---------------------------------------------------------------------------
+
+@router.patch("")
+async def update_org(body: dict, user: dict = Depends(current_user)):
+    """Rename the org (admin only). Used by Settings and the setup wizard."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    if not DB_AVAILABLE or db_module is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    name = str((body or {}).get("name") or "").strip()
+    if not name or len(name) > 120:
+        raise HTTPException(status_code=400, detail="name must be 1-120 characters")
+    org = await db_module.update_org_name(user["org_id"], name)
+    return {"ok": True, "org": org}
+
+
+@router.post("/setup")
+async def complete_setup(body: dict, user: dict = Depends(current_user)):
+    """Mark the first-run wizard done (admin only) — Finish and Skip both call
+    this the same way; there is no partial/half-done state to track."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    if not DB_AVAILABLE or db_module is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    if not (body or {}).get("completed"):
+        raise HTTPException(status_code=400, detail="completed must be true")
+    await db_module.update_org_settings(
+        user["org_id"], {"setup_completed_at": datetime.now(timezone.utc).isoformat()})
+    return {"ok": True}
 
 
 @router.get("/settings")
