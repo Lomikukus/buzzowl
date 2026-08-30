@@ -314,7 +314,13 @@ async def test_openrouter_complete_persists_encrypted_org_key(cfg, monkeypatch):
 
 
 async def test_openrouter_complete_keeps_existing_org_roles(cfg, monkeypatch):
-    fake_db = _FakeOrgDB(llm={"providers": {}, "roles": {"default": {"provider": "anthropic", "model": "claude-x"}}})
+    # 'anthropic' must be a real stored provider (not just a role reference) —
+    # sanitize_org_llm now drops any role whose provider isn't among the
+    # providers actually being saved (WP7d dangling-role cheap belt).
+    fake_db = _FakeOrgDB(llm={
+        "providers": {"anthropic": {"kind": "anthropic", "api_key": tr.plans.encrypt_secret("sk-ant-x")}},
+        "roles": {"default": {"provider": "anthropic", "model": "claude-x"}},
+    })
     monkeypatch.setattr(tr, "DB_AVAILABLE", True)
     monkeypatch.setattr(tr, "db_module", fake_db)
     monkeypatch.setattr(tr.llm, "invalidate_org_overlay", lambda org_id=None: None)

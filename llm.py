@@ -239,6 +239,20 @@ def _get_provider_from(block: dict, name: str) -> ProviderConfig:
     )
 
 
+def _no_provider_error(ov: dict) -> LLMError:
+    """The "no usable provider" refusal, shared by every path in resolve()
+    (and mirrored by status_cheap()) that lands an enforced org with nothing
+    to call: no providers configured at all, or a role whose provider name
+    no longer exists in ov["providers"] (a dangling role — see resolve())."""
+    # An org whose stored key no longer decrypts arrives here with no
+    # usable providers — say so instead of "none configured".
+    if ov.get("undecryptable_providers"):
+        return LLMError("this workspace's stored LLM key can no longer be decrypted (the "
+                        "encryption key changed) — enter it again under Settings › LLM")
+    return LLMError("this workspace has no LLM provider configured — add your own key under "
+                    "Settings › LLM (light plan) or upgrade to premium")
+
+
 def resolve(role: str = "default", model: Optional[str] = None,
             org_id: Optional[int] = None) -> tuple[ProviderConfig, str]:
     """Resolve a role to (provider, model). Unknown roles fall back to default.
@@ -262,14 +276,16 @@ def resolve(role: str = "default", model: Optional[str] = None,
             pname = entry.get("provider") or next(iter(ov["providers"]))
             if pname in ov["providers"]:
                 return _get_provider_from(ov, pname), (model or entry.get("model") or _FALLBACK_MODEL)
+            # Dangling role: the resolved provider name isn't in ov["providers"]
+            # (e.g. its row was deleted in Settings while a role still pointed at
+            # it — sanitize_org_llm now drops these on write, but a legacy stored
+            # role can still carry one). Treat it exactly like "no usable
+            # providers" instead of falling through to the platform block below —
+            # otherwise a light org would silently start spending the platform key.
+            if ov.get("enforce"):
+                raise _no_provider_error(ov)
         elif ov.get("enforce"):
-            # An org whose stored key no longer decrypts arrives here with no
-            # usable providers — say so instead of "none configured".
-            if ov.get("undecryptable_providers"):
-                raise LLMError("this workspace's stored LLM key can no longer be decrypted (the "
-                               "encryption key changed) — enter it again under Settings › LLM")
-            raise LLMError("this workspace has no LLM provider configured — add your own key under "
-                           "Settings › LLM (light plan) or upgrade to premium")
+            raise _no_provider_error(ov)
     block = _effective_config()
     roles = block.get("roles") or {}
     entry = roles.get(role) or roles.get("default") or {}
@@ -751,9 +767,9 @@ def status() -> list[dict]:
     return out
 
 
-def status_cheap(org_id: Optional[int] = None) -> bool:
-    """True if the provider resolve() would actually pick for the 'default'
-    role has a resolvable key. No network I/O, unlike status(): only
+def status_cheap(role: str = "default", org_id: Optional[int] = None) -> bool:
+    """True if the provider resolve() would actually pick for the given role
+    has a resolvable key. No network I/O, unlike status(): only
     resolve_key() (inline value / env var lookup) is checked, never a request.
 
     Mirrors resolve()'s branch structure exactly rather than asking "does ANY
@@ -774,22 +790,23 @@ def status_cheap(org_id: Optional[int] = None) -> bool:
             pass   # budget aside, premium always falls through to the platform check
         elif ov.get("providers"):
             roles = ov.get("roles") or {}
-            entry = roles.get("default") or {}
+            entry = roles.get(role) or roles.get("default") or {}
             pname = entry.get("provider") or next(iter(ov["providers"]))
             if pname in ov["providers"]:
-                try:
-                    return bool(_get_provider_from(ov, pname).resolve_key())
-                except LLMError:
-                    return False
-            # pname not in ov["providers"]: falls through to the platform check
-            # below, exactly like resolve() does in this same edge case
+                return bool(_get_provider_from(ov, pname).resolve_key())
+            # Dangling role (pname not in ov["providers"]): mirror resolve()'s
+            # enforce refusal rather than falling through to the platform check.
+            if ov.get("enforce"):
+                return False
+            # not enforced: falls through to the platform check below, exactly
+            # like resolve() does in this same edge case
         elif ov.get("enforce"):
             return False   # resolve() refuses outright here, never reaches the platform
     block = _effective_config()
     roles = block.get("roles") or {}
-    entry = roles.get("default") or {}
+    entry = roles.get(role) or roles.get("default") or {}
     provider_name = entry.get("provider") or _FALLBACK_PROVIDER
     try:
-        return bool(_get_provider(provider_name).resolve_key())
+        return bool(_get_provider_from(block, provider_name).resolve_key())
     except LLMError:
         return False

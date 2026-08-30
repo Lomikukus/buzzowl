@@ -208,6 +208,33 @@ def test_resolve_light_org_without_provider_refused_only_when_enforced():
     assert llm.resolve("chat", None, 8)[0].name == "platform"
 
 
+def test_resolve_dangling_role_enforced_refuses():
+    """A role can point at a provider name that no longer exists in
+    ov["providers"] — e.g. its row was deleted in Settings › LLM while a role
+    still referenced it (sanitize_org_llm now drops these on write, but a
+    legacy stored role can still carry one). Enforced: this must refuse with
+    the same "no usable provider" LLMError, never fall through to spend the
+    platform key."""
+    _seed_overlay(8, {"plan": "light", "enforce": True,
+                      "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+                      "roles": {"chat": {"provider": "ghost", "model": "m"}},
+                      "budget": None, "month_cost": 0.0})
+    with pytest.raises(llm.LLMError, match="no LLM provider configured"):
+        llm.resolve("chat", None, 8)
+
+
+def test_resolve_dangling_role_not_enforced_falls_back_to_platform():
+    """Same dangling role, but this install doesn't enforce plans (the
+    self-hosted default) — falls back to the platform provider, exactly like
+    an org with no providers of its own at all in that same (unenforced) case."""
+    _seed_overlay(8, {"plan": "light", "enforce": False,
+                      "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+                      "roles": {"chat": {"provider": "ghost", "model": "m"}},
+                      "budget": None, "month_cost": 0.0})
+    p, m = llm.resolve("chat", None, 8)
+    assert p.name == "platform" and m == "platform-model"
+
+
 def test_resolve_premium_budget_soft_block():
     _seed_overlay(8, {"plan": "premium", "providers": {}, "roles": {}, "budget": 10.0, "month_cost": 10.5, "enforce": True})
     with pytest.raises(llm.LLMError, match="budget"):

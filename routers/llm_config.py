@@ -177,11 +177,10 @@ async def save_llm_config(body: dict, user: dict = Depends(current_user)):
 
     new_block = {"providers": clean_providers, "roles": clean_roles}
 
-    # Persist to config.yaml (whole-file rewrite — comments are lost, accepted)
-    try:
-        raw_cfg = yaml.safe_load(_CONFIG_YAML_PATH.read_text(encoding="utf-8")) or {}
-    except FileNotFoundError:
-        raw_cfg = {}
+    # Persist to config.yaml (whole-file rewrite — comments are lost, accepted).
+    # The writability gate above already required the file to exist (os.access
+    # on a missing path is False), so FileNotFoundError here is unreachable.
+    raw_cfg = yaml.safe_load(_CONFIG_YAML_PATH.read_text(encoding="utf-8")) or {}
     raw_cfg["llm"] = new_block
     _CONFIG_YAML_PATH.write_text(
         yaml.safe_dump(raw_cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")

@@ -199,19 +199,34 @@ def sanitize_org_llm(block: dict) -> dict:
         }
     for role, raw in ((block or {}).get("roles") or {}).items():
         if isinstance(raw, dict) and raw.get("provider"):
-            out["roles"][str(role)[:40]] = {"provider": str(raw["provider"])[:40], "model": str(raw.get("model") or "")[:120]}
+            pname = str(raw["provider"])[:40]
+            # Cheap belt against dangling roles (llm.resolve() has the server-side
+            # enforce refusal for any that slip through on legacy data): never
+            # write a role that points at a provider name not among the ones
+            # this same call just sanitized (removed, renamed, or rejected above
+            # — e.g. kind 'pi', which is platform-only).
+            if pname not in out["providers"]:
+                continue
+            out["roles"][str(role)[:40]] = {"provider": pname, "model": str(raw.get("model") or "")[:120]}
     return out
 
 
 def merge_org_llm(existing: dict, incoming: dict) -> dict:
     """Keep stored (encrypted) keys — and headers — when the client sends an
-    empty/masked api_key, or omits headers, for a provider that already had them."""
+    empty/masked api_key, or omits headers, for a provider that already had them.
+
+    Org-level headers/api_key can never be cleared via this POST path — an
+    empty/masked value always means "keep what's stored"; only DELETE
+    /api/org/llm wipes them — unlike the config.yaml editor
+    (routers/llm_config.py save_llm_config), which treats an explicit empty
+    value as "clear it".
+    """
     ex_p = ((existing or {}).get("providers") or {})
     for name, p in (incoming.get("providers") or {}).items():
         if not p.get("api_key") and name in ex_p and ex_p[name].get("api_key"):
             p["api_key"] = ex_p[name]["api_key"]
         if not p.get("headers") and name in ex_p and ex_p[name].get("headers"):
-            p["headers"] = ex_p[name]["headers"]
+            p["headers"] = dict(ex_p[name]["headers"])   # copy — never alias the stored mutable dict
     return incoming
 
 
