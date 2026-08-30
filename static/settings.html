@@ -368,7 +368,7 @@ tr:hover td { background: var(--c-linefaint, #222); }
       <p style="font-size:0.78rem;color:var(--c-muted, #888);margin:0.3rem 0 0.8rem">
         <b>Light</b> = this workspace brings its own LLM key (configured below, encrypted at rest, never shown again).
         <b>Premium</b> is the hosted offering at buzzowl.app — the platform's providers, metered against a monthly
-        budget. This install is self-hosted ("light") and uses the workspace's own keys. Every LLM call —
+        budget. <span id="planHostNote"></span>Every LLM call —
         chat, research agents, pipeline, summaries — is counted per workspace.
       </p>
       <div id="planBox" style="display:grid;grid-template-columns:auto 1fr;gap:0.5rem 1rem;max-width:720px;align-items:center;font-size:0.8rem">
@@ -850,6 +850,9 @@ async function loadPlan() {
   _plan = await r.json();
   const b = document.getElementById('planBadge'); b.textContent = _plan.plan;
   b.style.borderColor = b.style.color = _plan.plan === 'premium' ? 'var(--c-purple, #c586c0)' : 'var(--c-accent, #4ec9b0)';
+  document.getElementById('planHostNote').textContent = _plan.self_hosted
+    ? 'This install is self-hosted and uses the workspace\'s own keys. '
+    : '';
   const note = document.getElementById('planNote');
   const broken = (_plan.keys_need_reconnect || []).length;
   note.textContent = broken
@@ -873,11 +876,12 @@ async function loadPlan() {
       + models.map(x => `<tr><td style="padding:0.15rem 0.6rem 0.15rem 0">${_llmEsc(x.provider)} / ${_llmEsc(x.model)}</td><td style="text-align:right;padding:0.15rem 0.6rem">${x.calls}</td><td style="text-align:right;padding:0.15rem 0.6rem">${x.tokens.toLocaleString()}</td><td style="text-align:right;padding:0.15rem 0.6rem">${_money(x.cost_usd)}</td><td style="padding:0.15rem 0.6rem;color:var(--c-muted2,#666)">${_llmEsc(x.source)}</td></tr>`).join('') + '</table>'
     : 'No LLM usage recorded this month yet.';
   const sw = document.getElementById('planSwitch');
+  const operatorNote = '<span style="color:var(--c-muted2,#666)">plan changes are handled by the operator</span>';
   sw.innerHTML = _plan.hosted_mode
-    ? '<span style="color:var(--c-muted2,#666)">plan changes are handled by the operator</span>'
+    ? operatorNote
     : (_plan.self_hosted && _plan.plan === 'light'
       ? `<a class="btn" style="font-size:0.7rem;padding:0.1rem 0.5rem;text-decoration:none" href="${_llmEsc(_plan.premium_url)}" target="_blank" rel="noopener">✦ Premium</a>`
-      : '');
+      : operatorNote);   // self-hosted + already premium: no self-service switch either way
 }
 
 // ── LLM Providers (admin) — this workspace's own providers, /api/org/llm ──

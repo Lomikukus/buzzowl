@@ -243,6 +243,49 @@ async def test_set_plan_budget_only_works_without_operator_key(monkeypatch):
     assert fake_db.settings.get("plan") == "light"      # untouched
 
 
+async def test_set_plan_combined_body_without_operator_key_rejects_both(monkeypatch):
+    """A combined {plan, llm_budget_usd_per_month} body with no operator key
+    configured at all: refused with the upsell detail, and the budget must
+    not sneak through just because it rode along with the plan change."""
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium", "llm_budget_usd_per_month": 50},
+                                 _FakeRequest(), user=ADMIN_8)
+    assert exc.value.status_code == 403
+    assert "Self-service plan changes are disabled" in exc.value.detail
+    assert fake_db.settings.get("plan") != "premium"
+    assert "llm_budget_usd_per_month" not in fake_db.settings
+
+
+async def test_set_plan_missing_or_wrong_operator_key_is_refused(monkeypatch):
+    """An operator key IS configured, but the request's header is missing or
+    wrong: refused either way, plan left untouched."""
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {"operator_key": "op-secret"}})
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium"}, _FakeRequest(), user=ADMIN_8)   # no header at all
+    assert exc.value.status_code == 403
+    assert fake_db.settings.get("plan") != "premium"
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium"}, _FakeRequest({"x-operator-key": "wrong"}), user=ADMIN_8)
+    assert exc.value.status_code == 403
+    assert fake_db.settings.get("plan") != "premium"
+
+
 async def test_get_plan_includes_premium_url_and_self_hosted(monkeypatch):
     """(d) GET /api/org/plan reports premium_url + self_hosted so the
     settings UI can decide between the operator note and the upsell link."""
@@ -315,14 +358,15 @@ def test_resolve_dangling_role_enforced_refuses():
     """A role can point at a provider name that no longer exists in
     ov["providers"] — e.g. its row was deleted in Settings › LLM while a role
     still referenced it (sanitize_org_llm now drops these on write, but a
-    legacy stored role can still carry one). Enforced: this must refuse with
-    the same "no usable provider" LLMError, never fall through to spend the
-    platform key."""
+    legacy stored role can still carry one). Enforced: this must refuse — and
+    since the org DOES have a working provider ('own'), the message must name
+    the dangling role rather than the generic "no provider configured" (which
+    would wrongly imply the org has nothing configured at all)."""
     _seed_overlay(8, {"plan": "light", "enforce": True,
                       "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
                       "roles": {"chat": {"provider": "ghost", "model": "m"}},
                       "budget": None, "month_cost": 0.0})
-    with pytest.raises(llm.LLMError, match="no LLM provider configured"):
+    with pytest.raises(llm.LLMError, match="'chat' role points at a provider that no longer exists"):
         llm.resolve("chat", None, 8)
 
 

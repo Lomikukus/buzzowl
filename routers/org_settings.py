@@ -186,7 +186,7 @@ async def set_plan(body: dict, request: Request, user: dict = Depends(current_us
         patch["plan"] = p
     if "llm_budget_usd_per_month" in body:
         if not _operator_ok(request.headers):
-            raise HTTPException(status_code=403, detail="plan changes are done by the operator on this deployment")
+            raise HTTPException(status_code=403, detail="budget changes are done by the operator on this deployment")
         v = body.get("llm_budget_usd_per_month")
         if v in (None, ""):
             patch["llm_budget_usd_per_month"] = None

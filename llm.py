@@ -239,11 +239,20 @@ def _get_provider_from(block: dict, name: str) -> ProviderConfig:
     )
 
 
-def _no_provider_error(ov: dict) -> LLMError:
-    """The "no usable provider" refusal, shared by every path in resolve()
-    (and mirrored by status_cheap()) that lands an enforced org with nothing
-    to call: no providers configured at all, or a role whose provider name
-    no longer exists in ov["providers"] (a dangling role — see resolve())."""
+def _no_provider_error(ov: dict, *, role: Optional[str] = None) -> LLMError:
+    """The "no usable provider" refusal for resolve() (and status_cheap()).
+
+    Two distinct shapes, so the message never overclaims:
+    - role=None: no providers configured at all (or none left after a decrypt
+      failure) — the classic "add your own key" refusal.
+    - role=<name>: the org DOES have working providers, but this specific role
+      is a dangling one — it points at a provider name that isn't among them
+      (see resolve()) — so "no LLM provider configured" would be misleading;
+      name the role instead.
+    """
+    if role is not None:
+        return LLMError(f"the {role!r} role points at a provider that no longer exists — "
+                        f"reassign it under Settings › LLM Providers")
     # An org whose stored key no longer decrypts arrives here with no
     # usable providers — say so instead of "none configured".
     if ov.get("undecryptable_providers"):
@@ -283,7 +292,7 @@ def resolve(role: str = "default", model: Optional[str] = None,
             # providers" instead of falling through to the platform block below —
             # otherwise a light org would silently start spending the platform key.
             if ov.get("enforce"):
-                raise _no_provider_error(ov)
+                raise _no_provider_error(ov, role=role)
         elif ov.get("enforce"):
             raise _no_provider_error(ov)
     block = _effective_config()
@@ -767,7 +776,7 @@ def status() -> list[dict]:
     return out
 
 
-def status_cheap(role: str = "default", org_id: Optional[int] = None) -> bool:
+def status_cheap(*, role: str = "default", org_id: Optional[int] = None) -> bool:
     """True if the provider resolve() would actually pick for the given role
     has a resolvable key. No network I/O, unlike status(): only
     resolve_key() (inline value / env var lookup) is checked, never a request.
