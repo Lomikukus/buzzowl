@@ -236,7 +236,12 @@
         // has, or a wizard card would silently wipe every other stored provider
         // (their encrypted keys are gone for good) and every non-default role.
         // _llmConfig holds the last {providers, roles} view fetched/saved.
+        // _llmConfigLoaded is only true once that view is CONFIRMED current —
+        // saveProvider() refuses to merge-and-POST against an unconfirmed
+        // (still-default, or possibly stale-from-a-failed-refetch) base, since
+        // that merge is exactly what stops a save from wiping other providers.
         let _llmConfig = { providers: {}, roles: {} };
+        let _llmConfigLoaded = false;
 
         function llmProviderSummary(cfg) {
             const names = Object.keys((cfg || {}).providers || {});
@@ -247,18 +252,33 @@
             }).join(', ');
         }
 
+        // Returns true once _llmConfig reflects a real server response, false
+        // on any failure (non-OK status or a thrown network error) — callers
+        // that need a confirmed base (saveProvider()) key off this, not just
+        // "did this run".
         async function refreshLlmStatus() {
             try {
                 const r = await fetch('/api/org/llm', { headers: H() });
-                if (!r.ok) return;
+                if (!r.ok) return false;
                 const d = await r.json();
                 _llmConfig = d.llm || { providers: {}, roles: {} };
+                _llmConfigLoaded = true;
                 document.getElementById('llmStatus').textContent = llmProviderSummary(_llmConfig);
-            } catch (e) { /* leave status as-is — _llmConfig stays whatever it was */ }
+                return true;
+            } catch (e) { return false; /* leave status as-is — _llmConfig stays whatever it was */ }
         }
 
         async function saveProvider(name, provider, model) {
             const status = document.getElementById('llmStatus');
+            // Never merge-and-POST against an unconfirmed base: a click before
+            // boot()'s initial refreshLlmStatus() resolves (or after it failed)
+            // would merge against the {providers:{},roles:{}} placeholder and
+            // wipe every already-stored provider — which is exactly the bug this
+            // merge exists to prevent. One retry here before giving up.
+            if (!_llmConfigLoaded && !(await refreshLlmStatus())) {
+                status.textContent = "Could not read this workspace's current LLM settings — not saving, that would overwrite them. Reload and try again.";
+                return;
+            }
             status.textContent = 'Saving…';
             try {
                 // Carry every OTHER already-stored provider forward untouched.
@@ -283,7 +303,8 @@
                 });
                 const d = await r.json();
                 if (!r.ok) { status.textContent = 'Error: ' + (d.detail || r.status); return; }
-                _llmConfig = d.llm;
+                _llmConfig = d.llm || { providers: {}, roles: {} };
+                _llmConfigLoaded = true;
                 status.textContent = llmProviderSummary(_llmConfig);
             } catch (e) { status.textContent = 'Save failed: ' + e.message; }
         }
@@ -345,7 +366,8 @@
                 // Flat shape: {ok, connected, providers, roles} — the OAuth-complete
                 // endpoint already does its own merge server-side (see the comment
                 // on saveProvider above), so this is safe to adopt as-is.
-                _llmConfig = d;
+                _llmConfig = d || { providers: {}, roles: {} };
+                _llmConfigLoaded = true;
                 status.textContent = llmProviderSummary(_llmConfig);
             } catch (e) { status.textContent = 'Connect failed: ' + e.message; }
             history.replaceState(null, '', location.pathname);
@@ -498,7 +520,7 @@
             document.getElementById('wizardCard').style.display = '';
             document.getElementById('orgNameInput').value = me.org?.name || '';
             addInviteRow();
-            refreshLlmStatus();
+            await refreshLlmStatus();   // awaited: _llmConfigLoaded must be settled before any save click can race it
             showStep(1);
 
             const orCode = new URLSearchParams(location.search).get('code');
