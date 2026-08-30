@@ -239,6 +239,121 @@ def test_status_reports_providers(llm_config):
     assert "default" in entries["fake"]["roles"]
 
 
+def test_status_cheap_platform_only(llm_config):
+    assert llm.status_cheap() is True                 # platform 'fake' provider has a key
+
+
+def test_status_cheap_false_when_no_key_anywhere(monkeypatch):
+    monkeypatch.setattr(context, "config", {
+        "llm": {"providers": {"bare": {"kind": "openai-compat", "base_url": "http://x"}},
+                "roles": {"default": {"provider": "bare", "model": "m"}}},
+    })
+    assert llm.status_cheap() is False
+
+
+def test_status_cheap_org_overlay(llm_config):
+    """status_cheap() mirrors resolve()'s branch structure exactly — it must
+    answer for whatever provider resolve() would actually pick, not "does any
+    provider anywhere have a key"."""
+    import time
+
+    def seed(ov):
+        llm._org_overlays[7] = (time.monotonic() + 60, ov)
+
+    try:
+        # light org, own provider with a real key -> resolve() picks it, key present
+        seed({"plan": "light", "enforce": True,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+              "roles": {"default": {"provider": "own", "model": "m"}}})
+        assert llm.status_cheap(org_id=7) is True
+
+        # DANGEROUS ROW: light org, own provider present but its key is EMPTY,
+        # not enforced. resolve() still picks the org's own (keyless) provider
+        # here — it never reaches the platform — so the call would fail; a
+        # status that checked the platform instead would lie about that.
+        seed({"plan": "light", "enforce": False,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": ""}},
+              "roles": {"default": {"provider": "own", "model": "m"}}})
+        assert llm.status_cheap(org_id=7) is False
+
+        # same shape, enforced -> also False (resolve() picks the same keyless provider)
+        seed({"plan": "light", "enforce": True,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": ""}},
+              "roles": {"default": {"provider": "own", "model": "m"}}})
+        assert llm.status_cheap(org_id=7) is False
+
+        # light org with no providers of its own at all, enforced -> resolve()
+        # refuses outright, never reaches the platform
+        seed({"plan": "light", "enforce": True, "providers": {}, "roles": {}})
+        assert llm.status_cheap(org_id=7) is False
+
+        # same, but not enforced -> resolve() falls back to the platform
+        seed({"plan": "light", "enforce": False, "providers": {}, "roles": {}})
+        assert llm.status_cheap(org_id=7) is True
+
+        # premium org -> platform check regardless of its own (empty) providers
+        seed({"plan": "premium", "enforce": True, "providers": {}, "roles": {}})
+        assert llm.status_cheap(org_id=7) is True
+
+        # dangling role: 'chat' points at a provider name no longer present in
+        # ov["providers"] (its row was removed while a role still pointed at
+        # it). Enforced -> mirrors resolve()'s new refusal instead of quietly
+        # checking the platform.
+        seed({"plan": "light", "enforce": True,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+              "roles": {"chat": {"provider": "ghost", "model": "m"}}})
+        assert llm.status_cheap(role="chat", org_id=7) is False
+
+        # same dangling role, not enforced -> falls through to the platform
+        # check, exactly like resolve() does in this same edge case
+        seed({"plan": "light", "enforce": False,
+              "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+              "roles": {"chat": {"provider": "ghost", "model": "m"}}})
+        assert llm.status_cheap(role="chat", org_id=7) is True   # platform 'fake' has a key (llm_config fixture)
+    finally:
+        llm.invalidate_org_overlay(7)
+
+
+def test_status_cheap_role_param_org_without_default_role(llm_config):
+    """A role param lets status_cheap answer for a role the org never gave a
+    'default' entry — it must not fall back to treating the org as having no
+    role config at all."""
+    import time
+
+    try:
+        llm._org_overlays[7] = (time.monotonic() + 60, {
+            "plan": "light", "enforce": True,
+            "providers": {
+                "keyless": {"kind": "openai-compat", "base_url": "http://a", "api_key": ""},
+                "keyed": {"kind": "openai-compat", "base_url": "http://b", "api_key": "k"},
+            },
+            "roles": {"chat": {"provider": "keyed", "model": "m"}},   # no 'default' role at all
+        })
+        assert llm.status_cheap(role="chat", org_id=7) is True
+    finally:
+        llm.invalidate_org_overlay(7)
+
+
+def test_status_cheap_role_param_platform(monkeypatch):
+    """Platform (no org overlay): default role is keyless but 'summary' points
+    at a different, keyed provider — status_cheap must answer per-role, not
+    just for 'default'."""
+    monkeypatch.setattr(context, "config", {
+        "llm": {
+            "providers": {
+                "empty": {"kind": "openai-compat", "base_url": "http://x"},
+                "full": {"kind": "openai-compat", "base_url": "http://y", "api_key": "key"},
+            },
+            "roles": {
+                "default": {"provider": "empty", "model": "m1"},
+                "summary": {"provider": "full", "model": "m2"},
+            },
+        },
+    })
+    assert llm.status_cheap() is False
+    assert llm.status_cheap(role="summary") is True
+
+
 # ---------------------------------------------------------------------------
 # Streaming
 # ---------------------------------------------------------------------------

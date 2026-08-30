@@ -49,6 +49,21 @@ def test_sanitize_and_merge_keeps_stored_key():
     assert plans.sanitize_org_llm({"providers": {"x": {"kind": "pi"}}})["providers"] == {}
 
 
+def test_merge_org_llm_keeps_stored_headers_when_incoming_omits_them():
+    stored = plans.sanitize_org_llm({"providers": {"pi-like": {"kind": "openai-compat", "base_url": "https://x",
+                                                               "api_key": "sk-1", "headers": {"pi_provider": "openai-codex"}}},
+                                     "roles": {}})
+    assert stored["providers"]["pi-like"]["headers"] == {"pi_provider": "openai-codex"}
+    # a later save that doesn't mention headers at all (e.g. a UI form with no
+    # headers field) must not silently wipe them, same bug class as the
+    # config.yaml round-trip fix
+    incoming = plans.sanitize_org_llm({"providers": {"pi-like": {"kind": "openai-compat", "base_url": "https://x", "api_key": ""}},
+                                       "roles": {}})
+    assert incoming["providers"]["pi-like"]["headers"] == {}    # sanitize defaults to empty
+    merged = plans.merge_org_llm(stored, incoming)
+    assert merged["providers"]["pi-like"]["headers"] == {"pi_provider": "openai-codex"}
+
+
 # ---------------------------------------------------------------------------
 # Key rotation: a ciphertext that no longer opens must never escape as an
 # exception — the org behaves as if it had stored no key at all.
@@ -148,6 +163,152 @@ async def test_plan_endpoint_reports_reconnect_instead_of_500(monkeypatch):
     assert out["plan"] == "light"
 
 
+# ---------------------------------------------------------------------------
+# WP8: premium is an upsell link on self-hosted installs — POST /api/org/plan
+# always needs the operator key to change `plan`; a budget-only edit doesn't.
+# ---------------------------------------------------------------------------
+
+class _FakePlanDB:
+    """Minimal org-settings DB stand-in for the /api/org/plan handlers."""
+
+    def __init__(self, settings=None):
+        self.settings = dict(settings or {"plan": "light"})
+
+    async def get_org_settings(self, org_id):
+        return dict(self.settings)
+
+    async def update_org_settings(self, org_id, patch):
+        self.settings.update(patch)
+        return dict(self.settings)
+
+    async def llm_usage_summary(self, org_id, days=31):
+        return {"month": {"cost_usd": 0.0}}
+
+
+class _FakeRequest:
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+
+
+ADMIN_8 = {"org_id": 8, "role": "admin"}
+
+
+async def test_set_plan_without_operator_key_on_self_hosted_is_refused(monkeypatch):
+    """(a) Self-hosted, no operator key configured at all: changing `plan`
+    always 403s with the upsell detail, never silently succeeds."""
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})   # self-hosted, no operator_key at all
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium"}, _FakeRequest(), user=ADMIN_8)
+    assert exc.value.status_code == 403
+    assert "Self-service plan changes are disabled" in exc.value.detail
+    assert "https://buzzowl.app" in exc.value.detail
+    assert fake_db.settings.get("plan") != "premium"    # nothing was mutated
+
+
+async def test_set_plan_with_valid_operator_key_works(monkeypatch):
+    """(b) A valid x-operator-key header lets the plan change through, on a
+    self-hosted install too (an operator-driven upgrade, not self-service)."""
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {"operator_key": "op-secret"}})
+
+    out = await os_router.set_plan({"plan": "premium"}, _FakeRequest({"x-operator-key": "op-secret"}), user=ADMIN_8)
+    assert fake_db.settings["plan"] == "premium"
+    assert out["plan"] == "premium"
+
+
+async def test_set_plan_budget_only_works_without_operator_key(monkeypatch):
+    """(c) A self-hosted admin can still self-serve a budget-only change with
+    no operator key at all — only the `plan` field itself is gated."""
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})   # no operator_key configured anywhere
+
+    out = await os_router.set_plan({"llm_budget_usd_per_month": 15}, _FakeRequest(), user=ADMIN_8)
+    assert fake_db.settings["llm_budget_usd_per_month"] == 15.0
+    assert out["budget_usd"] == 15.0
+    assert fake_db.settings.get("plan") == "light"      # untouched
+
+
+async def test_set_plan_combined_body_without_operator_key_rejects_both(monkeypatch):
+    """A combined {plan, llm_budget_usd_per_month} body with no operator key
+    configured at all: refused with the upsell detail, and the budget must
+    not sneak through just because it rode along with the plan change."""
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium", "llm_budget_usd_per_month": 50},
+                                 _FakeRequest(), user=ADMIN_8)
+    assert exc.value.status_code == 403
+    assert "Self-service plan changes are disabled" in exc.value.detail
+    assert fake_db.settings.get("plan") != "premium"
+    assert "llm_budget_usd_per_month" not in fake_db.settings
+
+
+async def test_set_plan_missing_or_wrong_operator_key_is_refused(monkeypatch):
+    """An operator key IS configured, but the request's header is missing or
+    wrong: refused either way, plan left untouched."""
+    from fastapi import HTTPException
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+    monkeypatch.setattr(os_router, "_config", {"hosted": {"operator_key": "op-secret"}})
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium"}, _FakeRequest(), user=ADMIN_8)   # no header at all
+    assert exc.value.status_code == 403
+    assert fake_db.settings.get("plan") != "premium"
+
+    with pytest.raises(HTTPException) as exc:
+        await os_router.set_plan({"plan": "premium"}, _FakeRequest({"x-operator-key": "wrong"}), user=ADMIN_8)
+    assert exc.value.status_code == 403
+    assert fake_db.settings.get("plan") != "premium"
+
+
+async def test_get_plan_includes_premium_url_and_self_hosted(monkeypatch):
+    """(d) GET /api/org/plan reports premium_url + self_hosted so the
+    settings UI can decide between the operator note and the upsell link."""
+    from routers import org_settings as os_router
+
+    fake_db = _FakePlanDB()
+    monkeypatch.setattr(os_router, "DB_AVAILABLE", True)
+    monkeypatch.setattr(os_router, "db_module", fake_db)
+
+    monkeypatch.setattr(os_router, "_config", {"hosted": {}})
+    out = await os_router.get_plan(user=ADMIN_8)
+    assert out["self_hosted"] is True
+    assert out["premium_url"] == "https://buzzowl.app"
+    assert out["hosted_mode"] is False
+
+    monkeypatch.setattr(os_router, "_config",
+                        {"hosted": {"signup_enabled": True, "premium_url": "https://custom.example"}})
+    out2 = await os_router.get_plan(user=ADMIN_8)
+    assert out2["self_hosted"] is False
+    assert out2["premium_url"] == "https://custom.example"
+    assert out2["hosted_mode"] is True
+
+
 def test_plan_and_budget():
     assert plans.plan_of({}) == "light" and plans.plan_of({"plan": "premium"}) == "premium"
     assert plans.budget_usd({"plan": "light"}, {}) is None
@@ -191,6 +352,34 @@ def test_resolve_light_org_without_provider_refused_only_when_enforced():
         llm.resolve("chat", None, 8)
     _seed_overlay(8, {"plan": "light", "providers": {}, "roles": {}, "budget": None, "month_cost": 0.0, "enforce": False})
     assert llm.resolve("chat", None, 8)[0].name == "platform"
+
+
+def test_resolve_dangling_role_enforced_refuses():
+    """A role can point at a provider name that no longer exists in
+    ov["providers"] — e.g. its row was deleted in Settings › LLM while a role
+    still referenced it (sanitize_org_llm now drops these on write, but a
+    legacy stored role can still carry one). Enforced: this must refuse — and
+    since the org DOES have a working provider ('own'), the message must name
+    the dangling role rather than the generic "no provider configured" (which
+    would wrongly imply the org has nothing configured at all)."""
+    _seed_overlay(8, {"plan": "light", "enforce": True,
+                      "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+                      "roles": {"chat": {"provider": "ghost", "model": "m"}},
+                      "budget": None, "month_cost": 0.0})
+    with pytest.raises(llm.LLMError, match="'chat' role points at a provider that no longer exists"):
+        llm.resolve("chat", None, 8)
+
+
+def test_resolve_dangling_role_not_enforced_falls_back_to_platform():
+    """Same dangling role, but this install doesn't enforce plans (the
+    self-hosted default) — falls back to the platform provider, exactly like
+    an org with no providers of its own at all in that same (unenforced) case."""
+    _seed_overlay(8, {"plan": "light", "enforce": False,
+                      "providers": {"own": {"kind": "openai-compat", "base_url": "http://own", "api_key": "ok"}},
+                      "roles": {"chat": {"provider": "ghost", "model": "m"}},
+                      "budget": None, "month_cost": 0.0})
+    p, m = llm.resolve("chat", None, 8)
+    assert p.name == "platform" and m == "platform-model"
 
 
 def test_resolve_premium_budget_soft_block():

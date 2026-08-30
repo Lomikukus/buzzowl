@@ -14,13 +14,15 @@ Moved from the former routers/transcription.py (removed):
   POST /api/llm/oauth/pi/disconnect
 """
 
+import os
 from typing import Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
 import llm
-from context import BASE_DIR, config
+import plans
+from context import BASE_DIR, DB_AVAILABLE, config, db_module
 from routers.auth import current_user
 
 router = APIRouter()
@@ -108,6 +110,14 @@ async def save_llm_config(body: dict, user: dict = Depends(current_user)):
     are never echoed back (responses mask them)."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
+    if not os.access(_CONFIG_YAML_PATH, os.W_OK):
+        # Standard docker-compose.yml mounts config.yaml :ro — this endpoint can
+        # never actually persist there. Workspace admins use the DB-backed
+        # per-org override instead (routers/org_settings.py GET/POST /api/org/llm).
+        raise HTTPException(
+            status_code=403,
+            detail="config.yaml is missing or not writable on this install — workspace "
+                   "LLM settings are stored in the database instead (Settings › LLM Providers)")
 
     providers = body.get("providers")
     roles = body.get("roles")
@@ -138,6 +148,16 @@ async def save_llm_config(body: dict, user: dict = Depends(current_user)):
             entry["api_key"] = api_key
         elif existing.get(name, {}).get("api_key"):
             entry["api_key"] = existing[name]["api_key"]      # keep stored key
+        headers_raw = raw.get("headers")
+        if headers_raw is not None:
+            if not isinstance(headers_raw, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str) for k, v in headers_raw.items()):
+                raise HTTPException(status_code=400,
+                                    detail=f"provider {name!r}: headers must be an object of string to string")
+            if headers_raw:
+                entry["headers"] = headers_raw
+        elif existing.get(name, {}).get("headers"):
+            entry["headers"] = existing[name]["headers"]      # keep stored headers (e.g. pi_provider bridge)
         clean_providers[name] = entry
 
     clean_roles: dict = {}
@@ -157,11 +177,10 @@ async def save_llm_config(body: dict, user: dict = Depends(current_user)):
 
     new_block = {"providers": clean_providers, "roles": clean_roles}
 
-    # Persist to config.yaml (whole-file rewrite — comments are lost, accepted)
-    try:
-        raw_cfg = yaml.safe_load(_CONFIG_YAML_PATH.read_text(encoding="utf-8")) or {}
-    except FileNotFoundError:
-        raw_cfg = {}
+    # Persist to config.yaml (whole-file rewrite — comments are lost, accepted).
+    # The writability gate above already required the file to exist (os.access
+    # on a missing path is False), so FileNotFoundError here is unreachable.
+    raw_cfg = yaml.safe_load(_CONFIG_YAML_PATH.read_text(encoding="utf-8")) or {}
     raw_cfg["llm"] = new_block
     _CONFIG_YAML_PATH.write_text(
         yaml.safe_dump(raw_cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
@@ -173,8 +192,9 @@ async def save_llm_config(body: dict, user: dict = Depends(current_user)):
 # ---------------------------------------------------------------------------
 # OpenRouter OAuth (PKCE) — "Connect" flow that provisions a user-controlled
 # API key (no copy-paste). The only fully-permitted subscription-style login;
-# key lands in llm providers.openrouter.api_key via the same persistence path
-# as POST /api/llm/config.
+# the provisioned key is stored at the ORG level (routers/org_settings.py
+# POST /api/org/llm's persistence idiom), not in config.yaml — config.yaml is
+# read-only in the standard docker-compose deployment.
 # ---------------------------------------------------------------------------
 
 _OR_AUTH_URL = "https://openrouter.ai/auth"
@@ -229,24 +249,43 @@ async def openrouter_oauth_complete(body: dict, user: dict = Depends(current_use
     if not key:
         raise HTTPException(status_code=502, detail="OpenRouter returned no key")
 
-    # Write the provisioned key into the llm block (create provider if absent)
-    block = llm._effective_config()
-    providers = {n: dict(p) for n, p in (block.get("providers") or {}).items()}
-    entry = providers.get("openrouter") or {
-        "kind": "openai-compat", "base_url": "https://openrouter.ai/api/v1"}
-    entry["api_key"] = key
-    providers["openrouter"] = entry
-    new_block = {"providers": providers, "roles": dict(block.get("roles") or {})}
+    # Persist the provisioned key at the ORG level — DB-backed, encrypted at
+    # rest, and unaffected by a read-only config.yaml mount. Reuses the exact
+    # helpers POST /api/org/llm is built on (routers/org_settings.set_org_llm).
+    if not DB_AVAILABLE or db_module is None:
+        raise HTTPException(status_code=503, detail="Database unavailable — cannot store the connected key")
+    org_id = user["org_id"]
+    settings = await db_module.get_org_settings(org_id)
+    existing_llm = settings.get("llm") or {}
 
-    try:
-        raw_cfg = yaml.safe_load(_CONFIG_YAML_PATH.read_text(encoding="utf-8")) or {}
-    except FileNotFoundError:
-        raw_cfg = {}
-    raw_cfg["llm"] = new_block
-    _CONFIG_YAML_PATH.write_text(
-        yaml.safe_dump(raw_cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    config["llm"] = new_block
-    return {"ok": True, "connected": "openrouter", **_masked_llm_block()}
+    # merge_org_llm() returns 'incoming' as the new roles verbatim (it only
+    # back-fills preserved api_keys on the providers side) — so an org that
+    # already has roles must have its own roles carried through here, or they
+    # would be wiped by this connect-only save.
+    new_roles = dict(existing_llm.get("roles") or {})
+    if not new_roles:
+        # First LLM setup for this org — point 'default' at the new provider so
+        # a connect-only flow is immediately usable, no separate role save needed.
+        platform_roles = (llm._effective_config().get("roles") or {})
+        default_model = (platform_roles.get("default") or {}).get("model") or llm._FALLBACK_MODEL
+        new_roles = {"default": {"provider": "openrouter", "model": default_model}}
+
+    # Keep every other provider the org already had — merge_org_llm() does not
+    # union providers by name, it only patches whatever keys 'incoming' names,
+    # so an incoming dict with just 'openrouter' would drop the rest outright
+    # (and any role still pointing at a dropped provider silently falls through
+    # to the platform providers in llm.resolve(), i.e. a hosted org's calls
+    # start spending platform money instead of erroring).
+    providers = dict(existing_llm.get("providers") or {})
+    providers["openrouter"] = {"kind": "openai-compat",
+                               "base_url": "https://openrouter.ai/api/v1",
+                               "api_key": key}
+    new_block = {"providers": providers, "roles": new_roles}
+    incoming = plans.sanitize_org_llm(new_block)
+    merged = plans.merge_org_llm(existing_llm, incoming)
+    await db_module.update_org_settings(org_id, {"llm": merged})
+    llm.invalidate_org_overlay(org_id)
+    return {"ok": True, "connected": "openrouter", **plans.public_org_llm(merged)}
 
 
 # ---------------------------------------------------------------------------
@@ -269,9 +308,16 @@ async def _pi_oauth_forward(method: str, path: str, payload: Optional[dict],
             status_code=403,
             detail="Subscription logins are disabled — set llm_oauth_gray_flows: true "
                    "in config.yaml after reviewing the provider's terms of service.")
+    token = config.get("agent_service_token", "")
+    if not token and os.environ.get("ALLOW_INSECURE_INTERNAL", "") != "1":
+        raise HTTPException(
+            status_code=503,
+            detail="AGENT_SERVICE_TOKEN is not configured — the agent service refuses all "
+                   "requests. Set the same value for server and agent-pi in .env, then run "
+                   "`docker compose up -d` (a plain restart does not reload .env).")
+
     import httpx
     base = config.get("agent_service_url_pi") or config.get("agent_service_url", "http://localhost:8001")
-    token = config.get("agent_service_token", "")
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
         async with httpx.AsyncClient(timeout=70) as hc:
@@ -282,6 +328,11 @@ async def _pi_oauth_forward(method: str, path: str, payload: Optional[dict],
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Pi service unreachable: {exc}")
     body = r.json() if r.content else {}
+    if r.status_code == 401:
+        raise HTTPException(
+            status_code=502,
+            detail="The agent service rejected the shared token — server and agent-pi disagree "
+                   "on AGENT_SERVICE_TOKEN. Align the value in .env and run `docker compose up -d`.")
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code,
                             detail=body.get("error") or body.get("detail") or "Pi OAuth error")
