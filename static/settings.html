@@ -601,6 +601,16 @@ async function doLogin() {
   localStorage.setItem(TOKEN_KEY, _token);
   document.getElementById('authOverlay').style.display = 'none';
   window.navbarRefreshUser?.();
+  // WP9: a first-time admin (no LLM configured yet, wizard not done) goes to
+  // the setup wizard instead of staying on Settings.
+  const meRes = await fetch('/api/auth/me', { headers: H() });
+  if (meRes.ok) {
+    const me = await meRes.json();
+    if (me.user?.role === 'admin' && !me.org?.llm_configured && !me.org?.setup_completed) {
+      location.href = '/setup';
+      return;
+    }
+  }
   init();
 }
 
