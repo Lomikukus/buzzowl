@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 import context
-from routers import transcription as tr
+from routers import llm_config as tr
 
 ADMIN = {"role": "admin", "id": 1}
 MEMBER = {"role": "member", "id": 2}
