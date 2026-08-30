@@ -1,8 +1,7 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="carbon">
 <head>
 <link rel="stylesheet" href="/static/theme.css?v=20260817a">
-<script>try{if(localStorage.getItem('wk_theme')==='carbon')document.documentElement.setAttribute('data-theme','carbon');}catch(e){}</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Settings — Buzzowl</title>
@@ -165,44 +164,6 @@ tr:hover td { background: var(--c-linefaint, #222); }
         <span id="identStatus" style="font-size:0.72rem;color:var(--c-muted2, #666);margin-left:0.6rem"></span>
       </div>
     </div>
-
-    <div class="section">
-      <h2>Your Account</h2>
-
-      <!-- UI A/B: opt-in front-end theme -->
-      <div style="max-width:480px;margin-top:1.4rem;border-top:1px solid var(--c-line, #2a2a2a);padding-top:1.1rem">
-        <div class="form-row" style="margin-bottom:0.45rem">
-          <label>Appearance — try the new IBM-style look <span style="color:var(--c-muted,#888)">(beta)</span></label>
-        </div>
-        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
-          <button class="btn" id="themeClassicBtn" onclick="wkPickTheme('classic')">Classic</button>
-          <button class="btn" id="themeCarbonBtn" onclick="wkPickTheme('carbon')">New look (beta)</button>
-          <span id="themeStatus" style="font-size:0.74rem;color:var(--c-accent, #4ec9b0)"></span>
-        </div>
-        <div style="font-size:0.72rem;color:var(--c-muted, #888);margin-top:0.4rem">
-          Applies to your account only — other users are unaffected, and you can switch back anytime.
-        </div>
-      </div>
-    </div>
-    <script>
-      function updateThemeButtons(v){
-        var c=document.getElementById('themeClassicBtn'), k=document.getElementById('themeCarbonBtn');
-        if(!c||!k) return;
-        c.classList.toggle('primary', v!=='carbon');
-        k.classList.toggle('primary', v==='carbon');
-      }
-      async function wkPickTheme(v){
-        if (window.wkSetTheme) await window.wkSetTheme(v);
-        updateThemeButtons(v);
-        var s=document.getElementById('themeStatus');
-        if(s) s.textContent = v==='carbon' ? 'New look enabled — switched just for you' : 'Classic look';
-      }
-      (function(){
-        var v='classic';
-        try { v = localStorage.getItem('wk_theme')==='carbon' ? 'carbon':'classic'; } catch(e){}
-        updateThemeButtons(v);
-      })();
-    </script>
 
     <!-- Admin-only sections -->
     <div id="adminSections" style="display:none">

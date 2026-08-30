@@ -24,10 +24,6 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'member',
     created_at    TIMESTAMPTZ DEFAULT NOW(),
-    -- UI A/B: opt-in front-end theme variant ('classic' | 'carbon').
-    -- Kept as the LAST column: it was added via ALTER TABLE on live DBs,
-    -- so this position matches existing databases exactly.
-    ui_variant    TEXT NOT NULL DEFAULT 'classic',
     UNIQUE(org_id, username)
 );
 

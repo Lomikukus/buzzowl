@@ -89,17 +89,14 @@
 :root[data-theme="carbon"] #main-nav .nav-spacer{ flex:1 1 auto; min-height:12px; }
 :root[data-theme="carbon"] #main-nav .nav-action-btn{ margin:3px 14px; text-align:left; }
 :root[data-theme="carbon"] #main-nav #wk-fb-btn{ align-self:flex-start; margin-left:14px; }
-:root[data-theme="carbon"] #main-nav #wk-theme-btn{ margin:8px 14px 6px; border-radius:0; text-align:center; }
 :root[data-theme="carbon"] #main-nav .nav-user{ padding:6px 18px 0; }
 :root[data-theme="carbon"] #main-nav .nav-logout{ padding:2px 18px; text-align:left; }
 :root[data-theme="carbon"] #main-nav #navSettingsGear{ margin-left:14px; }
-/* The classic bar groups links and the user/logout cluster into wrappers so a
-   "⋯" overflow menu can park what does not fit. The rail has no horizontal
-   limit (it scrolls vertically), so dissolve both wrappers back into the
-   column with display:contents and keep the overflow button out of it. */
+/* The bar groups links and the user/logout cluster into wrappers for the
+   flex row layout. The rail stacks everything in a column instead, so
+   dissolve both wrappers back into it with display:contents. */
 :root[data-theme="carbon"] #main-nav .nav-links,
 :root[data-theme="carbon"] #main-nav .nav-tools{ display:contents; }
-:root[data-theme="carbon"] #main-nav .nav-more-wrap{ display:none !important; }
 
 /* shift page content clear of the fixed rail — only where the rail exists
    (contact.html mounts its nav differently, so :has() spares it). */

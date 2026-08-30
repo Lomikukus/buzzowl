@@ -206,8 +206,6 @@ _BASELINE_RECONCILE_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "ALTER TABLE products ADD COLUMN IF NOT EXISTS website_url TEXT",
-    # UI A/B: opt-in front-end theme variant ('classic' | 'carbon')
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS ui_variant TEXT NOT NULL DEFAULT 'classic'",
     # Phase 18: invite-key whitelist
     """
     CREATE TABLE IF NOT EXISTS invitations (
@@ -1455,7 +1453,6 @@ async def get_user_by_token(token: str) -> Optional[dict]:
         row = await conn.fetchrow(
             """
             SELECT u.id, u.org_id, u.username, u.display_name, u.email, u.role,
-                   COALESCE(u.ui_variant, 'classic') AS ui_variant,
                    o.name AS org_name, o.slug AS org_slug
             FROM user_sessions s
             JOIN users u ON u.id = s.user_id
@@ -1582,19 +1579,6 @@ async def update_user_email(user_id: int, org_id: int, email: Optional[str]) -> 
             user_id, org_id, (email or "").strip() or None,
         )
         return dict(row) if row else None
-
-
-async def set_user_ui_variant(user_id: int, variant: str) -> Optional[str]:
-    """Persist a user's opt-in front-end theme ('classic' | 'carbon')."""
-    if not _pool:
-        return None
-    variant = variant if variant in ("classic", "carbon") else "classic"
-    async with _pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "UPDATE users SET ui_variant = $2 WHERE id = $1 RETURNING ui_variant",
-            user_id, variant,
-        )
-        return row["ui_variant"] if row else None
 
 
 async def delete_user(user_id: int, org_id: int) -> bool:

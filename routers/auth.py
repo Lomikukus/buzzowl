@@ -216,7 +216,6 @@ async def me(user: dict = Depends(current_user)):
         "user": {
             "id": user["id"], "username": user["username"],
             "display_name": user["display_name"], "role": user["role"],
-            "ui_variant": user.get("ui_variant", "classic"),
         },
         "org": {"id": user["org_id"], "name": user["org_name"], "slug": user["org_slug"],
                 **(await _org_flags(user["org_id"]))},
@@ -362,25 +361,6 @@ async def external_login(request: Request, body: dict):
     return {"token": token,
             "user": {"id": user["id"], "username": user["username"], "display_name": user["display_name"], "role": user["role"]},
             "org": {"id": org["id"], "name": org["name"], "slug": org["slug"]}}
-
-
-@router.post("/theme")
-async def set_theme(body: dict, user: dict = Depends(current_user)):
-    """Opt-in UI A/B: let a user switch their own front-end theme.
-    'carbon' = the IBM-style redesign; 'classic' = the current look (default)."""
-    variant = (body or {}).get("variant", "classic")
-    if variant not in ("classic", "carbon"):
-        raise HTTPException(status_code=400, detail="variant must be 'classic' or 'carbon'")
-    saved = await db_module.set_user_ui_variant(user["id"], variant)
-    # Log the choice so the evaluation can compare cohorts (best-effort, non-blocking).
-    try:
-        db_module.log_prompt(
-            org_id=user["org_id"], user_id=user["id"],
-            surface="ui_theme", prompt=variant,
-        )
-    except Exception:
-        pass
-    return {"ok": True, "ui_variant": saved or variant}
 
 
 @router.get("/identity")
