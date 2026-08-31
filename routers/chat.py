@@ -258,7 +258,7 @@ class ChatRequest(BaseModel):
 # Cloud chat helpers (llm.py "chat" role)
 # ---------------------------------------------------------------------------
 
-def _call_cloud_sync(model: str, system: str, user_msg: str, org_id: Optional[int] = None) -> Optional[str]:
+def _call_cloud_sync(model: Optional[str], system: str, user_msg: str, org_id: Optional[int] = None) -> Optional[str]:
     """One-shot cloud call (no tools). Returns answer string or None."""
     try:
         answer = llm.complete(org_id=org_id, surface="chat", 
@@ -651,7 +651,7 @@ async def _run_tool_loop(
     system: str,
     user_msg: str,
     org_id: int,
-    model: str,
+    model: Optional[str],
     history: Optional[list[dict]] = None,
     max_rounds: int = 5,
     user_id: Optional[int] = None,
@@ -715,6 +715,50 @@ async def _run_tool_loop(
 # Pi chat helper
 # ---------------------------------------------------------------------------
 
+async def _resolve_pi_chat_target(org_id: int) -> tuple[str, str, str]:
+    """Resolve (provider_name, brain, model) for the payload sent to agent-pi's
+    POST /chat.
+
+    agent-pi resolves PROVIDER credentials itself from org_id (agent.ts
+    buildModel() -> resolveProviderForOrg() in agent_service_ts/src/config.ts),
+    but it never resolves a MODEL from the org's roles — the `model` field in
+    the payload is used exactly as sent (index.ts's /chat handler, buildModel())
+    — so leaving it unset would fall back to agent-pi's own DEFAULT_MODEL env
+    var, not the workspace's configured model. The model still has to be
+    resolved here.
+
+    Prefers the workspace's own 'chat' role (falling back to 'default') via
+    llm.resolve() — that's what actually reflects an org's wizard-configured
+    provider (static/setup.html saveProvider() only ever writes the 'default'
+    role, and llm.resolve() falls back from 'chat' to 'default' itself).
+    resolve()'s own fallback chain already reproduces today's legacy behaviour
+    when there is no org config to resolve from: config.yaml's llm.roles.chat,
+    or (no llm: block at all) the legacy pi_chat_brain/pi_chat_model +
+    agent_service_brain/agent_service_model synthesis (llm._legacy_synthesis).
+
+    Two cases are handled here instead of trusting resolve() outright, both
+    falling back to the exact pre-fix config-key formula so a platform install
+    without org config is unchanged:
+      - resolve() raises (e.g. an enforced light org with no provider, or a
+        premium org over budget — budget was never enforced on this path
+        before either, so this preserves that rather than newly enforcing it).
+      - resolve() returns a 'pi' kind provider (the subscription-OAuth bridge,
+        e.g. {kind: pi, headers: {pi_provider: openai-codex}}) — platform-only
+        (plans.sanitize_org_llm rejects it from any org overlay) and not a
+        provider name agent-pi's HTTP /chat endpoint understands.
+    """
+    await llm.ensure_org_overlay(org_id)
+    try:
+        provider_cfg, model = llm.resolve(role="chat", org_id=org_id)
+        if provider_cfg.kind in ("openai-compat", "anthropic"):
+            return provider_cfg.name, provider_cfg.name, model
+    except llm.LLMError:
+        pass
+    brain = config.get("pi_chat_brain") or config.get("agent_service_brain", "openrouter")
+    model = config.get("pi_chat_model") or config.get("agent_service_model", "deepseek/deepseek-v4-flash")
+    return llm.provider_for_brain(brain), brain, model
+
+
 async def _call_pi_chat(
     message: str,
     org_id: int,
@@ -727,17 +771,18 @@ async def _call_pi_chat(
     headers: dict = {"Content-Type": "application/json"}
     if pi_token:
         headers["Authorization"] = f"Bearer {pi_token}"
-    # Always pass brain/model from config — never use the frontend's Ollama model selector
-    # (Ollama model names like "qwen3.5" are not valid OpenRouter model IDs)
-    pi_brain = config.get("pi_chat_brain") or config.get("agent_service_brain", "openrouter")
-    pi_model = config.get("pi_chat_model") or config.get("agent_service_model", "deepseek/deepseek-v4-flash")
+    # Provider/model come from the workspace's LLM roles (org overlay
+    # chat/default role, see _resolve_pi_chat_target) — never the frontend's
+    # Ollama model selector (Ollama model names like "qwen3.5" are not valid
+    # OpenRouter model IDs).
+    pi_provider, pi_brain, pi_model = await _resolve_pi_chat_target(org_id)
     payload: dict = {
         "message": message,
         "org_id": org_id,
         "client_name": client_name,
         "org_name": org_name,
         "history": history,
-        "provider": llm.provider_for_brain(pi_brain),
+        "provider": pi_provider,
         "brain": pi_brain,
         "model": pi_model,
     }
@@ -772,16 +817,16 @@ async def _start_pi_chat_async(
 ) -> str:
     """Enqueue an async (thinking-preview) chat run on Pi; returns the chat_id."""
     pi_url = config.get("agent_service_url_pi", "http://localhost:8001")
+    pi_provider, pi_brain, pi_model = await _resolve_pi_chat_target(org_id)
     payload = {
         "message": message,
         "org_id": org_id,
         "client_name": client_name,
         "org_name": org_name,
         "history": history,
-        "provider": llm.provider_for_brain(
-            config.get("pi_chat_brain") or config.get("agent_service_brain", "openrouter")),
-        "brain": config.get("pi_chat_brain") or config.get("agent_service_brain", "openrouter"),
-        "model": config.get("pi_chat_model") or config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+        "provider": pi_provider,
+        "brain": pi_brain,
+        "model": pi_model,
         "async_mode": True,
     }
     async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
@@ -902,7 +947,18 @@ async def chat_endpoint(request: Request, body: ChatRequest, user: dict = Depend
                 await db_module.update_chat_session_title(body.session_id, org_id, title)
         return {"answer": answer, "sources": sources, "backend": "pi"}
 
-    model = body.model or config.get("pi_chat_model") or config.get("agent_service_model", "deepseek/deepseek-v4-flash")
+    # Resolve provider+model from the workspace's LLM roles: llm.achat/complete
+    # below (role="chat", org_id=org_id) runs llm.resolve()'s full fallback
+    # chain — org overlay's 'chat' role (falling back to 'default', set by the
+    # setup wizard) first, then config.yaml's llm.roles.chat, then (no llm:
+    # block) the legacy pi_chat_brain/pi_chat_model + agent_service_brain/
+    # agent_service_model synthesis (llm._legacy_synthesis) — so a platform
+    # install without org config resolves exactly as before. Passing model=None
+    # here (instead of pre-computing it from the legacy keys) is what lets the
+    # org's own role model win instead of being permanently shadowed by them;
+    # body.model, when the caller supplied one, still wins over all of that
+    # (see resolve()'s `model or entry.get("model")`).
+    model = body.model or None
 
     # ── Layer 1: roster (always injected, free) ───────────────────────────
     clients, contacts = [], []

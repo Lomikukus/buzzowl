@@ -1232,7 +1232,7 @@
 
         async function loadModels() {
             try {
-                const res = await fetch('/api/ollama');
+                const res = await fetch('/api/ollama', { headers: authHeaders() });
                 if (!res.ok) return;
                 const data = await res.json();
                 const models = data.models || [];

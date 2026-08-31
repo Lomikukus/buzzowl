@@ -125,8 +125,9 @@ First-run bootstrap (empty database) works one of two ways:
 - **Env-based admin** — set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env` before
   the first start; the server creates that admin account on boot.
 - **Registration key** — without admin env vars, the server logs a one-time
-  registration key on first start (`docker compose logs server`). Enter it on the
-  login page to create the first admin account.
+  registration key on first start (`docker compose logs server | grep -B2 -A3 "FIRST RUN"` —
+  plain `tail` can miss it once request logging pushes the banner out of range).
+  Enter it on the login page to create the first admin account.
 
 After logging in, invite further users from the Settings panel (admins can create
 member/admin accounts and invite keys).
