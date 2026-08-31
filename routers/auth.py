@@ -239,7 +239,12 @@ async def _org_flags(org_id: int) -> dict:
         await _llm.ensure_org_overlay(org_id)
         return {"plan": _plans.plan_of(s), "suspended": bool(s.get("suspended")),
                 "suspended_reason": s.get("suspended_reason") or None,
-                "llm_configured": _llm.status_cheap(org_id=org_id),
+                # A workspace routing chat through a connected subscription
+                # (orgs.settings.llm_subscription, see org_settings.py) has no
+                # provider key to resolve, so status_cheap alone would keep the
+                # "no model configured" banner up on a working install.
+                "llm_configured": (_llm.status_cheap(org_id=org_id)
+                                   or bool((s.get("llm_subscription") or {}).get("provider"))),
                 "setup_completed": bool(s.get("setup_completed_at"))}
     except Exception:
         return {}

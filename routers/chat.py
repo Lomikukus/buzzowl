@@ -715,6 +715,29 @@ async def _run_tool_loop(
 # Pi chat helper
 # ---------------------------------------------------------------------------
 
+async def _org_chat_subscription(org_id: int) -> Optional[tuple]:
+    """(provider, model) when this workspace routes chat through a connected
+    ChatGPT/Copilot subscription, else None.
+
+    Self-hosted only, mirroring POST /api/org/llm/subscription's own gate: on a
+    hosted install the deployment's personal subscription is not an org's to
+    spend, so the choice is never stored there and never honoured here either.
+    Failure to read it is not an error — chat falls back to config.yaml."""
+    if (config.get("hosted") or {}).get("signup_enabled"):
+        return None
+    if not config.get("llm_oauth_gray_flows"):
+        return None
+    try:
+        settings = await db_module.get_org_settings(org_id)
+    except Exception:
+        return None
+    sub = settings.get("llm_subscription")
+    if not isinstance(sub, dict):
+        return None
+    provider, model = sub.get("provider"), sub.get("model")
+    return (provider, model) if provider and model else None
+
+
 async def _resolve_pi_chat_target(org_id: int) -> tuple[str, str, str]:
     """Resolve (provider_name, brain, model) for the payload sent to agent-pi's
     POST /chat.
@@ -754,6 +777,12 @@ async def _resolve_pi_chat_target(org_id: int) -> tuple[str, str, str]:
             return provider_cfg.name, provider_cfg.name, model
     except llm.LLMError:
         pass
+    sub = await _org_chat_subscription(org_id)
+    if sub:
+        # agent-pi takes the subscription name as the provider directly and
+        # builds the model against it (agent.ts buildOAuthModel), so the stored
+        # model id must be one it knows — the UI only offers registry ids.
+        return sub[0], sub[0], sub[1]
     brain = config.get("pi_chat_brain") or config.get("agent_service_brain", "openrouter")
     model = config.get("pi_chat_model") or config.get("agent_service_model", "deepseek/deepseek-v4-flash")
     return llm.provider_for_brain(brain), brain, model

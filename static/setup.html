@@ -144,6 +144,49 @@
                     <div class="form-row"><label>Model</label><input class="form-input" id="anthropicModel" placeholder="claude-sonnet-4-6" autocomplete="off"></div>
                     <button class="btn" data-save="anthropic">Save</button>
                 </div>
+                <div class="option-card" id="subCard" style="display:none">
+                    <h4>ChatGPT subscription</h4>
+                    <p class="desc">Sign in with your OpenAI account instead of pasting an API key.</p>
+                    <div style="border:1px solid var(--c-warn, #d7ba7d);border-left-width:4px;border-radius:6px;
+                                background:rgba(215,186,125,0.08);padding:0.5rem 0.65rem;margin:0 0 0.6rem">
+                        <div style="color:var(--c-warn, #d7ba7d);font-weight:700;font-size:0.72rem;margin-bottom:0.2rem">
+                            &#9888; Risk to your personal account
+                        </div>
+                        <p style="font-size:0.7rem;color:var(--c-fg2, #bbb);margin:0">
+                            OpenAI does not permit driving a ChatGPT <b>subscription</b> from a third-party app
+                            without a whitelist. It works today, but the realistic worst case is that
+                            <b>your</b> account is rate-limited or suspended. Fine for trying this out on your
+                            own machine; use an API key for anything you rely on.
+                        </p>
+                    </div>
+                    <div class="form-row">
+                        <label>Model</label>
+                        <select class="form-input" id="subModel">
+                            <option value="gpt-5.1-codex" selected>gpt-5.1-codex</option>
+                            <option value="gpt-5.1-codex-mini">gpt-5.1-codex-mini</option>
+                            <option value="gpt-5.1-codex-max">gpt-5.1-codex-max</option>
+                            <option value="gpt-5.2-codex">gpt-5.2-codex</option>
+                            <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+                            <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
+                            <option value="gpt-5-codex">gpt-5-codex</option>
+                        </select>
+                    </div>
+                    <button class="btn" id="subConnectBtn">Sign in with ChatGPT</button>
+                    <div id="subFlow" style="display:none;margin-top:0.5rem">
+                        <a id="subAuthLink" href="#" target="_blank" rel="noopener"
+                           style="font-size:0.76rem;color:var(--c-accent)">Open the OpenAI login page</a>
+                        <div class="form-row" style="margin-top:0.4rem">
+                            <label>Code</label>
+                            <input class="form-input" id="subCode" placeholder="paste code / redirect URL" autocomplete="off">
+                        </div>
+                        <button class="btn primary" id="subCompleteBtn">Finish sign-in</button>
+                    </div>
+                    <div class="status-line" id="subStatus" style="margin-top:0.5rem"></div>
+                    <p class="desc" style="margin-top:0.35rem">
+                        Powers <b>chat</b>. Research and pipeline agent runs keep using the model configured
+                        for this deployment.
+                    </p>
+                </div>
                 <div class="option-card">
                     <h4>Local Ollama</h4>
                     <p class="desc">Fully local — nothing leaves this machine.</p>
@@ -350,6 +393,81 @@
             saveProvider('ollama', { kind: 'openai-compat', base_url: baseUrl, api_key: 'ollama' }, model);
         });
 
+        // ── ChatGPT subscription ────────────────────────────────────────────
+        // Two halves: the OAuth itself lives in agent-pi (/api/llm/oauth/pi/*),
+        // and POST /api/org/llm/subscription is what makes this workspace
+        // actually route chat through it. The second half is not optional —
+        // without it the account is connected and nothing uses it.
+        let _subSession = null;
+
+        async function refreshSubscription() {
+            const card = document.getElementById('subCard');
+            try {
+                const r = await fetch('/api/org/llm/subscription', { headers: H() });
+                if (!r.ok) return;                      // non-admin or no DB: leave it hidden
+                const d = await r.json();
+                if (!d.offerable) return;               // hosted install, or gray flows off
+                card.style.display = '';
+                if (d.provider === 'openai-codex' && d.model) {
+                    document.getElementById('subModel').value = d.model;
+                    document.getElementById('subStatus').textContent =
+                        'Connected — chat runs on ' + d.model + '.';
+                }
+            } catch (e) { /* card stays hidden */ }
+        }
+
+        async function subConnect() {
+            const out = document.getElementById('subStatus');
+            out.textContent = 'Asking OpenAI for a login link…';
+            try {
+                const r = await fetch('/api/llm/oauth/pi/start', {
+                    method: 'POST', headers: H(), body: JSON.stringify({ provider: 'openai-codex' }),
+                });
+                const d = await r.json();
+                if (!r.ok) { out.textContent = 'Error: ' + (d.detail || r.status); return; }
+                _subSession = d.session_id;
+                document.getElementById('subAuthLink').href = d.auth_url;
+                document.getElementById('subFlow').style.display = '';
+                out.textContent = d.instructions || 'Open the login page, then paste the code back here.';
+            } catch (e) { out.textContent = 'Connect failed: ' + e.message; }
+        }
+
+        async function subComplete() {
+            const out = document.getElementById('subStatus');
+            const code = document.getElementById('subCode').value.trim();
+            if (!_subSession) { out.textContent = 'Start the sign-in first.'; return; }
+            if (!code) { out.textContent = 'Paste the code from the login page.'; return; }
+            out.textContent = 'Finishing sign-in…';
+            try {
+                const r = await fetch('/api/llm/oauth/pi/complete', {
+                    method: 'POST', headers: H(),
+                    body: JSON.stringify({ session_id: _subSession, code }),
+                });
+                const d = await r.json();
+                if (r.status === 202) { out.textContent = 'Still pending — approve it in the browser, then click Finish again.'; return; }
+                if (!r.ok) { out.textContent = 'Error: ' + (d.detail || r.status); return; }
+            } catch (e) { out.textContent = 'Sign-in failed: ' + e.message; return; }
+            // Connected. Now the half that actually makes the app use it — the
+            // server re-checks the connection and runs a one-word completion
+            // against the chosen model, so a model this plan cannot drive is
+            // caught here and not on the user's first chat message.
+            out.textContent = 'Connected — checking the model…';
+            try {
+                const model = document.getElementById('subModel').value;
+                const r = await fetch('/api/org/llm/subscription', {
+                    method: 'POST', headers: H(),
+                    body: JSON.stringify({ provider: 'openai-codex', model }),
+                });
+                const d = await r.json();
+                if (!r.ok) { out.textContent = 'Connected, but not in use: ' + (d.detail || r.status); return; }
+                document.getElementById('subFlow').style.display = 'none';
+                out.textContent = 'Done — chat runs on ' + d.model + '.';
+            } catch (e) { out.textContent = 'Connected, but not in use: ' + e.message; }
+        }
+
+        document.getElementById('subConnectBtn').addEventListener('click', subConnect);
+        document.getElementById('subCompleteBtn').addEventListener('click', subComplete);
+
         async function connectOpenRouter() {
             const status = document.getElementById('llmStatus');
             status.textContent = 'Opening OpenRouter…';
@@ -531,6 +649,7 @@
             document.getElementById('wizardCard').style.display = '';
             document.getElementById('orgNameInput').value = me.org?.name || '';
             addInviteRow();
+            await refreshSubscription();
             await refreshLlmStatus();   // awaited: _llmConfigLoaded must be settled before any save click can race it
             showStep(1);
 

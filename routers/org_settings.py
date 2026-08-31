@@ -287,6 +287,106 @@ async def test_org_llm(body: dict, user: dict = Depends(current_user)):
         return {"ok": False, "error": str(exc)[:300]}
 
 
+# ---------------------------------------------------------------------------
+# Subscription routing (ChatGPT-Codex / GitHub Copilot)
+#
+# The OAuth credential itself lives in agent-pi, not here — connecting is
+# routers/llm_config.py's /api/llm/oauth/pi/*. What was missing is the other
+# half: *choosing* to route this workspace's chat through it. That choice
+# cannot be an entry in the org's llm block, because plans.sanitize_org_llm
+# rejects kind 'pi' outright ("platform-only"), and rightly so: on a hosted
+# multi-tenant install one org must not be able to spend the deployment's
+# personal subscription. So it is stored as its own org setting and only
+# offered when this install is self-hosted — one tenant, one owner, their own
+# agent-pi. Hosted installs keep the old behaviour (config.yaml decides).
+# ---------------------------------------------------------------------------
+
+_SUB_PROVIDERS = ("openai-codex", "github-copilot")
+
+
+def _subscriptions_offerable() -> tuple[bool, str]:
+    """(offerable, reason_when_not) — same two gates the UI shows."""
+    if _hosted().get("signup_enabled"):
+        return False, ("Subscription logins are a deployment-level setting on a hosted "
+                       "install — the operator configures them, not a workspace.")
+    if not _config.get("llm_oauth_gray_flows"):
+        return False, ("Subscription logins are disabled — set llm_oauth_gray_flows: true "
+                       "in config.yaml after reviewing the provider's terms of service.")
+    return True, ""
+
+
+def _stored_subscription(settings: dict) -> dict:
+    sub = settings.get("llm_subscription")
+    return sub if isinstance(sub, dict) else {}
+
+
+@router.get("/llm/subscription")
+async def get_org_subscription(user: dict = Depends(current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    settings = await db_module.get_org_settings(user["org_id"])
+    sub = _stored_subscription(settings)
+    offerable, reason = _subscriptions_offerable()
+    return {"provider": sub.get("provider") or None,
+            "model": sub.get("model") or "",
+            "offerable": offerable,
+            "reason": reason}
+
+
+@router.post("/llm/subscription")
+async def set_org_subscription(body: dict, user: dict = Depends(current_user)):
+    """Route this workspace's chat through a connected subscription.
+
+    Body: {provider: 'openai-codex'|'github-copilot', model: '<model id>'} —
+    or {provider: null} to clear it and fall back to the configured providers.
+    The subscription must already be connected in agent-pi; this refuses
+    otherwise rather than storing a choice that would fail on first use."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    offerable, reason = _subscriptions_offerable()
+    if not offerable:
+        raise HTTPException(status_code=403, detail=reason)
+
+    provider = ((body or {}).get("provider") or "").strip() or None
+    if provider is None:
+        await db_module.update_org_settings(user["org_id"], {"llm_subscription": {}})
+        return {"ok": True, "provider": None, "model": ""}
+    if provider not in _SUB_PROVIDERS:
+        raise HTTPException(status_code=400,
+                            detail=f"provider must be one of {', '.join(_SUB_PROVIDERS)}")
+    model = str((body or {}).get("model") or "").strip()[:120]
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+
+    # Refuse a choice that cannot work yet. _pi_oauth_forward carries the
+    # gray-flow gate, the missing-token 503 and the token-mismatch 502 with
+    # their actionable messages, so a failure here already reads as advice.
+    from routers.llm_config import _pi_oauth_forward
+    status = await _pi_oauth_forward("GET", "/oauth/status", {"provider": provider}, user)
+    if not ((status or {}).get(provider) or {}).get("connected"):
+        raise HTTPException(status_code=400,
+                            detail=f"{provider} is not connected yet — complete the login first.")
+
+    # Prove the chosen model actually runs on this account before storing it.
+    # agent-pi builds the model from the id we send (agent.ts buildOAuthModel),
+    # so a plan that cannot drive it fails at generation time — better here than
+    # on the user's first chat message.
+    probe = await _pi_oauth_forward("POST", "/complete", {
+        "provider": provider,
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with the single word OK."}],
+        "max_tokens": 16,
+    }, user)
+    if not (probe or {}).get("text"):
+        raise HTTPException(status_code=400,
+                            detail=f"{provider} answered with no text for model '{model}' — "
+                                   "pick a model your plan can drive.")
+
+    await db_module.update_org_settings(
+        user["org_id"], {"llm_subscription": {"provider": provider, "model": model}})
+    return {"ok": True, "provider": provider, "model": model}
+
+
 @router.get("/usage")
 async def get_usage(days: int = 31, user: dict = Depends(current_user)):
     if not DB_AVAILABLE:

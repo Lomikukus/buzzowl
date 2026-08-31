@@ -426,6 +426,7 @@ tr:hover td { background: var(--c-linefaint, #222); }
             and is never offered here.
           </p>
         </div>
+        <div id="llmSubUse" style="font-size:0.74rem;color:var(--c-muted, #888);margin:0 0 0.5rem"></div>
         <div id="llmSubRows" style="display:flex;flex-direction:column;gap:0.5rem"></div>
       </div>
       <div style="margin-top:0.7rem;display:flex;gap:0.6rem;align-items:center">
@@ -1038,6 +1039,20 @@ async function loadPiOauth() {
         </span>`;
       rows.appendChild(div);
     });
+    // Connecting an account and *using* it are two different things (the
+    // routing choice lives in orgs.settings.llm_subscription, set by the
+    // first-run wizard) — say which one is in force so this page and /setup
+    // never contradict each other.
+    try {
+      const sr = await fetch('/api/org/llm/subscription', { headers: H() });
+      if (sr.ok) {
+        const sd = await sr.json();
+        const use = document.getElementById('llmSubUse');
+        use.textContent = sd.provider
+          ? `This workspace runs chat on ${sd.provider} / ${sd.model}. Change it in the setup wizard.`
+          : 'No subscription is used for chat yet — pick one in the setup wizard (/setup).';
+      }
+    } catch (e) { /* leave the line empty */ }
   } catch (e) { /* hidden */ }
 }
 
