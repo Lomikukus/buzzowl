@@ -1237,12 +1237,17 @@
                 const data = await res.json();
                 const models = data.models || [];
                 if (!models.length) return;
-                modelSelect.innerHTML = '';
-                const defaultModel = data.default_model || models[0];
+                // Keep the placeholder <option value="">default</option> (see the
+                // static markup above) selected — appended models are never marked
+                // selected, so modelSelect.value stays "" unless the user picks one.
+                // That empty value becomes `null` (line ~1190: `modelSelect.value ||
+                // null`), so body.model is omitted and the workspace's own chat/
+                // default LLM role wins (routers/chat.py: `body.model or None`)
+                // instead of this dropdown silently pinning the platform's model.
+                while (modelSelect.options.length > 1) modelSelect.remove(1);
                 models.forEach(m => {
                     const opt = document.createElement('option');
                     opt.value = m; opt.textContent = m;
-                    if (m === defaultModel) opt.selected = true;
                     modelSelect.appendChild(opt);
                 });
             } catch {}

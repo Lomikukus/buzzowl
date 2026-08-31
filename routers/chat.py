@@ -957,7 +957,12 @@ async def chat_endpoint(request: Request, body: ChatRequest, user: dict = Depend
     # here (instead of pre-computing it from the legacy keys) is what lets the
     # org's own role model win instead of being permanently shadowed by them;
     # body.model, when the caller supplied one, still wins over all of that
-    # (see resolve()'s `model or entry.get("model")`).
+    # (see resolve()'s `model or entry.get("model")`). Unlike
+    # _resolve_pi_chat_target (Pi path), this doesn't special-case a `chat`
+    # role resolving to a kind="pi" provider — llm.chat()/achat() handles that
+    # itself (kind="pi" rejects the tool-calling rounds below, and the
+    # tool-loop's except-Exception falls back to a one-shot completion via
+    # _call_cloud_sync, where kind="pi" works fine with no tools).
     model = body.model or None
 
     # ── Layer 1: roster (always injected, free) ───────────────────────────

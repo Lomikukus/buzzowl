@@ -554,6 +554,32 @@ class TestChatModelResolution:
                 context.config["llm"] = saved_llm_block
         assert cap["json"]["model"] == expected_model
 
+    def test_platform_llm_block_chat_role_wins_over_legacy_keys(self, app_client):
+        """(2a review follow-up) A platform install WITH an llm: block whose
+        roles.chat.model differs from the legacy pi_chat_model must use the
+        llm: block's model. config.yaml ships both values equal today, so
+        test (c) alone would pass even if the llm: block were ignored
+        entirely — this pins the actual precedence (llm: block beats the
+        legacy keys) rather than relying on that coincidence."""
+        saved_llm_block = context.config.get("llm")
+        custom_llm_block = {
+            "providers": {"openrouter": {"kind": "openai-compat",
+                                          "base_url": "https://openrouter.example/v1",
+                                          "api_key": "test-key"}},
+            "roles": {"chat": {"provider": "openrouter", "model": "llm-block-chat-model"}},
+        }
+        context.config["llm"] = custom_llm_block
+        try:
+            legacy_model = context.config.get("pi_chat_model")
+            assert legacy_model != "llm-block-chat-model"   # sanity: genuinely different
+            cap = self._post_chat(app_client)
+        finally:
+            if saved_llm_block is not None:
+                context.config["llm"] = saved_llm_block
+            else:
+                context.config.pop("llm", None)
+        assert cap["json"]["model"] == "llm-block-chat-model"
+
     def test_explicit_body_model_wins(self, app_client):
         """(d) body.model, when supplied, wins over the org's own role model."""
         self._seed_org_overlay(
@@ -653,6 +679,37 @@ class TestPiChatModelResolution:
         assert provider == llm.provider_for_brain(expected_brain)
         assert brain == expected_brain
         assert model == expected_model
+
+    async def test_platform_llm_block_chat_role_wins_over_legacy_keys(self):
+        """(2a review follow-up) Same precedence pin as the Python path: a
+        platform llm: block's roles.chat.model must win over the legacy
+        pi_chat_model when the two differ, not just when they happen to
+        coincide (as they do in the shipped config.yaml)."""
+        from routers.chat import _resolve_pi_chat_target
+
+        saved_llm_block = context.config.get("llm")
+        custom_llm_block = {
+            "providers": {"openrouter": {"kind": "openai-compat",
+                                          "base_url": "https://openrouter.example/v1",
+                                          "api_key": "test-key"}},
+            "roles": {"chat": {"provider": "openrouter", "model": "llm-block-chat-model"}},
+        }
+        context.config["llm"] = custom_llm_block
+        try:
+            legacy_model = context.config.get("pi_chat_model")
+            assert legacy_model != "llm-block-chat-model"   # sanity: genuinely different
+            with (
+                patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+                patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+            ):
+                provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
+        finally:
+            if saved_llm_block is not None:
+                context.config["llm"] = saved_llm_block
+            else:
+                context.config.pop("llm", None)
+        assert provider == "openrouter"
+        assert model == "llm-block-chat-model"
 
     async def test_resolve_error_falls_back_to_legacy_config_keys(self):
         """An enforced light org with no provider makes llm.resolve() raise;
