@@ -86,6 +86,12 @@ Some integration tests that call a real LLM are skipped unless you set
   with no traceable source is marked `(unconfirmed)`.
 - **Multi-tenancy is not optional.** Every table carries `org_id`; new queries
   must be scoped to it — nothing should cross an org boundary.
+- **Bump the `?v=` when you change a shared static asset.** Pages reference
+  `theme.css`, `navbar.js` and friends with a version query string. Editing the
+  file without bumping it leaves warm browsers running the old copy — that has
+  already caused one "the change didn't deploy" bug. `/static` is served with
+  `Cache-Control: no-cache` so the browser revalidates, but the query string
+  stays the explicit signal.
 
 ## Proposing a change
 

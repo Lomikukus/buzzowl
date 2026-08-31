@@ -80,6 +80,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "connect-src 'self' wss: ws: *; "
             "font-src 'self' data:"
         )
+        # /static has no Cache-Control of its own, so browsers guess a freshness
+        # lifetime from Last-Modified and can serve a stale asset for days. That
+        # bit us once: navbar.js was rewritten but kept its ?v= string, so warm
+        # caches kept running the old file. "no-cache" still stores the asset,
+        # it just revalidates first -- the ETag turns that into a cheap 304.
+        if request.url.path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
 
