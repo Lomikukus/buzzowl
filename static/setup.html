@@ -159,12 +159,6 @@
                             own machine; use an API key for anything you rely on.
                         </p>
                     </div>
-                    <div class="form-row">
-                        <label>Model</label>
-                        <select class="form-input" id="subModel">
-                            <option value="">loading models…</option>
-                        </select>
-                    </div>
                     <button class="btn" id="subConnectBtn">Sign in with ChatGPT</button>
                     <div id="subFlow" style="display:none;margin-top:0.5rem">
                         <a id="subAuthLink" href="#" target="_blank" rel="noopener"
@@ -174,6 +168,15 @@
                             <input class="form-input" id="subCode" placeholder="paste code / redirect URL" autocomplete="off">
                         </div>
                         <button class="btn primary" id="subCompleteBtn">Finish sign-in</button>
+                    </div>
+                    <!-- Model choice only after sign-in: the list comes from
+                         what the connected account can actually drive. -->
+                    <div id="subUse" style="display:none;margin-top:0.5rem">
+                        <div class="form-row">
+                            <label>Model</label>
+                            <select class="form-input" id="subModel"></select>
+                        </div>
+                        <button class="btn primary" id="subUseBtn">Use for chat</button>
                     </div>
                     <div class="status-line" id="subStatus" style="margin-top:0.5rem"></div>
                     <p class="desc" style="margin-top:0.35rem">
@@ -388,55 +391,61 @@
         });
 
         // ── ChatGPT subscription ────────────────────────────────────────────
-        // Two halves: the OAuth itself lives in agent-pi (/api/llm/oauth/pi/*),
-        // and POST /api/org/llm/subscription is what makes this workspace
-        // actually route chat through it. The second half is not optional —
-        // without it the account is connected and nothing uses it.
+        // Three steps, in this order for a reason: sign in (agent-pi
+        // /oauth/*), then pick from the models the connected ACCOUNT reports,
+        // then tell the workspace to route chat through it. The middle step
+        // cannot be moved before the login — the account's model list is only
+        // knowable once there is a token to ask with, and pi-ai's static
+        // registry is not a substitute for it (it lists ids a plan may not
+        // have, which answer HTTP 200 with an empty body instead of an error).
         let _subSession = null;
         let _subBusy = false;
 
         async function refreshSubscription() {
-            const card = document.getElementById('subCard');
             try {
                 const r = await fetch('/api/org/llm/subscription', { headers: H() });
                 if (!r.ok) return;                      // non-admin or no DB: leave it hidden
                 const d = await r.json();
                 if (!d.offerable) return;               // hosted install, or gray flows off
-                card.style.display = '';
-                await loadSubModels(d.model);
-                if (d.provider === 'openai-codex' && d.model) {
+                document.getElementById('subCard').style.display = '';
+                // Already signed in from an earlier visit: show the picker now.
+                const shown = await loadSubModels(d.model, !!d.provider);
+                if (d.provider && d.model) {
                     document.getElementById('subStatus').textContent =
-                        'Connected — chat runs on ' + d.model + '.';
+                        'Chat runs on ' + d.model + '.';
+                } else if (shown) {
+                    document.getElementById('subStatus').textContent =
+                        'Signed in — pick a model and click Use for chat.';
                 }
             } catch (e) { /* card stays hidden */ }
         }
 
-        // The model ids come from agent-pi's own registry, never from a list
-        // baked into this page — an id the registry does not know is only
-        // rejected once a message is actually sent.
-        async function loadSubModels(selected) {
+        async function loadSubModels(selected, reveal) {
             const sel = document.getElementById('subModel');
+            const out = document.getElementById('subStatus');
             try {
                 const r = await fetch('/api/llm/oauth/pi/models?provider=openai-codex', { headers: H() });
                 const d = await r.json();
                 const models = (d && d.models) || [];
-                if (!r.ok || !models.length) throw new Error(d.detail || 'no models');
+                if (!r.ok || !models.length) return false;
+                // 'registry' means the account could not be asked (not signed
+                // in, or the call failed) — those ids are unverified guesses.
+                const verified = d.source === 'account';
+                if (!verified && !reveal) return false;
                 sel.innerHTML = '';
                 models.forEach(m => {
                     const o = document.createElement('option');
                     o.value = m.id;
-                    o.textContent = m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id;
+                    o.textContent = m.description ? `${m.name} — ${m.description}` : m.name;
                     sel.appendChild(o);
                 });
                 const ids = models.map(m => m.id);
-                sel.value = (selected && ids.includes(selected)) ? selected
-                          : (ids.find(i => i.includes('codex')) || ids[0]);
-            } catch (e) {
-                sel.innerHTML = '<option value="">could not load models</option>';
-                document.getElementById('subConnectBtn').disabled = true;
-                document.getElementById('subStatus').textContent =
-                    'Could not read the model list from the agent service — sign-in disabled until it answers.';
-            }
+                sel.value = (selected && ids.includes(selected)) ? selected : ids[0];
+                if (reveal || verified) document.getElementById('subUse').style.display = '';
+                if (!verified) out.textContent =
+                    'Could not confirm these against your account — if one fails, pick another.';
+                return true;
+            } catch (e) { return false; }
         }
 
         async function subConnect() {
@@ -494,26 +503,41 @@
                 out.textContent = 'Sign-in failed: ' + e.message + ' — click Sign in with ChatGPT again.';
                 return;
             } finally { _subBusy = false; btn.disabled = false; }
-            // Connected. Now the half that actually makes the app use it — the
-            // server re-checks the connection and runs a one-word completion
-            // against the chosen model, so a model this plan cannot drive is
-            // caught here and not on the user's first chat message.
-            out.textContent = 'Connected — checking the model…';
+
+            document.getElementById('subFlow').style.display = 'none';
+            out.textContent = 'Signed in — reading the models your account can use…';
+            const shown = await loadSubModels(null, true);
+            out.textContent = shown
+                ? 'Signed in — pick a model and click Use for chat.'
+                : 'Signed in, but the model list could not be read. Reload this page.';
+        }
+
+        async function subUse() {
+            const out = document.getElementById('subStatus');
+            const btn = document.getElementById('subUseBtn');
+            const model = document.getElementById('subModel').value;
+            if (!model) { out.textContent = 'Pick a model first.'; return; }
+            out.textContent = 'Checking ' + model + '…';
+            btn.disabled = true;
             try {
-                const model = document.getElementById('subModel').value;
+                // The server re-checks the connection and runs a one-word
+                // completion, so a model this account cannot drive is caught
+                // here and not on the first chat message.
                 const r = await fetch('/api/org/llm/subscription', {
                     method: 'POST', headers: H(),
                     body: JSON.stringify({ provider: 'openai-codex', model }),
                 });
                 const d = await r.json();
-                if (!r.ok) { out.textContent = 'Connected, but not in use: ' + (d.detail || r.status); return; }
-                document.getElementById('subFlow').style.display = 'none';
-                out.textContent = 'Done — chat runs on ' + d.model + '.';
-            } catch (e) { out.textContent = 'Connected, but not in use: ' + e.message; }
+                out.textContent = r.ok
+                    ? 'Done — chat runs on ' + d.model + '.'
+                    : 'Not in use: ' + (d.detail || r.status);
+            } catch (e) { out.textContent = 'Not in use: ' + e.message; }
+            finally { btn.disabled = false; }
         }
 
         document.getElementById('subConnectBtn').addEventListener('click', subConnect);
         document.getElementById('subCompleteBtn').addEventListener('click', subComplete);
+        document.getElementById('subUseBtn').addEventListener('click', subUse);
 
         async function connectOpenRouter() {
             const status = document.getElementById('llmStatus');

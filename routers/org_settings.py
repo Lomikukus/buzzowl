@@ -375,12 +375,17 @@ async def set_org_subscription(body: dict, user: dict = Depends(current_user)):
         "provider": provider,
         "model": model,
         "messages": [{"role": "user", "content": "Reply with the single word OK."}],
-        "max_tokens": 16,
+        # Roomy enough that a reasoning model still has budget left for text.
+        "max_tokens": 256,
     }, user)
     if not (probe or {}).get("text"):
+        # An id the account does not have comes back as HTTP 200 with an empty
+        # body and zero token usage rather than an error, which is exactly what
+        # this catches. The picker offers the account's own list, so this is
+        # the rare case of a model that vanished between listing and use.
         raise HTTPException(status_code=400,
-                            detail=f"{provider} answered with no text for model '{model}' — "
-                                   "pick a model your plan can drive.")
+                            detail=f"{provider} returned nothing for model '{model}' — your account "
+                                   "cannot drive it. Reload the page to refresh the model list.")
 
     await db_module.update_org_settings(
         user["org_id"], {"llm_subscription": {"provider": provider, "model": model}})

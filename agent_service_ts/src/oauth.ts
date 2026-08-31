@@ -161,6 +161,56 @@ export async function getOAuthAuth(provider: SubscriptionProvider): Promise<OAut
   return { apiKey: creds.access, credentials: creds };
 }
 
+/** One model a connected account may actually drive. */
+export interface AccountModel { id: string; name: string; description: string }
+
+// Codex's own backend takes a client version and refuses older ones
+// (each model carries a minimal_client_version; 0.98.0 at the time of writing).
+const CODEX_MODELS_CLIENT_VERSION = '0.104.0';
+
+/**
+ * Models this *account* can drive, straight from Codex's backend — not what
+ * pi-ai's registry happens to know.
+ *
+ * The two lists are not the same and the difference is silent: on a Plus plan
+ * the registry offers seven gpt-5.x-codex ids that answer HTTP 200 with an
+ * empty body and zero token usage, while the account actually has gpt-5.4 and
+ * gpt-5.4-mini. Anything picked from the registry therefore looks fine at
+ * setup time and fails on the first real message.
+ *
+ * Returns null when the provider has no such endpoint (github-copilot) or is
+ * not connected; throws when the call itself fails, so the caller can decide
+ * whether to fall back.
+ */
+export async function listAccountModels(provider: SubscriptionProvider): Promise<AccountModel[] | null> {
+  if (provider !== 'openai-codex') return null;
+  const auth = await getOAuthAuth(provider);
+  if (!auth) return null;
+  const accountId = (auth.credentials as { accountId?: string }).accountId ?? '';
+  const r = await fetch(
+    `https://chatgpt.com/backend-api/codex/models?client_version=${CODEX_MODELS_CLIENT_VERSION}`,
+    {
+      headers: {
+        Authorization: `Bearer ${auth.apiKey}`,
+        'chatgpt-account-id': accountId,
+        'User-Agent': 'codex-cli',
+        originator: 'codex_cli_rs',
+      },
+    },
+  );
+  if (!r.ok) {
+    throw new OAuthHttpError(r.status, `codex model list failed (HTTP ${r.status})`);
+  }
+  const body = await r.json() as {
+    models?: Array<{ slug?: string; display_name?: string; description?: string;
+                     visibility?: string; supported_in_api?: boolean }>;
+  };
+  return (body.models ?? [])
+    // 'hide' is Codex's own internal tooling (e.g. codex-auto-review).
+    .filter(m => !!m.slug && m.visibility !== 'hide' && m.supported_in_api !== false)
+    .map(m => ({ id: m.slug as string, name: m.display_name || (m.slug as string), description: m.description || '' }));
+}
+
 /** Convenience wrapper: just the access token, or null when not connected. */
 export async function getAccessToken(provider: SubscriptionProvider): Promise<string | null> {
   const auth = await getOAuthAuth(provider);

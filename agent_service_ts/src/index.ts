@@ -7,7 +7,7 @@ import { createRun, startRun, getRun, cancelRun, listRuns, queueStats } from './
 import { runPiChat, runPiComplete } from './agent.js';
 import {
   OAuthHttpError, completeOAuthLogin, disconnectOAuth, isSubscriptionProvider,
-  oauthStatus, startOAuthLogin,
+  listAccountModels, oauthStatus, startOAuthLogin,
 } from './oauth.js';
 
 const app = Fastify({ logger: true });
@@ -300,18 +300,30 @@ app.post('/oauth/complete', async (req, reply) => {
 // as connected because getOAuthAuth() auto-refreshes on next use.
 app.get('/oauth/status', async () => oauthStatus());
 
-// GET /oauth/models?provider=openai-codex → {provider, models:[{id,name}]}
-// The setup wizard's model picker reads this instead of carrying a hardcoded
-// list: a list in the UI rots silently against pi-ai's registry (the first
-// version of that card shipped two ids the registry does not know, and an
-// unknown id only fails once the user sends their first message).
+// GET /oauth/models?provider=openai-codex
+//   → {provider, source: 'account'|'registry', models:[{id,name,description}]}
+// 'account' is the list Codex's backend reports for the connected account and
+// is the only one worth offering: pi-ai's registry knows ids a given plan does
+// not have, and those fail silently (HTTP 200, empty body, zero usage) rather
+// than at setup. The registry is the fallback for "not connected yet" and for
+// providers with no such endpoint.
 app.get('/oauth/models', async (req, reply) => {
   const provider = (req.query as { provider?: string } | undefined)?.provider;
   if (!provider || !isSubscriptionProvider(provider)) {
     return reply.code(400).send({ error: OAUTH_PROVIDER_HINT });
   }
+  try {
+    const account = await listAccountModels(provider);
+    if (account && account.length) return { provider, source: 'account', models: account };
+  } catch (err) {
+    req.log.warn({ err }, 'account model list failed — falling back to the registry');
+  }
   const models = (getModels(provider as Parameters<typeof getModels>[0]) ?? []) as Array<{ id: string; name?: string }>;
-  return { provider, models: models.map(m => ({ id: m.id, name: m.name ?? m.id })) };
+  return {
+    provider,
+    source: 'registry',
+    models: models.map(m => ({ id: m.id, name: m.name ?? m.id, description: '' })),
+  };
 });
 
 // POST /oauth/disconnect {provider} → forget stored credentials
