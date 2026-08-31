@@ -14,12 +14,14 @@
   color-scheme: dark;
   --c-font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --c-font-mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
-  --c-accent: #0f62fe;
-  --c-accent2: #0353e9;
-  --c-accenthi: #4589ff;
-  --c-accentline: #2f4a80;
-  --c-accenttint: #182a4d;
-  --c-accenttint2: #1d3a6b;
+  --c-accent: #E8A33D;
+  --c-accent2: #D18A1F;
+  --c-accenthi: #F6C566;
+  --c-accentline: #6B5426;
+  --c-accenttint: #2B2113;
+  --c-accenttint2: #3A2C15;
+  --c-on-accent: #131313;
+  --c-radius: 8px;
   --c-bg: #161616;
   --c-bg2: #1c1c1c;
   --c-bg3: #161616;
@@ -220,7 +222,7 @@
   letter-spacing:0.07em;
 }
 :root[data-theme="carbon"] .feed-head .s-label:hover{
-  border-bottom-color:var(--c-accent,#0f62fe);
+  border-bottom-color:var(--c-accent, #E8A33D);
 }
 :root[data-theme="carbon"] .feed-head #feed-count,
 :root[data-theme="carbon"] .feed-head .btn{
@@ -388,7 +390,7 @@
 }
 :root[data-theme="carbon"] .tab-btn.active{
   color:var(--c-text,#f4f4f4);
-  border-bottom-color:var(--c-accent,#0f62fe);
+  border-bottom-color:var(--c-accent, #E8A33D);
   font-weight:600;
 }
 
@@ -496,7 +498,7 @@
 :root[data-theme="carbon"] .toast{
   border-radius:0;
   box-shadow:none;
-  border-left:2px solid var(--c-accent,#0f62fe);
+  border-left:2px solid var(--c-accent, #E8A33D);
 }
 
 
@@ -530,8 +532,8 @@
   width: 240px;
 }
 :root[data-theme="carbon"] .search-input:focus {
-  border-color: var(--c-accent, #0f62fe);
-  box-shadow: inset 0 -1px 0 0 var(--c-accent, #0f62fe);
+  border-color: var(--c-accent, #E8A33D);
+  box-shadow: inset 0 -1px 0 0 var(--c-accent, #E8A33D);
 }
 
 /* Connected filter-chip group: squared chips that share a single hairline. */
@@ -561,9 +563,9 @@
 }
 /* Active chip = solid accent, raised so its full border shows. */
 :root[data-theme="carbon"] .chip.active {
-  background: var(--c-accent, #0f62fe);
-  border-color: var(--c-accent, #0f62fe);
-  color: var(--c-texthi, #ffffff);
+  background: var(--c-accent, #E8A33D);
+  border-color: var(--c-accent, #E8A33D);
+  color: var(--c-on-accent, #131313);
   z-index: 2;
 }
 
@@ -635,7 +637,7 @@
 :root[data-theme="carbon"] .client-card:focus {
   border-color: var(--c-line3, #525252);
   background: var(--c-surface2, #333333);
-  box-shadow: inset 0 2px 0 0 var(--c-accent, #0f62fe);
+  box-shadow: inset 0 2px 0 0 var(--c-accent, #E8A33D);
   outline: none;
 }
 
@@ -832,7 +834,7 @@
   border-radius:0;
   background:var(--c-bg2,#1c1c1c);
   border:1px solid var(--c-line,#393939);
-  border-left:3px solid var(--c-accent,#0f62fe);
+  border-left:3px solid var(--c-accent, #E8A33D);
 }
 
 /* ── Eyebrow section labels: mono, uppercase, muted (Carbon caps) ── */
@@ -882,7 +884,7 @@
   border-radius:0;
   background:var(--c-bg2,#1c1c1c);
   border:1px solid var(--c-line,#393939);
-  border-left:3px solid var(--c-accent,#0f62fe);
+  border-left:3px solid var(--c-accent, #E8A33D);
   box-shadow:none;
   padding:20px 24px;
 }
@@ -1233,7 +1235,7 @@
   border-left:2px solid transparent;
 }
 :root[data-theme="carbon"] .session-row.active{
-  border-left:2px solid var(--c-accent,#0f62fe);
+  border-left:2px solid var(--c-accent, #E8A33D);
   background:var(--c-surface,#262626);
 }
 :root[data-theme="carbon"] .session-row:hover{
@@ -1260,7 +1262,7 @@
   background:var(--c-bg2,#1c1c1c);
 }
 :root[data-theme="carbon"] .client-row.active{
-  border-left:2px solid var(--c-accent,#0f62fe);
+  border-left:2px solid var(--c-accent, #E8A33D);
   background:var(--c-surface,#262626);
 }
 
@@ -1360,7 +1362,7 @@
   background:var(--c-surface,#262626);
 }
 :root[data-theme="carbon"] .prompt-chip:hover{
-  border-color:var(--c-accent,#0f62fe);
+  border-color:var(--c-accent, #E8A33D);
   background:var(--c-surface2,#333333);
 }
 :root[data-theme="carbon"] #chatInput{
@@ -1369,9 +1371,9 @@
   background:var(--c-ink,#0c0c0c);
 }
 :root[data-theme="carbon"] #chatInput:focus{
-  outline:2px solid var(--c-accent,#0f62fe);
+  outline:2px solid var(--c-accent, #E8A33D);
   outline-offset:-2px;
-  border-color:var(--c-accent,#0f62fe);
+  border-color:var(--c-accent, #E8A33D);
 }
 :root[data-theme="carbon"] #sendBtn{
   border-radius:0;
@@ -1448,7 +1450,7 @@
 }
 :root[data-theme="carbon"] .client-item.active{
   background:var(--c-surface, #262626);
-  border-left-color:var(--c-accent, #0f62fe);
+  border-left-color:var(--c-accent, #E8A33D);
 }
 :root[data-theme="carbon"] .client-industry{
   font-family:var(--c-font-mono, monospace);
@@ -1530,7 +1532,7 @@
 :root[data-theme="carbon"] .phase-banner{
   border-radius:0;
   border:1px solid var(--c-line, #393939);
-  box-shadow:inset 0 2px 0 0 var(--c-accent, #0f62fe);
+  box-shadow:inset 0 2px 0 0 var(--c-accent, #E8A33D);
   padding:16px 18px;
 }
 :root[data-theme="carbon"] .phase-tool-count{
@@ -1597,7 +1599,7 @@
 /* Freshest/primary card in each stack gets a top accent keyline */
 :root[data-theme="carbon"] .research-docs-list .finding-card:first-child,
 :root[data-theme="carbon"] .findings-list .finding-card:first-child{
-  box-shadow:inset 0 2px 0 0 var(--c-accent, #0f62fe);
+  box-shadow:inset 0 2px 0 0 var(--c-accent, #E8A33D);
 }
 
 /* Product-fit / relevance numbers — mono, tabular, squared */
@@ -1661,8 +1663,8 @@
   padding: 0.3rem 0.6rem;
 }
 :root[data-theme="carbon"] .filter-select:focus {
-  border-color: var(--c-accent, #0f62fe);
-  outline: 1px solid var(--c-accent, #0f62fe);
+  border-color: var(--c-accent, #E8A33D);
+  outline: 1px solid var(--c-accent, #E8A33D);
   outline-offset: -2px;
 }
 
@@ -1832,7 +1834,7 @@
   margin-bottom: 12px;
 }
 :root[data-theme="carbon"] .opp-card.focus {
-  border-left: 2px solid var(--c-accent, #0f62fe);
+  border-left: 2px solid var(--c-accent, #E8A33D);
 }
 :root[data-theme="carbon"] .opp-head {
   gap: 10px;
@@ -2060,11 +2062,11 @@
 /* Focus: top accent keyline (drop the left rail), keep sides hairline */
 :root[data-theme="carbon"] .product-card.focus-card {
   border-left: 1px solid var(--c-line, #393939);
-  border-top: 2px solid var(--c-accent, #0f62fe);
+  border-top: 2px solid var(--c-accent, #E8A33D);
 }
 /* Verified: top accent keyline */
 :root[data-theme="carbon"] .product-card.verified-card {
-  border-top: 2px solid var(--c-accent, #0f62fe);
+  border-top: 2px solid var(--c-accent, #E8A33D);
 }
 
 /* ============================================================
@@ -2211,7 +2213,7 @@
   z-index: 1;
 }
 :root[data-theme="carbon"] .scope-tab.active {
-  border-color: var(--c-accent, #0f62fe);
+  border-color: var(--c-accent, #E8A33D);
   z-index: 2;                         /* accent border wins over neighbours */
 }
 
@@ -2230,7 +2232,7 @@
   border-top: 1px solid var(--c-line, #393939);
 }
 :root[data-theme="carbon"] .rank-card.focus {
-  border-left-color: var(--c-accent, #0f62fe);
+  border-left-color: var(--c-accent, #E8A33D);
 }
 
 /* Rank number — mono, tabular, right-aligned ledger figure */
@@ -2296,7 +2298,7 @@
   height:36px;
 }
 :root[data-theme="carbon"] .search-input:focus{
-  border-bottom-color:var(--c-accent,#0f62fe);
+  border-bottom-color:var(--c-accent, #E8A33D);
 }
 
 /* ── Filter chips → Carbon tabs (All / Research reports / Findings / OSINT) ──
@@ -2326,7 +2328,7 @@
 }
 :root[data-theme="carbon"] .chip.active{
   background:transparent;
-  border-bottom-color:var(--c-accent,#0f62fe);
+  border-bottom-color:var(--c-accent, #E8A33D);
   color:var(--c-text,#f4f4f4);
 }
 
@@ -2370,7 +2372,7 @@
   background:var(--c-bg2,#1c1c1c);
 }
 :root[data-theme="carbon"] .doc-row.open{
-  border-left-color:var(--c-accent,#0f62fe);
+  border-left-color:var(--c-accent, #E8A33D);
   background:var(--c-bg2,#1c1c1c);
 }
 :root[data-theme="carbon"] .doc-row-header{
@@ -2446,7 +2448,7 @@
   background:var(--c-bg,#161616);
 }
 :root[data-theme="carbon"] .auth-input:focus{
-  border-bottom-color:var(--c-accent,#0f62fe);
+  border-bottom-color:var(--c-accent, #E8A33D);
 }
 :root[data-theme="carbon"] .auth-btn{
   border-radius:0;
@@ -2531,7 +2533,7 @@
   background:var(--c-surface,#262626);
 }
 :root[data-theme="carbon"] .btn.primary{
-  border-color:var(--c-accent,#0f62fe);
+  border-color:var(--c-accent, #E8A33D);
 }
 :root[data-theme="carbon"] .btn.danger{
   border-color:var(--c-line3,#525252);
@@ -2551,7 +2553,7 @@
 :root[data-theme="carbon"] .form-input:focus,
 :root[data-theme="carbon"] .form-select:focus,
 :root[data-theme="carbon"] .auth-input:focus{
-  outline:2px solid var(--c-accent,#0f62fe);
+  outline:2px solid var(--c-accent, #E8A33D);
   outline-offset:-2px;
   border-color:transparent;
 }
@@ -2587,7 +2589,7 @@
 
 /* squared checkbox in the job modal, aligned with the Carbon input language */
 :root[data-theme="carbon"] .hb-box input[type="checkbox"]{
-  accent-color:var(--c-accent,#0f62fe);
+  accent-color:var(--c-accent, #E8A33D);
 }
 
 /* carbon relayout: today */
@@ -2640,7 +2642,7 @@
   align-items:start;
   background:var(--c-bg2,#1c1c1c);
   border:1px solid var(--c-line,#393939);
-  border-left:2px solid var(--c-accent,#0f62fe);
+  border-left:2px solid var(--c-accent, #E8A33D);
   border-radius:0;
   padding:16px 18px;
   margin-bottom:8px;
@@ -2648,7 +2650,7 @@
 }
 /* Severity stripe from card state / fact badges (later rules win ties;
    red > orange > focus/default). */
-:root[data-theme="carbon"] .nba-card.focus{ border-left-color:var(--c-accent,#0f62fe); }
+:root[data-theme="carbon"] .nba-card.focus{ border-left-color:var(--c-accent, #E8A33D); }
 :root[data-theme="carbon"] .nba-card:has(.fb-outreach_draft){ border-left-color:var(--c-orange,#ff832b); }
 :root[data-theme="carbon"] .nba-card:has(.fb-outreach_followup){ border-left-color:var(--c-red,#fa4d56); }
 
