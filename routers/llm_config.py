@@ -8,6 +8,7 @@ Moved from the former routers/transcription.py (removed):
   POST /api/llm/config
   POST /api/llm/oauth/openrouter/start
   POST /api/llm/oauth/openrouter/complete
+  GET  /api/llm/oauth/pi/models
   GET  /api/llm/oauth/pi/status
   POST /api/llm/oauth/pi/start
   POST /api/llm/oauth/pi/complete
@@ -351,6 +352,17 @@ async def pi_oauth_status(user: dict = Depends(current_user)):
         except HTTPException:
             providers = {}
     return {"enabled": enabled, "providers": providers}
+
+
+@router.get("/api/llm/oauth/pi/models")
+async def pi_oauth_models(provider: str = "openai-codex", user: dict = Depends(current_user)):
+    """Model ids agent-pi's registry knows for a subscription provider, so the
+    setup wizard's picker cannot drift out of sync with what actually runs."""
+    if provider not in _GRAY_OAUTH_PROVIDERS:
+        raise HTTPException(status_code=400,
+                            detail=f"provider must be one of {', '.join(_GRAY_OAUTH_PROVIDERS)}")
+    return await _pi_oauth_forward("GET", f"/oauth/models?provider={provider}",
+                                   {"provider": provider}, user)
 
 
 @router.post("/api/llm/oauth/pi/start")

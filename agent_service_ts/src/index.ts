@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
+import { getModels } from '@earendil-works/pi-ai';
 import { config, brainToProvider } from './config.js';
 import { pool } from './db.js';
 import { createRun, startRun, getRun, cancelRun, listRuns, queueStats } from './runner.js';
@@ -298,6 +299,20 @@ app.post('/oauth/complete', async (req, reply) => {
 // expires_at is the ACCESS token expiry — an expired access token still counts
 // as connected because getOAuthAuth() auto-refreshes on next use.
 app.get('/oauth/status', async () => oauthStatus());
+
+// GET /oauth/models?provider=openai-codex → {provider, models:[{id,name}]}
+// The setup wizard's model picker reads this instead of carrying a hardcoded
+// list: a list in the UI rots silently against pi-ai's registry (the first
+// version of that card shipped two ids the registry does not know, and an
+// unknown id only fails once the user sends their first message).
+app.get('/oauth/models', async (req, reply) => {
+  const provider = (req.query as { provider?: string } | undefined)?.provider;
+  if (!provider || !isSubscriptionProvider(provider)) {
+    return reply.code(400).send({ error: OAUTH_PROVIDER_HINT });
+  }
+  const models = (getModels(provider as Parameters<typeof getModels>[0]) ?? []) as Array<{ id: string; name?: string }>;
+  return { provider, models: models.map(m => ({ id: m.id, name: m.name ?? m.id })) };
+});
 
 // POST /oauth/disconnect {provider} → forget stored credentials
 app.post('/oauth/disconnect', async (req, reply) => {

@@ -162,13 +162,7 @@
                     <div class="form-row">
                         <label>Model</label>
                         <select class="form-input" id="subModel">
-                            <option value="gpt-5.1-codex" selected>gpt-5.1-codex</option>
-                            <option value="gpt-5.1-codex-mini">gpt-5.1-codex-mini</option>
-                            <option value="gpt-5.1-codex-max">gpt-5.1-codex-max</option>
-                            <option value="gpt-5.2-codex">gpt-5.2-codex</option>
-                            <option value="gpt-5.3-codex">gpt-5.3-codex</option>
-                            <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
-                            <option value="gpt-5-codex">gpt-5-codex</option>
+                            <option value="">loading models…</option>
                         </select>
                     </div>
                     <button class="btn" id="subConnectBtn">Sign in with ChatGPT</button>
@@ -399,6 +393,7 @@
         // actually route chat through it. The second half is not optional —
         // without it the account is connected and nothing uses it.
         let _subSession = null;
+        let _subBusy = false;
 
         async function refreshSubscription() {
             const card = document.getElementById('subCard');
@@ -408,12 +403,40 @@
                 const d = await r.json();
                 if (!d.offerable) return;               // hosted install, or gray flows off
                 card.style.display = '';
+                await loadSubModels(d.model);
                 if (d.provider === 'openai-codex' && d.model) {
-                    document.getElementById('subModel').value = d.model;
                     document.getElementById('subStatus').textContent =
                         'Connected — chat runs on ' + d.model + '.';
                 }
             } catch (e) { /* card stays hidden */ }
+        }
+
+        // The model ids come from agent-pi's own registry, never from a list
+        // baked into this page — an id the registry does not know is only
+        // rejected once a message is actually sent.
+        async function loadSubModels(selected) {
+            const sel = document.getElementById('subModel');
+            try {
+                const r = await fetch('/api/llm/oauth/pi/models?provider=openai-codex', { headers: H() });
+                const d = await r.json();
+                const models = (d && d.models) || [];
+                if (!r.ok || !models.length) throw new Error(d.detail || 'no models');
+                sel.innerHTML = '';
+                models.forEach(m => {
+                    const o = document.createElement('option');
+                    o.value = m.id;
+                    o.textContent = m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id;
+                    sel.appendChild(o);
+                });
+                const ids = models.map(m => m.id);
+                sel.value = (selected && ids.includes(selected)) ? selected
+                          : (ids.find(i => i.includes('codex')) || ids[0]);
+            } catch (e) {
+                sel.innerHTML = '<option value="">could not load models</option>';
+                document.getElementById('subConnectBtn').disabled = true;
+                document.getElementById('subStatus').textContent =
+                    'Could not read the model list from the agent service — sign-in disabled until it answers.';
+            }
         }
 
         async function subConnect() {
@@ -432,21 +455,45 @@
             } catch (e) { out.textContent = 'Connect failed: ' + e.message; }
         }
 
+        function subFlowReset() {
+            _subSession = null;
+            document.getElementById('subFlow').style.display = 'none';
+            document.getElementById('subCode').value = '';
+        }
+
         async function subComplete() {
             const out = document.getElementById('subStatus');
+            const btn = document.getElementById('subCompleteBtn');
             const code = document.getElementById('subCode').value.trim();
+            if (_subBusy) return;
             if (!_subSession) { out.textContent = 'Start the sign-in first.'; return; }
             if (!code) { out.textContent = 'Paste the code from the login page.'; return; }
             out.textContent = 'Finishing sign-in…';
+            _subBusy = true; btn.disabled = true;
             try {
                 const r = await fetch('/api/llm/oauth/pi/complete', {
                     method: 'POST', headers: H(),
                     body: JSON.stringify({ session_id: _subSession, code }),
                 });
                 const d = await r.json();
+                // 202 is the only failure that keeps the session alive.
                 if (r.status === 202) { out.textContent = 'Still pending — approve it in the browser, then click Finish again.'; return; }
-                if (!r.ok) { out.textContent = 'Error: ' + (d.detail || r.status); return; }
-            } catch (e) { out.textContent = 'Sign-in failed: ' + e.message; return; }
+                if (!r.ok) {
+                    // agent-pi deletes the login session on ANY failed complete
+                    // (oauth.ts completeOAuthLogin), so this one is spent —
+                    // clicking Finish again could only ever answer "unknown or
+                    // expired session_id". Hand the user a fresh login instead.
+                    subFlowReset();
+                    out.textContent = (d.detail || ('Error ' + r.status)) + ' — starting a fresh sign-in…';
+                    await subConnect();
+                    out.textContent = 'That code did not work. Open the new login page below and paste the new code.';
+                    return;
+                }
+            } catch (e) {
+                subFlowReset();
+                out.textContent = 'Sign-in failed: ' + e.message + ' — click Sign in with ChatGPT again.';
+                return;
+            } finally { _subBusy = false; btn.disabled = false; }
             // Connected. Now the half that actually makes the app use it — the
             // server re-checks the connection and runs a one-word completion
             // against the chosen model, so a model this plan cannot drive is
