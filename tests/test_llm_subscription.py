@@ -153,50 +153,54 @@ async def test_get_reports_state_and_offerability(selfhosted, monkeypatch):
 # ── The chat path ───────────────────────────────────────────────────────────
 
 ORG_ID = 8
+SUB = {"provider": "openai-codex", "model": "gpt-5.4"}
 
 
-def _no_org_providers(monkeypatch):
-    """No org overlay and no usable llm: block, so resolve() cannot answer and
-    the subscription is what decides."""
+def _seed_overlay(monkeypatch, *, providers=None, roles=None, subscription=None, enforce=False):
+    """Seed the cached org overlay — llm.org_subscription reads it, no DB."""
     llm._org_overlays[ORG_ID] = (
         _time.monotonic() + 60,
-        {"plan": "light", "providers": {}, "roles": {}, "budget": None,
-         "month_cost": 0.0, "enforce": True},   # enforce → resolve() refuses outright
+        {"plan": "light", "providers": providers or {}, "roles": roles or {},
+         "budget": None, "month_cost": 0.0, "enforce": enforce,
+         "subscription": subscription or {}},
     )
-
-
-async def test_chat_routes_through_the_subscription(monkeypatch):
-    from routers.chat import _resolve_pi_chat_target
-
-    _no_org_providers(monkeypatch)
     monkeypatch.setitem(context.config, "llm_oauth_gray_flows", True)
     monkeypatch.setitem(context.config, "hosted", {})
-    try:
-        with patch("context.db_module.get_org_settings", new_callable=AsyncMock,
-                   return_value={"llm_subscription": {"provider": "openai-codex",
-                                                      "model": "gpt-5.1-codex"}}):
-            provider, brain, model = await _resolve_pi_chat_target(ORG_ID)
-    finally:
-        llm.invalidate_org_overlay(ORG_ID)
-    assert provider == "openai-codex"
-    assert brain == "openai-codex"
-    assert model == "gpt-5.1-codex"
 
 
-async def test_hosted_install_ignores_a_stored_subscription(monkeypatch):
-    """Same stored setting, hosted deployment — the config.yaml brain wins."""
+def _platform_openrouter(monkeypatch):
+    """The shipped config.yaml shape: a platform openrouter provider whose key
+    comes from an env var that is empty on a self-hosted install."""
+    monkeypatch.setitem(context.config, "llm", {
+        "providers": {"openrouter": {"kind": "openai-compat",
+                                     "base_url": "https://openrouter.ai/api/v1",
+                                     "api_key_env": "OPENROUTER_API_KEY"}},
+        "roles": {"chat": {"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"}},
+    })
+
+
+async def test_subscription_beats_the_keyless_platform_default(monkeypatch):
+    """The bug this pins: resolve() answers with the platform's openrouter for
+    an org that has no provider of its own, so the run died on "No API key for
+    provider: openrouter" while a connected subscription sat unused."""
     from routers.chat import _resolve_pi_chat_target
 
-    _no_org_providers(monkeypatch)
-    monkeypatch.setitem(context.config, "llm_oauth_gray_flows", True)
-    monkeypatch.setitem(context.config, "hosted", {"signup_enabled": True})
-    monkeypatch.setitem(context.config, "pi_chat_brain", "openrouter")
-    monkeypatch.setitem(context.config, "pi_chat_model", "deepseek/deepseek-v4-pro")
+    _seed_overlay(monkeypatch, subscription=SUB)
+    _platform_openrouter(monkeypatch)
     try:
-        with patch("context.db_module.get_org_settings", new_callable=AsyncMock,
-                   return_value={"llm_subscription": {"provider": "openai-codex",
-                                                      "model": "gpt-5.1-codex"}}):
-            provider, brain, model = await _resolve_pi_chat_target(ORG_ID)
+        provider, brain, model = await _resolve_pi_chat_target(ORG_ID)
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert (provider, brain, model) == ("openai-codex", "openai-codex", "gpt-5.4")
+
+
+async def test_platform_default_still_used_without_a_subscription(monkeypatch):
+    from routers.chat import _resolve_pi_chat_target
+
+    _seed_overlay(monkeypatch)
+    _platform_openrouter(monkeypatch)
+    try:
+        provider, _brain, model = await _resolve_pi_chat_target(ORG_ID)
     finally:
         llm.invalidate_org_overlay(ORG_ID)
     assert provider == "openrouter"
@@ -204,30 +208,91 @@ async def test_hosted_install_ignores_a_stored_subscription(monkeypatch):
 
 
 async def test_own_provider_still_wins_over_the_subscription(monkeypatch):
-    """An org that configured a real provider keeps it — the subscription is
-    the fallback for a workspace that has none, not an override."""
+    """The subscription replaces the platform fallback, not the org's own choice."""
     from routers.chat import _resolve_pi_chat_target
 
-    llm._org_overlays[ORG_ID] = (
-        _time.monotonic() + 60,
-        {"plan": "light",
-         "providers": {"ollama": {"kind": "openai-compat",
-                                  "base_url": "http://127.0.0.1:19999/v1",
-                                  "api_key": "local"}},
-         "roles": {"chat": {"provider": "ollama", "model": "llama3.2:latest"}},
-         "budget": None, "month_cost": 0.0, "enforce": False},
+    _seed_overlay(
+        monkeypatch,
+        providers={"ollama": {"kind": "openai-compat",
+                              "base_url": "http://127.0.0.1:19999/v1", "api_key": "local"}},
+        roles={"chat": {"provider": "ollama", "model": "llama3.2:latest"}},
+        subscription=SUB,
     )
-    monkeypatch.setitem(context.config, "llm_oauth_gray_flows", True)
-    monkeypatch.setitem(context.config, "hosted", {})
     try:
-        with (
-            patch("context.db_module.get_org_settings", new_callable=AsyncMock,
-                  return_value={"llm_subscription": {"provider": "openai-codex",
-                                                     "model": "gpt-5.1-codex"}}),
-            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
-        ):
-            provider, brain, model = await _resolve_pi_chat_target(ORG_ID)
+        with patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0):
+            provider, _brain, model = await _resolve_pi_chat_target(ORG_ID)
     finally:
         llm.invalidate_org_overlay(ORG_ID)
     assert provider == "ollama"
     assert model == "llama3.2:latest"
+
+
+async def test_hosted_install_ignores_a_stored_subscription(monkeypatch):
+    """Same stored setting, hosted deployment — the platform config wins."""
+    from routers.chat import _resolve_pi_chat_target
+
+    _seed_overlay(monkeypatch, subscription=SUB)
+    monkeypatch.setitem(context.config, "hosted", {"signup_enabled": True})
+    _platform_openrouter(monkeypatch)
+    try:
+        provider, _brain, _model = await _resolve_pi_chat_target(ORG_ID)
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert provider == "openrouter"
+
+
+# ── Agent runs ──────────────────────────────────────────────────────────────
+
+async def test_agent_run_uses_the_subscription(monkeypatch):
+    """Research and the other agent runs go through the same choke point."""
+    from routers import agents as ag
+
+    _seed_overlay(monkeypatch, subscription=SUB)
+    sent = {}
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"run_id": 1}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None, headers=None):
+            sent.update(json or {})
+            return _Resp()
+
+    monkeypatch.setattr(ag.httpx, "AsyncClient", lambda *a, **k: _Client())
+    try:
+        await ag._fire_agent_service("Acme", ORG_ID, brain="", model="", agent_type="research")
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert sent["provider"] == "openai-codex"
+    assert sent["model"] == "gpt-5.4"
+
+
+async def test_agent_run_keeps_a_user_chosen_brain(monkeypatch):
+    """A brain the user explicitly asked for is never replaced."""
+    from routers import agents as ag
+
+    _seed_overlay(monkeypatch, subscription=SUB)
+    sent = {}
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"run_id": 1}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None, headers=None):
+            sent.update(json or {})
+            return _Resp()
+
+    monkeypatch.setattr(ag.httpx, "AsyncClient", lambda *a, **k: _Client())
+    try:
+        await ag._fire_agent_service("Acme", ORG_ID, brain="ollama", model="qwen3.5",
+                                     agent_type="research")
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert sent["provider"] == "ollama"
+    assert sent["model"] == "qwen3.5"

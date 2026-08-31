@@ -205,12 +205,42 @@ async def ensure_org_overlay(org_id: Optional[int], force: bool = False) -> Opti
             "budget": _plans.budget_usd(settings, context.config),
             "month_cost": float(month_cost or 0.0),
             "enforce": _plans.enforce_plans(context.config),
+            # Routing choice for a connected ChatGPT/Copilot subscription
+            # (orgs.settings.llm_subscription). Carried on the overlay so the
+            # chat and agent-run paths read one cached value instead of each
+            # hitting the DB with their own copy of the rule.
+            "subscription": settings.get("llm_subscription") or {},
         }
     except Exception as exc:  # DB hiccup → behave like a single-tenant install
         logger.debug("org overlay unavailable for %s: %s", org_id, exc)
         ov = None
     _org_overlays[org_id] = (now + _ORG_OVERLAY_TTL, ov)
     return ov
+
+
+def org_subscription(org_id: Optional[int]) -> tuple[Optional[tuple], bool]:
+    """((provider, model) | None, org_has_own_providers) for the agent-pi paths.
+
+    Reads the cached overlay only — `await ensure_org_overlay(org_id)` first if
+    it may be stale. Self-hosted installs only, mirroring
+    POST /api/org/llm/subscription's gate: on a hosted deployment the
+    operator's personal subscription is not an org's to spend.
+
+    The second element is what decides precedence at the call site: an org that
+    configured its own provider keeps it, while a subscription outranks the
+    *platform* default from config.yaml. Without that distinction resolve()
+    silently wins with a keyless platform openrouter and the run dies on "No
+    API key for provider: openrouter".
+    """
+    ov = _org_overlay_sync(org_id) or {}
+    has_own = bool(ov.get("providers"))
+    if (context.config.get("hosted") or {}).get("signup_enabled"):
+        return None, has_own
+    if not context.config.get("llm_oauth_gray_flows"):
+        return None, has_own
+    sub = ov.get("subscription") or {}
+    provider, model = sub.get("provider"), sub.get("model")
+    return ((provider, model) if provider and model else None), has_own
 
 
 def invalidate_org_overlay(org_id: Optional[int] = None) -> None:

@@ -715,29 +715,6 @@ async def _run_tool_loop(
 # Pi chat helper
 # ---------------------------------------------------------------------------
 
-async def _org_chat_subscription(org_id: int) -> Optional[tuple]:
-    """(provider, model) when this workspace routes chat through a connected
-    ChatGPT/Copilot subscription, else None.
-
-    Self-hosted only, mirroring POST /api/org/llm/subscription's own gate: on a
-    hosted install the deployment's personal subscription is not an org's to
-    spend, so the choice is never stored there and never honoured here either.
-    Failure to read it is not an error — chat falls back to config.yaml."""
-    if (config.get("hosted") or {}).get("signup_enabled"):
-        return None
-    if not config.get("llm_oauth_gray_flows"):
-        return None
-    try:
-        settings = await db_module.get_org_settings(org_id)
-    except Exception:
-        return None
-    sub = settings.get("llm_subscription")
-    if not isinstance(sub, dict):
-        return None
-    provider, model = sub.get("provider"), sub.get("model")
-    return (provider, model) if provider and model else None
-
-
 async def _resolve_pi_chat_target(org_id: int) -> tuple[str, str, str]:
     """Resolve (provider_name, brain, model) for the payload sent to agent-pi's
     POST /chat.
@@ -771,17 +748,22 @@ async def _resolve_pi_chat_target(org_id: int) -> tuple[str, str, str]:
         provider name agent-pi's HTTP /chat endpoint understands.
     """
     await llm.ensure_org_overlay(org_id)
+    sub, org_has_own = llm.org_subscription(org_id)
     try:
         provider_cfg, model = llm.resolve(role="chat", org_id=org_id)
-        if provider_cfg.kind in ("openai-compat", "anthropic"):
+        # A workspace that configured its own provider keeps it. Without a
+        # subscription the platform fallback is still right. But when the org
+        # has no provider of its own AND has connected a subscription, resolve()
+        # would answer with the platform's config.yaml provider — keyless on a
+        # self-hosted install — and the run dies on "No API key for provider:
+        # openrouter" while a perfectly good subscription sits unused.
+        if provider_cfg.kind in ("openai-compat", "anthropic") and (org_has_own or not sub):
             return provider_cfg.name, provider_cfg.name, model
     except llm.LLMError:
         pass
-    sub = await _org_chat_subscription(org_id)
     if sub:
         # agent-pi takes the subscription name as the provider directly and
-        # builds the model against it (agent.ts buildOAuthModel), so the stored
-        # model id must be one it knows — the UI only offers registry ids.
+        # builds the model against it (agent.ts buildOAuthModel).
         return sub[0], sub[0], sub[1]
     brain = config.get("pi_chat_brain") or config.get("agent_service_brain", "openrouter")
     model = config.get("pi_chat_model") or config.get("agent_service_model", "deepseek/deepseek-v4-flash")

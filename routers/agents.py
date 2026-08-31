@@ -231,9 +231,22 @@ async def _fire_agent_service(
     task: Optional[str] = None,
     callback_url: Optional[str] = None,
     agent_type: str = "research",
+    brain_from_config: bool = False,
 ) -> tuple[str, int]:
     """POST a run to the correct agent service. Returns (svc_url, run_id)."""
     svc_url = _get_service_url(agent_type)
+    # A brain the USER asked for always wins (the manual-run endpoint passes
+    # body.brain, empty when unspecified). A brain that is merely the
+    # deployment default — empty here, or read straight out of config.yaml by
+    # the caller, which is what brain_from_config marks — gives way to the
+    # workspace's connected subscription: on such an install that default is
+    # keyless, and the run would die on "No API key for provider: openrouter"
+    # with a perfectly good subscription sitting unused.
+    if not brain or brain_from_config:
+        await llm.ensure_org_overlay(org_id)
+        sub, org_has_own = llm.org_subscription(org_id)
+        if sub and not org_has_own:
+            brain, model = sub[0], sub[1]
     if callback_url is None:
         server_url = config.get("server_url", "http://host.docker.internal:8000")
         callback_url = f"{server_url}/api/agents/callback"
@@ -297,8 +310,7 @@ async def _recover_orphaned_run(db_run_id: int, subject: Optional[str], retries_
     try:
         new_url, new_svc = await _fire_agent_service(
             subject, run["org_id"],
-            brain=config.get("agent_service_brain", "openrouter"),
-            model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+            brain="", model="",   # "" = let _fire_agent_service pick (subscription, else config)
             task=run.get("task"), agent_type=run.get("agent_type") or "osint",
         )
     except Exception as exc:
@@ -486,8 +498,7 @@ async def _trigger_contact_extraction(enrichment_task: str, org_id: int, company
         )
         cx_svc_url, cx_svc_run_id = await _fire_agent_service(
             subject=company, org_id=org_id,
-            brain=config.get("agent_service_brain", "openrouter"),
-            model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+            brain="", model="",   # "" = let _fire_agent_service pick (subscription, else config)
             task=f"Extract contacts from recent research findings for {company}.",
             agent_type="contact_extraction",
         )
@@ -705,8 +716,7 @@ async def agent_service_callback(body: dict, request: Request):
             try:
                 svc_url, child_svc_run_id = await _fire_agent_service(
                     client_name, org_id,
-                    brain=config.get("agent_service_brain", "openrouter"),
-                    model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                    brain="", model="",   # "" = let _fire_agent_service pick
                     agent_type="research",
                 )
                 child_run_id = await db_module.create_agent_run(
@@ -1510,8 +1520,7 @@ async def trigger_system_agent(user: dict = Depends(current_user)):
     try:
         svc_url, svc_run_id = await _fire_agent_service(
             "org", user["org_id"],
-            brain=config.get("agent_service_brain", "openrouter"),
-            model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+            brain="", model="",   # "" = let _fire_agent_service pick (subscription, else config)
             task="Monitor all clients for research staleness",
             agent_type="monitor",
         )
@@ -1716,6 +1725,7 @@ async def _start_people_search(org_id: int, client_name: str, target_roles: str 
     svc_url, svc_run_id = await _fire_agent_service(
         subject=client_name, org_id=org_id,
         brain=brain, model=model, task=task, agent_type="research",
+        brain_from_config=True,
     )
     db_run_id = await db_module.create_agent_run(
         org_id=org_id, agent_type="people_search",
@@ -1757,6 +1767,7 @@ async def enrich_contact_linkedin(contact_name: str, user: dict = Depends(curren
         svc_url, svc_run_id = await _fire_agent_service(
             subject=client_name or contact_name, org_id=user["org_id"],
             brain=brain, model=model, task=task, agent_type="contact_enrich",
+            brain_from_config=True,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Agent service unavailable: {exc}")
