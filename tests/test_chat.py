@@ -462,6 +462,40 @@ def _fake_openai_response(content="ok"):
     return resp
 
 
+# WP11c — fixed values for the legacy chat-role config keys. Tests reasoning
+# about llm._legacy_synthesis()'s "no llm: block" fallback pin these instead
+# of reading context.config's ambient values: a real checkout can carry an
+# untracked, gitignored config.local.yaml overlay (merged into context.config
+# at load time) that sets pi_chat_brain to a value outside
+# llm._LEGACY_BRAIN_TO_PROVIDER's known set ({"openrouter","claude","ollama"})
+# — e.g. a subscription-OAuth brain like "openai-codex". _legacy_synthesis()
+# then maps that unknown brain to "openrouter" (its own fallback), while
+# llm.provider_for_brain() — used elsewhere, including by the pre-WP11c
+# version of these tests to compute the "expected" provider — passes an
+# unknown brain through unchanged, producing "openai-codex". Two different
+# mappings for the same unmapped input meant a test computing its expectation
+# from the ambient brain agreed with production only by coincidence (when
+# config.local.yaml happens to leave pi_chat_brain at a value both mappings
+# handle alike, e.g. "openrouter"). Pinning to "ollama" here sidesteps that:
+# it's in both mappings' known set, so brain and provider name coincide.
+_LEGACY_CHAT_CONFIG = {
+    "pi_chat_brain": "ollama",
+    "pi_chat_model": "test-legacy-pi-chat-model",
+    "agent_service_brain": "claude",
+    "agent_service_model": "test-legacy-agent-service-model",
+}
+
+
+def _pin_legacy_chat_config(monkeypatch):
+    """Pin _LEGACY_CHAT_CONFIG's keys onto context.config and remove any llm:
+    block, so a test exercising the "no org overlay, no llm: block" fallback
+    is hermetic to ambient config.yaml/config.local.yaml content. monkeypatch
+    restores every value (or absence) automatically at test teardown."""
+    for key, value in _LEGACY_CHAT_CONFIG.items():
+        monkeypatch.setitem(context.config, key, value)
+    monkeypatch.delitem(context.config, "llm", raising=False)
+
+
 class TestChatModelResolution:
     ORG_ID = 1   # FAKE_USER["org_id"]
 
@@ -538,46 +572,41 @@ class TestChatModelResolution:
         cap = self._post_chat(app_client)
         assert cap["json"]["model"] == "llama3.2:latest"
 
-    def test_no_org_config_falls_back_to_legacy_config_keys(self, app_client):
-        """(c) no org overlay + no llm: block in config.yaml -> byte-identical
-        to today's hardcoded `body.model or config.get('pi_chat_model') or
-        config.get('agent_service_model', 'deepseek/deepseek-v4-flash')`."""
-        saved_llm_block = context.config.pop("llm", None)
-        try:
-            expected_model = (
-                context.config.get("pi_chat_model")
-                or context.config.get("agent_service_model", "deepseek/deepseek-v4-flash")
-            )
-            cap = self._post_chat(app_client)
-        finally:
-            if saved_llm_block is not None:
-                context.config["llm"] = saved_llm_block
+    def test_no_org_config_falls_back_to_legacy_config_keys(self, app_client, monkeypatch):
+        """(c) no org overlay + no llm: block -> byte-identical to today's
+        hardcoded `body.model or config.get('pi_chat_model') or
+        config.get('agent_service_model', 'deepseek/deepseek-v4-flash')`.
+
+        The legacy config keys are pinned (see _pin_legacy_chat_config, WP11c)
+        rather than read from ambient context.config — a real checkout's
+        untracked config.local.yaml overlay must not change this test's
+        outcome."""
+        _pin_legacy_chat_config(monkeypatch)
+        expected_model = (
+            context.config.get("pi_chat_model")
+            or context.config.get("agent_service_model", "deepseek/deepseek-v4-flash")
+        )
+        cap = self._post_chat(app_client)
         assert cap["json"]["model"] == expected_model
 
-    def test_platform_llm_block_chat_role_wins_over_legacy_keys(self, app_client):
+    def test_platform_llm_block_chat_role_wins_over_legacy_keys(self, app_client, monkeypatch):
         """(2a review follow-up) A platform install WITH an llm: block whose
         roles.chat.model differs from the legacy pi_chat_model must use the
         llm: block's model. config.yaml ships both values equal today, so
         test (c) alone would pass even if the llm: block were ignored
         entirely — this pins the actual precedence (llm: block beats the
-        legacy keys) rather than relying on that coincidence."""
-        saved_llm_block = context.config.get("llm")
-        custom_llm_block = {
+        legacy keys) rather than relying on that coincidence. Legacy keys are
+        pinned too (WP11c) so an ambient config.local.yaml can't coincidentally
+        make them equal and mask a regression."""
+        _pin_legacy_chat_config(monkeypatch)
+        monkeypatch.setitem(context.config, "llm", {
             "providers": {"openrouter": {"kind": "openai-compat",
                                           "base_url": "https://openrouter.example/v1",
                                           "api_key": "test-key"}},
             "roles": {"chat": {"provider": "openrouter", "model": "llm-block-chat-model"}},
-        }
-        context.config["llm"] = custom_llm_block
-        try:
-            legacy_model = context.config.get("pi_chat_model")
-            assert legacy_model != "llm-block-chat-model"   # sanity: genuinely different
-            cap = self._post_chat(app_client)
-        finally:
-            if saved_llm_block is not None:
-                context.config["llm"] = saved_llm_block
-            else:
-                context.config.pop("llm", None)
+        })
+        assert context.config["pi_chat_model"] != "llm-block-chat-model"   # sanity: genuinely different
+        cap = self._post_chat(app_client)
         assert cap["json"]["model"] == "llm-block-chat-model"
 
     def test_explicit_body_model_wins(self, app_client):
@@ -657,57 +686,55 @@ class TestPiChatModelResolution:
         assert provider == "ollama"
         assert model == "llama3.2:latest"
 
-    async def test_no_org_config_falls_back_to_legacy_config_keys(self):
+    async def test_no_org_config_falls_back_to_legacy_config_keys(self, monkeypatch):
         """(c) no org overlay + no llm: block -> byte-identical to today's
-        provider_for_brain(pi_chat_brain) / pi_chat_model formula."""
+        provider_for_brain(pi_chat_brain) / pi_chat_model formula.
+
+        The legacy config keys are pinned (see _pin_legacy_chat_config, WP11c)
+        rather than read from ambient context.config — an untracked
+        config.local.yaml in a real checkout can set pi_chat_brain to a value
+        (e.g. "openai-codex") that llm._legacy_synthesis()'s brain->provider
+        map and llm.provider_for_brain() disagree on, which made this test's
+        "expected" computation diverge from what production actually resolves
+        to whenever such an overlay is present."""
         from routers.chat import _resolve_pi_chat_target
 
-        saved_llm_block = context.config.pop("llm", None)
-        try:
-            expected_brain = (context.config.get("pi_chat_brain")
-                               or context.config.get("agent_service_brain", "openrouter"))
-            expected_model = (context.config.get("pi_chat_model")
-                               or context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"))
-            with (
-                patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
-                patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
-            ):
-                provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
-        finally:
-            if saved_llm_block is not None:
-                context.config["llm"] = saved_llm_block
+        _pin_legacy_chat_config(monkeypatch)
+        expected_brain = (context.config.get("pi_chat_brain")
+                           or context.config.get("agent_service_brain", "openrouter"))
+        expected_model = (context.config.get("pi_chat_model")
+                           or context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"))
+        with (
+            patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+        ):
+            provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
         assert provider == llm.provider_for_brain(expected_brain)
         assert brain == expected_brain
         assert model == expected_model
 
-    async def test_platform_llm_block_chat_role_wins_over_legacy_keys(self):
+    async def test_platform_llm_block_chat_role_wins_over_legacy_keys(self, monkeypatch):
         """(2a review follow-up) Same precedence pin as the Python path: a
         platform llm: block's roles.chat.model must win over the legacy
         pi_chat_model when the two differ, not just when they happen to
-        coincide (as they do in the shipped config.yaml)."""
+        coincide (as they do in the shipped config.yaml). Legacy keys are
+        pinned too (WP11c) so an ambient config.local.yaml can't
+        coincidentally make them equal and mask a regression."""
         from routers.chat import _resolve_pi_chat_target
 
-        saved_llm_block = context.config.get("llm")
-        custom_llm_block = {
+        _pin_legacy_chat_config(monkeypatch)
+        monkeypatch.setitem(context.config, "llm", {
             "providers": {"openrouter": {"kind": "openai-compat",
                                           "base_url": "https://openrouter.example/v1",
                                           "api_key": "test-key"}},
             "roles": {"chat": {"provider": "openrouter", "model": "llm-block-chat-model"}},
-        }
-        context.config["llm"] = custom_llm_block
-        try:
-            legacy_model = context.config.get("pi_chat_model")
-            assert legacy_model != "llm-block-chat-model"   # sanity: genuinely different
-            with (
-                patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
-                patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
-            ):
-                provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
-        finally:
-            if saved_llm_block is not None:
-                context.config["llm"] = saved_llm_block
-            else:
-                context.config.pop("llm", None)
+        })
+        assert context.config["pi_chat_model"] != "llm-block-chat-model"   # sanity: genuinely different
+        with (
+            patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+        ):
+            provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
         assert provider == "openrouter"
         assert model == "llm-block-chat-model"
 
