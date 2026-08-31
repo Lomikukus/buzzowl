@@ -17,7 +17,7 @@ curl -fsS http://localhost:8000/api/health
 | The `camofox` build fails cloning `github.com/jo-inc/camofox-browser.git` | no network/proxy access to GitHub from the Docker builder | build it on a connected host, or start without it: `docker compose up -d db searxng server agent-pi` |
 | Server log: *"agent_service_token not set — internal APIs disabled (401)"* | `AGENT_SERVICE_TOKEN` missing in `.env` | `./scripts/init-env.sh`, `docker compose up -d` |
 | `agent-pi` log: *"agent-pi is fail-closed: all requests will 401 until AGENT_SERVICE_TOKEN is set…"*, every agent run 401s | same missing `.env` value — `agent-pi` is fail-closed too | `./scripts/init-env.sh`, `docker compose up -d`. For local dev only, `ALLOW_INSECURE_INTERNAL=1` serves it unauthenticated |
-| Login page asks for a registration key you do not have | no admin exists yet | `docker compose logs server \| grep "FIRST RUN"` — the key is printed there. Or set `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` and restart |
+| Login page asks for a registration key you do not have | no admin exists yet | `docker compose logs server \| grep -B2 -A3 "FIRST RUN"` — the key is printed there (plain `tail` can miss it once request logging pushes the banner out of range). Or set `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` and restart |
 | Port 8000 already in use | something else is on it | stop it, or map another host port in `docker-compose.yml` (`"8010:8000"`) |
 | Everything starts, but nothing an agent does works | no usable LLM credential | `curl -s localhost:8000/api/llm/status`, then Settings → LLM providers |
 | Chat/summary works, agents fail | `agent-pi` cannot reach a provider or the DB | `docker compose logs --tail=100 agent-pi` |

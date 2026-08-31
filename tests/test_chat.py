@@ -4,12 +4,21 @@ tests/test_chat.py — Tests for routers/chat.py
 Covers:
   - POST /api/chat  (basic response, client scope, unauthenticated)
   - Session CRUD   (create, list, load, rename, delete, 404)
+  - WP11: chat resolves provider+model from the workspace's LLM roles (org
+    overlay chat/default role) on both the Python and Pi paths, instead of
+    pairing the wizard-configured org provider with config.yaml's legacy
+    pi_chat_model/agent_service_model — an impossible combination.
 """
 
+import time as _time
+
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from starlette.testclient import TestClient
+
+import context
+import llm
 
 
 # ---------------------------------------------------------------------------
@@ -424,3 +433,319 @@ class TestChatActionTools:
             )
 
         assert mock_ct.await_args.kwargs["due_date"] is None
+
+
+# ---------------------------------------------------------------------------
+# TestChatModelResolution — WP11, default/Python backend (POST /api/chat).
+#
+# Asserts the outgoing LLM call's provider+model by mocking only the HTTP
+# transport (llm.requests.post) — llm.resolve()'s real org-overlay / platform
+# config / legacy-key fallback chain runs end to end, exactly as it would in
+# production. Regression coverage for: an org configured a provider through
+# the setup wizard (which only ever writes the 'default' role — see
+# static/setup.html saveProvider()) and chat used to still pull its model
+# from config.yaml's legacy pi_chat_model/agent_service_model, pairing the
+# org's own provider with a model it was never told about.
+# ---------------------------------------------------------------------------
+
+def _fake_openai_response(content="ok"):
+    """Stands in for requests.post()'s Response in llm.py's openai-compat
+    adapter (_openai_chat) — status/json/raise_for_status only, no tool_calls
+    so the tool-calling loop returns after exactly one round."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = MagicMock(return_value=None)
+    resp.json = MagicMock(return_value={
+        "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    })
+    return resp
+
+
+class TestChatModelResolution:
+    ORG_ID = 1   # FAKE_USER["org_id"]
+
+    def setup_method(self, method):
+        llm.invalidate_org_overlay(self.ORG_ID)
+
+    def teardown_method(self, method):
+        llm.invalidate_org_overlay(self.ORG_ID)
+
+    def _seed_org_overlay(self, providers, roles, plan="light", enforce=False):
+        llm._org_overlays[self.ORG_ID] = (
+            _time.monotonic() + 60,
+            {"plan": plan, "providers": providers, "roles": roles,
+             "budget": None, "month_cost": 0.0, "enforce": enforce},
+        )
+
+    def _post_chat(self, app_client, message="hi", model=None):
+        """POST /api/chat with the HTTP transport mocked; returns the captured
+        {url, json} of the single outgoing llm.requests.post call."""
+        capture: dict = {}
+
+        def fake_post(url, headers=None, json=None, timeout=None, stream=False):
+            capture["url"] = url
+            capture["json"] = json
+            return _fake_openai_response("ok")
+
+        body = {"message": message}
+        if model is not None:
+            body["model"] = model
+
+        with (
+            patch("server.db_module.list_clients", new_callable=AsyncMock, return_value=[]),
+            patch("server.db_module.list_contacts", new_callable=AsyncMock, return_value=[]),
+            # ensure_org_overlay's DB round trip — {} when no cache hit applies
+            # (the "no org config" test), harmless no-op when a cache entry is
+            # seeded (the TTL check short-circuits before these run).
+            patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+            # llm.chat()'s post-call usage metering (fire-and-forget) — mocked
+            # so it doesn't try a real DB write off the (unconnected) pool.
+            patch("context.db_module.record_llm_usage", new_callable=AsyncMock),
+            patch("llm.requests.post", side_effect=fake_post),
+        ):
+            resp = app_client.post(
+                "/api/chat", json=body, headers={"Authorization": "Bearer fake"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert capture, "llm.requests.post was never called"
+        return capture
+
+    def test_org_chat_role_model_wins(self, app_client):
+        """(a) org has its own 'chat' role -> that role's provider+model are
+        used, not config.yaml's pi_chat_model/agent_service_model."""
+        self._seed_org_overlay(
+            providers={"ollama": {"kind": "openai-compat",
+                                   "base_url": "http://127.0.0.1:19999/v1",
+                                   "api_key": "local"}},
+            roles={"chat": {"provider": "ollama", "model": "llama3.2:latest"},
+                   "default": {"provider": "ollama", "model": "should-not-be-used"}},
+        )
+        cap = self._post_chat(app_client)
+        assert cap["json"]["model"] == "llama3.2:latest"
+        assert cap["url"].startswith("http://127.0.0.1:19999/v1/")
+
+    def test_org_default_role_used_when_no_chat_role(self, app_client):
+        """(b) the wizard only ever writes a 'default' role (never 'chat') ->
+        resolve()'s `roles.get(role) or roles.get('default')` picks it up."""
+        self._seed_org_overlay(
+            providers={"ollama": {"kind": "openai-compat",
+                                   "base_url": "http://127.0.0.1:19999/v1",
+                                   "api_key": "local"}},
+            roles={"default": {"provider": "ollama", "model": "llama3.2:latest"}},
+        )
+        cap = self._post_chat(app_client)
+        assert cap["json"]["model"] == "llama3.2:latest"
+
+    def test_no_org_config_falls_back_to_legacy_config_keys(self, app_client):
+        """(c) no org overlay + no llm: block in config.yaml -> byte-identical
+        to today's hardcoded `body.model or config.get('pi_chat_model') or
+        config.get('agent_service_model', 'deepseek/deepseek-v4-flash')`."""
+        saved_llm_block = context.config.pop("llm", None)
+        try:
+            expected_model = (
+                context.config.get("pi_chat_model")
+                or context.config.get("agent_service_model", "deepseek/deepseek-v4-flash")
+            )
+            cap = self._post_chat(app_client)
+        finally:
+            if saved_llm_block is not None:
+                context.config["llm"] = saved_llm_block
+        assert cap["json"]["model"] == expected_model
+
+    def test_platform_llm_block_chat_role_wins_over_legacy_keys(self, app_client):
+        """(2a review follow-up) A platform install WITH an llm: block whose
+        roles.chat.model differs from the legacy pi_chat_model must use the
+        llm: block's model. config.yaml ships both values equal today, so
+        test (c) alone would pass even if the llm: block were ignored
+        entirely — this pins the actual precedence (llm: block beats the
+        legacy keys) rather than relying on that coincidence."""
+        saved_llm_block = context.config.get("llm")
+        custom_llm_block = {
+            "providers": {"openrouter": {"kind": "openai-compat",
+                                          "base_url": "https://openrouter.example/v1",
+                                          "api_key": "test-key"}},
+            "roles": {"chat": {"provider": "openrouter", "model": "llm-block-chat-model"}},
+        }
+        context.config["llm"] = custom_llm_block
+        try:
+            legacy_model = context.config.get("pi_chat_model")
+            assert legacy_model != "llm-block-chat-model"   # sanity: genuinely different
+            cap = self._post_chat(app_client)
+        finally:
+            if saved_llm_block is not None:
+                context.config["llm"] = saved_llm_block
+            else:
+                context.config.pop("llm", None)
+        assert cap["json"]["model"] == "llm-block-chat-model"
+
+    def test_explicit_body_model_wins(self, app_client):
+        """(d) body.model, when supplied, wins over the org's own role model."""
+        self._seed_org_overlay(
+            providers={"ollama": {"kind": "openai-compat",
+                                   "base_url": "http://127.0.0.1:19999/v1",
+                                   "api_key": "local"}},
+            roles={"chat": {"provider": "ollama", "model": "llama3.2:latest"}},
+        )
+        cap = self._post_chat(app_client, model="explicit-override-model")
+        assert cap["json"]["model"] == "explicit-override-model"
+
+
+# ---------------------------------------------------------------------------
+# TestPiChatModelResolution — WP11, Pi backend path.
+#
+# agent-pi resolves PROVIDER credentials itself from org_id (agent.ts
+# buildModel() -> resolveProviderForOrg()), but never a MODEL — the payload's
+# `model` field is used exactly as sent — so _resolve_pi_chat_target must
+# resolve it on the Python side, from the same org-overlay chat/default role
+# as the Python backend, with the same legacy-key fallback when there is
+# nothing to resolve from.
+# ---------------------------------------------------------------------------
+
+class TestPiChatModelResolution:
+    ORG_ID = 1
+
+    def setup_method(self, method):
+        llm.invalidate_org_overlay(self.ORG_ID)
+
+    def teardown_method(self, method):
+        llm.invalidate_org_overlay(self.ORG_ID)
+
+    def _seed_org_overlay(self, providers, roles, plan="light", enforce=False):
+        llm._org_overlays[self.ORG_ID] = (
+            _time.monotonic() + 60,
+            {"plan": plan, "providers": providers, "roles": roles,
+             "budget": None, "month_cost": 0.0, "enforce": enforce},
+        )
+
+    async def test_org_chat_role_resolved(self):
+        """(a) org has its own 'chat' role -> its provider+model are resolved
+        for the agent-pi payload."""
+        from routers.chat import _resolve_pi_chat_target
+
+        self._seed_org_overlay(
+            providers={"ollama": {"kind": "openai-compat",
+                                   "base_url": "http://127.0.0.1:19999/v1",
+                                   "api_key": "local"}},
+            roles={"chat": {"provider": "ollama", "model": "llama3.2:latest"},
+                   "default": {"provider": "ollama", "model": "should-not-be-used"}},
+        )
+        with (
+            patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+        ):
+            provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
+        assert provider == "ollama"
+        assert model == "llama3.2:latest"
+
+    async def test_org_default_role_resolved_when_no_chat_role(self):
+        """(b) org configured only 'default' -> resolve() falls back to it."""
+        from routers.chat import _resolve_pi_chat_target
+
+        self._seed_org_overlay(
+            providers={"ollama": {"kind": "openai-compat",
+                                   "base_url": "http://127.0.0.1:19999/v1",
+                                   "api_key": "local"}},
+            roles={"default": {"provider": "ollama", "model": "llama3.2:latest"}},
+        )
+        with (
+            patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+        ):
+            provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
+        assert provider == "ollama"
+        assert model == "llama3.2:latest"
+
+    async def test_no_org_config_falls_back_to_legacy_config_keys(self):
+        """(c) no org overlay + no llm: block -> byte-identical to today's
+        provider_for_brain(pi_chat_brain) / pi_chat_model formula."""
+        from routers.chat import _resolve_pi_chat_target
+
+        saved_llm_block = context.config.pop("llm", None)
+        try:
+            expected_brain = (context.config.get("pi_chat_brain")
+                               or context.config.get("agent_service_brain", "openrouter"))
+            expected_model = (context.config.get("pi_chat_model")
+                               or context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"))
+            with (
+                patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+                patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+            ):
+                provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
+        finally:
+            if saved_llm_block is not None:
+                context.config["llm"] = saved_llm_block
+        assert provider == llm.provider_for_brain(expected_brain)
+        assert brain == expected_brain
+        assert model == expected_model
+
+    async def test_platform_llm_block_chat_role_wins_over_legacy_keys(self):
+        """(2a review follow-up) Same precedence pin as the Python path: a
+        platform llm: block's roles.chat.model must win over the legacy
+        pi_chat_model when the two differ, not just when they happen to
+        coincide (as they do in the shipped config.yaml)."""
+        from routers.chat import _resolve_pi_chat_target
+
+        saved_llm_block = context.config.get("llm")
+        custom_llm_block = {
+            "providers": {"openrouter": {"kind": "openai-compat",
+                                          "base_url": "https://openrouter.example/v1",
+                                          "api_key": "test-key"}},
+            "roles": {"chat": {"provider": "openrouter", "model": "llm-block-chat-model"}},
+        }
+        context.config["llm"] = custom_llm_block
+        try:
+            legacy_model = context.config.get("pi_chat_model")
+            assert legacy_model != "llm-block-chat-model"   # sanity: genuinely different
+            with (
+                patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value={}),
+                patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+            ):
+                provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
+        finally:
+            if saved_llm_block is not None:
+                context.config["llm"] = saved_llm_block
+            else:
+                context.config.pop("llm", None)
+        assert provider == "openrouter"
+        assert model == "llm-block-chat-model"
+
+    async def test_resolve_error_falls_back_to_legacy_config_keys(self):
+        """An enforced light org with no provider makes llm.resolve() raise;
+        _resolve_pi_chat_target must not propagate that — it falls back to
+        the same legacy formula (budget/enforce were never wired into the Pi
+        chat path before this fix either, so this preserves that instead of
+        newly blocking chat on it)."""
+        from routers.chat import _resolve_pi_chat_target
+
+        self._seed_org_overlay(providers={}, roles={}, enforce=True)
+        expected_brain = (context.config.get("pi_chat_brain")
+                           or context.config.get("agent_service_brain", "openrouter"))
+        expected_model = (context.config.get("pi_chat_model")
+                           or context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"))
+        provider, brain, model = await _resolve_pi_chat_target(self.ORG_ID)
+        assert provider == llm.provider_for_brain(expected_brain)
+        assert model == expected_model
+
+    async def test_call_pi_chat_sends_resolved_provider_and_model(self):
+        """End-to-end: _call_pi_chat's payload carries the org's resolved
+        provider+model, not the legacy config-key pair (mocks httpx, the Pi
+        service's own HTTP transport)."""
+        from routers.chat import _call_pi_chat
+
+        self._seed_org_overlay(
+            providers={"ollama": {"kind": "openai-compat",
+                                   "base_url": "http://127.0.0.1:19999/v1",
+                                   "api_key": "local"}},
+            roles={"chat": {"provider": "ollama", "model": "llama3.2:latest"}},
+        )
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock(return_value=None)
+        fake_resp.json = MagicMock(return_value={"answer": "hi from ollama", "sources": []})
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=fake_resp) as mock_post:
+            answer, sources = await _call_pi_chat("hello", self.ORG_ID, None, "Acme", [])
+        assert answer == "hi from ollama"
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["provider"] == "ollama"
+        assert payload["model"] == "llama3.2:latest"
