@@ -21,6 +21,7 @@
   --c-accenttint: #2B2113;
   --c-accenttint2: #3A2C15;
   --c-on-accent: #131313;
+  /* reserved — Carbon look is deliberately square; do not apply without a design decision */
   --c-radius: 8px;
   --c-bg: #161616;
   --c-bg2: #1c1c1c;
@@ -86,7 +87,7 @@
 }
 :root[data-theme="carbon"] #main-nav a.nav-link:hover{ background:var(--c-bg2,#1a1a1a); }
 :root[data-theme="carbon"] #main-nav a.nav-link.nav-active{
-  border-bottom:none; border-left-color:var(--c-accent,#4ec9b0);
+  border-bottom:none; border-left-color:var(--c-accent, #E8A33D);
   background:var(--c-surface,#252526);
 }
 /* spacer pushes the actions + user block to the bottom of the rail */
@@ -125,7 +126,7 @@
     border-bottom:2px solid transparent; white-space:nowrap;
   }
   :root[data-theme="carbon"] #main-nav a.nav-link.nav-active{
-    border-left:none; border-bottom-color:var(--c-accent,#4ec9b0); background:none;
+    border-left:none; border-bottom-color:var(--c-accent, #E8A33D); background:none;
   }
   :root[data-theme="carbon"] #main-nav .nav-action-btn{ margin:0; }
   :root[data-theme="carbon"] #main-nav .nav-user{ padding:0; }
@@ -1321,8 +1322,8 @@
   border-radius:0;
 }
 :root[data-theme="carbon"] .msg-user{
-  background:var(--c-accenttint,#182a4d);
-  border:1px solid var(--c-accentline,#2f4a80);
+  background:var(--c-accenttint, #2B2113);
+  border:1px solid var(--c-accentline, #6B5426);
 }
 :root[data-theme="carbon"] .msg-ai{
   background:var(--c-surface,#262626);
@@ -1346,8 +1347,8 @@
 }
 :root[data-theme="carbon"] #scopeLabel{
   border-radius:0;
-  border:1px solid var(--c-accentline,#2f4a80);
-  background:var(--c-accenttint,#182a4d);
+  border:1px solid var(--c-accentline, #6B5426);
+  background:var(--c-accenttint, #2B2113);
 }
 :root[data-theme="carbon"] #backendSelect,
 :root[data-theme="carbon"] #modelSelect{

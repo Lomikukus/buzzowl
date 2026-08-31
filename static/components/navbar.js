@@ -149,7 +149,7 @@
 
   // Owner-approved owl mark ("night owl", variant B) — small-size stroke
   // variant (heavier stroke, larger eyes, longer beak) sized for the nav rail.
-  const OWL_MARK_SVG = `<svg viewBox="0 0 32 32" width="20" height="20" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Buzzowl" style="flex-shrink:0">
+  const OWL_MARK_SVG = `<svg viewBox="0 0 32 32" width="20" height="20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="flex-shrink:0">
         <path d="M5.5 10.5 L8.5 4.5 L12 8.2 Q16 6.8 20 8.2 L23.5 4.5 L26.5 10.5 Q28 14 27.4 18.5 Q26.6 24.6 21.5 27 L16 28.6 L10.5 27 Q5.4 24.6 4.6 18.5 Q4 14 5.5 10.5 Z" fill="none" stroke="#E8A33D" stroke-width="2.4" stroke-linejoin="round"/>
         <circle cx="11.2" cy="15.6" r="4.6" fill="#E8A33D"/>
         <circle cx="20.8" cy="15.6" r="4.6" fill="#E8A33D"/>
