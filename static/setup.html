@@ -411,8 +411,15 @@
                 // Already signed in from an earlier visit: show the picker now.
                 const shown = await loadSubModels(d.model, !!d.provider);
                 if (d.provider && d.model) {
-                    document.getElementById('subStatus').textContent =
-                        'Chat runs on ' + d.model + '.';
+                    // The lineup rotates: a model stored weeks ago can simply
+                    // stop being offered, and the only symptom otherwise is
+                    // chat answering with nothing at all.
+                    const sel = document.getElementById('subModel');
+                    const still = Array.from(sel.options).some(o => o.value === d.model);
+                    document.getElementById('subStatus').textContent = still
+                        ? 'Chat runs on ' + d.model + '.'
+                        : 'Chat is set to ' + d.model + ', which your account no longer offers — '
+                          + 'pick one below and click Use for chat.';
                 } else if (shown) {
                     document.getElementById('subStatus').textContent =
                         'Signed in — pick a model and click Use for chat.';

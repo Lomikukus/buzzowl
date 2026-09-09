@@ -164,9 +164,14 @@ export async function getOAuthAuth(provider: SubscriptionProvider): Promise<OAut
 /** One model a connected account may actually drive. */
 export interface AccountModel { id: string; name: string; description: string }
 
-// Codex's own backend takes a client version and refuses older ones
-// (each model carries a minimal_client_version; 0.98.0 at the time of writing).
-const CODEX_MODELS_CLIENT_VERSION = '0.104.0';
+// Codex's backend FILTERS the model list by the client version you claim, and
+// the lineup rotates: a version that returned gpt-5.4/gpt-5.4-mini in August
+// returned nothing but the hidden codex-auto-review nine days later, while a
+// higher one returned the gpt-5.6/gpt-6 generation from the same account. So
+// this pin rots by design — it is overridable without a rebuild, and an
+// empty result is logged as "probably too old" rather than read as "this
+// account has no models".
+const CODEX_MODELS_CLIENT_VERSION = process.env.CODEX_CLIENT_VERSION ?? '0.200.0';
 
 /**
  * Models this *account* can drive, straight from Codex's backend — not what
@@ -205,10 +210,15 @@ export async function listAccountModels(provider: SubscriptionProvider): Promise
     models?: Array<{ slug?: string; display_name?: string; description?: string;
                      visibility?: string; supported_in_api?: boolean }>;
   };
-  return (body.models ?? [])
+  const usable = (body.models ?? [])
     // 'hide' is Codex's own internal tooling (e.g. codex-auto-review).
     .filter(m => !!m.slug && m.visibility !== 'hide' && m.supported_in_api !== false)
     .map(m => ({ id: m.slug as string, name: m.display_name || (m.slug as string), description: m.description || '' }));
+  if (!usable.length && (body.models ?? []).length) {
+    console.warn(`[oauth] codex returned only hidden models for client_version=${CODEX_MODELS_CLIENT_VERSION}` +
+                 ' — that version is probably too old for the current lineup; set CODEX_CLIENT_VERSION higher');
+  }
+  return usable;
 }
 
 /** Convenience wrapper: just the access token, or null when not connected. */
