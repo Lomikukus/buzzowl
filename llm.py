@@ -211,11 +211,52 @@ async def ensure_org_overlay(org_id: Optional[int], force: bool = False) -> Opti
             # hitting the DB with their own copy of the rule.
             "subscription": settings.get("llm_subscription") or {},
         }
+        _apply_subscription_overlay(ov)
     except Exception as exc:  # DB hiccup → behave like a single-tenant install
         logger.debug("org overlay unavailable for %s: %s", org_id, exc)
         ov = None
     _org_overlays[org_id] = (now + _ORG_OVERLAY_TTL, ov)
     return ov
+
+
+_SUBSCRIPTION_PROVIDER = "__subscription__"
+
+
+def _apply_subscription_overlay(ov: dict) -> None:
+    """Serve the Python LLM paths from a connected subscription too.
+
+    The agent-pi paths (chat, agent runs) take the subscription by name, but
+    everything that goes through resolve() — the pipeline brain that turns a
+    research report into products, summaries, match synthesis — needs a
+    provider. Without one it resolves to the platform's config.yaml entry,
+    which on a self-hosted install has no key: the research agent works, its
+    report is written, and the extraction step then dies on a 401 leaving zero
+    products behind with nothing in the UI to explain it.
+
+    The 'pi' kind is exactly that bridge (llm._pi_complete → agent-pi
+    /complete). It is text-only, so a tool-calling caller still gets the
+    explicit "text-only" refusal rather than a silent wrong answer.
+
+    Only for an org that configured nothing of its own — a real provider always
+    wins — and only on a self-hosted install, mirroring the endpoint's gate.
+    """
+    if not isinstance(ov, dict) or ov.get("providers"):
+        return
+    if (context.config.get("hosted") or {}).get("signup_enabled"):
+        return
+    if not context.config.get("llm_oauth_gray_flows"):
+        return
+    sub = ov.get("subscription") or {}
+    provider, model = sub.get("provider"), sub.get("model")
+    if not provider or not model:
+        return
+    ov["providers"] = {_SUBSCRIPTION_PROVIDER: {"kind": "pi",
+                                                "headers": {"pi_provider": provider}}}
+    ov["roles"] = {role: {"provider": _SUBSCRIPTION_PROVIDER, "model": model}
+                   for role in _KNOWN_ROLES}
+    # So callers can still tell "this org configured a provider" from "we put
+    # the subscription there" — the agent-run precedence depends on it.
+    ov["providers_from_subscription"] = True
 
 
 def org_subscription(org_id: Optional[int]) -> tuple[Optional[tuple], bool]:
@@ -233,7 +274,7 @@ def org_subscription(org_id: Optional[int]) -> tuple[Optional[tuple], bool]:
     API key for provider: openrouter".
     """
     ov = _org_overlay_sync(org_id) or {}
-    has_own = bool(ov.get("providers"))
+    has_own = bool(ov.get("providers")) and not ov.get("providers_from_subscription")
     if (context.config.get("hosted") or {}).get("signup_enabled"):
         return None, has_own
     if not context.config.get("llm_oauth_gray_flows"):
@@ -832,7 +873,11 @@ def status_cheap(*, role: str = "default", org_id: Optional[int] = None) -> bool
             entry = roles.get(role) or roles.get("default") or {}
             pname = entry.get("provider") or next(iter(ov["providers"]))
             if pname in ov["providers"]:
-                return bool(_get_provider_from(ov, pname).resolve_key())
+                p = _get_provider_from(ov, pname)
+                # The 'pi' bridge authenticates with the shared service token,
+                # not an API key of its own — asking it for one would report a
+                # working subscription as "no model configured".
+                return True if p.kind == "pi" else bool(p.resolve_key())
             # Dangling role (pname not in ov["providers"]): mirror resolve()'s
             # enforce refusal rather than falling through to the platform check.
             if ov.get("enforce"):

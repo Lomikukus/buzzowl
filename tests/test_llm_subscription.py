@@ -325,3 +325,90 @@ async def test_no_call_site_hardcodes_the_deployment_brain():
     assert not offenders, (
         "these call sites pin the deployment brain instead of letting "
         "_fire_agent_service decide: " + ", ".join(offenders))
+
+
+# ── The Python LLM paths (llm.resolve) ──────────────────────────────────────
+
+def _settings(sub=None, own=None):
+    s = {}
+    if sub:
+        s["llm_subscription"] = sub
+    if own:
+        s["llm"] = {"providers": own, "roles": {"default": {"provider": next(iter(own)), "model": "m"}}}
+    return s
+
+
+async def _overlay(monkeypatch, settings):
+    """Build a real overlay through ensure_org_overlay with a stubbed DB."""
+    monkeypatch.setitem(context.config, "llm_oauth_gray_flows", True)
+    monkeypatch.setitem(context.config, "hosted", {})
+    llm.invalidate_org_overlay(ORG_ID)
+    with (
+        patch("context.db_module.get_org_settings", new_callable=AsyncMock, return_value=settings),
+        patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+    ):
+        return await llm.ensure_org_overlay(ORG_ID, force=True)
+
+
+async def test_subscription_serves_resolve_for_every_role(monkeypatch):
+    """The pipeline brain that turns a research report into products goes
+    through resolve(); without this it hit the keyless platform provider and
+    the run ended with zero products and a 401 in the log."""
+    try:
+        await _overlay(monkeypatch, _settings(sub=SUB))
+        for role in ("default", "pipeline", "research", "summary"):
+            provider, model = llm.resolve(role, None, ORG_ID)
+            assert provider.kind == "pi"
+            assert provider.headers.get("pi_provider") == "openai-codex"
+            assert model == "gpt-5.4"
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+
+
+async def test_subscription_counts_as_configured(monkeypatch):
+    """A 'pi' provider carries no API key of its own — status_cheap must not
+    read that as "no model configured" and put the banner back."""
+    try:
+        await _overlay(monkeypatch, _settings(sub=SUB))
+        assert llm.status_cheap(org_id=ORG_ID) is True
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+
+
+async def test_synthetic_provider_is_not_mistaken_for_the_orgs_own(monkeypatch):
+    """org_subscription's second element drives the agent-run precedence — if
+    the injected provider counted as "the org configured one", agent runs
+    would stop using the subscription again."""
+    try:
+        await _overlay(monkeypatch, _settings(sub=SUB))
+        sub, has_own = llm.org_subscription(ORG_ID)
+        assert sub == ("openai-codex", "gpt-5.4")
+        assert has_own is False
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+
+
+async def test_own_provider_is_never_replaced_by_the_subscription(monkeypatch):
+    own = {"ollama": {"kind": "openai-compat", "base_url": "http://x/v1", "api_key": "local"}}
+    try:
+        ov = await _overlay(monkeypatch, _settings(sub=SUB, own=own))
+        assert set(ov["providers"]) == {"ollama"}
+        assert not ov.get("providers_from_subscription")
+        assert llm.org_subscription(ORG_ID)[1] is True
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+
+
+async def test_hosted_install_gets_no_synthetic_provider(monkeypatch):
+    try:
+        monkeypatch.setitem(context.config, "hosted", {"signup_enabled": True})
+        llm.invalidate_org_overlay(ORG_ID)
+        with (
+            patch("context.db_module.get_org_settings", new_callable=AsyncMock,
+                  return_value=_settings(sub=SUB)),
+            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock, return_value=0.0),
+        ):
+            ov = await llm.ensure_org_overlay(ORG_ID, force=True)
+        assert not ov.get("providers")
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
