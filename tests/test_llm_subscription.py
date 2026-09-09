@@ -296,3 +296,32 @@ async def test_agent_run_keeps_a_user_chosen_brain(monkeypatch):
         llm.invalidate_org_overlay(ORG_ID)
     assert sent["provider"] == "ollama"
     assert sent["model"] == "qwen3.5"
+
+
+async def test_no_call_site_hardcodes_the_deployment_brain():
+    """Guard against the regression this file was extended for.
+
+    _fire_agent_service is the one place that decides which brain a run uses,
+    and it can only do that when callers leave the choice to it. Thirteen call
+    sites across products/pipeline/chat used to pass
+    config.get("agent_service_brain") themselves, which silently defeated the
+    org-subscription override for every one of them — the symptom was a
+    product-research run finishing in 45ms having done nothing at all.
+
+    The two legitimate exceptions pass brain_from_config=True (role-specific
+    research/contact_enrich brains) or a brain the user picked.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders = []
+    for path in sorted((root / "routers").glob("*.py")):
+        src = path.read_text()
+        for call in re.finditer(r"_fire_agent_service\(", src):
+            window = src[call.start():call.start() + 400]
+            if re.search(r'brain=(?:context\.)?config\.get\("agent_service_brain"', window):
+                offenders.append(f"{path.name}:{src[:call.start()].count(chr(10)) + 1}")
+    assert not offenders, (
+        "these call sites pin the deployment brain instead of letting "
+        "_fire_agent_service decide: " + ", ".join(offenders))

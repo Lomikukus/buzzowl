@@ -498,8 +498,7 @@ async def _run_tool(name: str, args: dict, org_id: int, user_id: Optional[int] =
                 )
                 svc_url, svc_run_id = await _fire_agent_service(
                     client_name, org_id,
-                    brain=config.get("agent_service_brain", "openrouter"),
-                    model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                    brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                     task=task, agent_type="research",
                 )
                 db_run_id = await db_module.create_agent_run(

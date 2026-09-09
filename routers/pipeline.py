@@ -553,8 +553,7 @@ async def _trigger_enrichment(session_id: str, org_id: Optional[int]) -> None:
             _update_session_metadata(session_id, status="agent_working", agent_run_id=run_id)
             svc_url, svc_run_id = await _fire_agent_service(
                 session_id, org_id,
-                brain=config.get("agent_service_brain", "openrouter"),
-                model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                 task=task, agent_type="enrichment",
             )
             await db_module.update_agent_run(
@@ -636,8 +635,7 @@ async def _trigger_research(client_name: str, org_id: int, run_id: Optional[int]
             from routers.agents import _fire_agent_service, _watch_agent_service_run
             svc_url, svc_run_id = await _fire_agent_service(
                 client_name, org_id,
-                brain=config.get("agent_service_brain", "openrouter"),
-                model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                 agent_type="research",
             )
             db_run_id = run_id if run_id else await db_module.create_agent_run(
@@ -713,8 +711,7 @@ async def _trigger_industry_research(industry: str, org_id: int) -> None:
             )
             svc_url, svc_run_id = await _fire_agent_service(
                 industry, org_id,
-                brain=context.config.get("agent_service_brain", "openrouter"),
-                model=context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                 task=task, agent_type="research",
             )
             db_run_id = await db_module.create_agent_run(
@@ -764,8 +761,7 @@ async def _trigger_osint(client_name: str, org_id: int, run_id: Optional[int] = 
             from routers.agents import _fire_agent_service, _watch_agent_service_run
             svc_url, svc_run_id = await _fire_agent_service(
                 client_name, org_id,
-                brain=config.get("agent_service_brain", "openrouter"),
-                model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                 agent_type="osint",
             )
             db_run_id = run_id if run_id else await db_module.create_agent_run(
@@ -1169,8 +1165,7 @@ async def _fire_news_research(org_id: int, client_name: str, *, autonomous: bool
     try:
         svc_url, svc_run_id = await _fire_agent_service(
             client_name, org_id,
-            brain=context.config.get("agent_service_brain", "openrouter"),
-            model=context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+            brain="", model="",   # "" = the choke point decides (org subscription, else config default)
             task=client_task, agent_type="osint",
         )
         await db_module.update_agent_run(
@@ -1476,8 +1471,9 @@ async def _run_market_monitor(org_id: int) -> dict:
     max_ind = int(context.config.get("market_max_industries_per_run", 2))
     picked = sorted(industries, key=lambda i: scans.get(i, ""))[:max_ind]
 
-    brain = context.config.get("agent_service_brain", "openrouter")
-    model = context.config.get("agent_service_model", "deepseek/deepseek-v4-flash")
+    # "" = the choke point decides (org subscription, else config default)
+    brain = ""
+    model = ""
     fired: list[dict] = []
 
     async def _fire(focus: str, industry: str, subject: str) -> None:
@@ -2347,8 +2343,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             from routers.agents import _fire_agent_service, _watch_agent_service_run
             svc_url, svc_run_id = await _fire_agent_service(
                 "org", org_id,
-                brain=context.config.get("agent_service_brain", "openrouter"),
-                model=context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                 task=task, agent_type="monitor",
             )
             await db_module.update_agent_run(
@@ -2362,8 +2357,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             from routers.agents import _fire_agent_service, _watch_agent_service_run
             svc_url, svc_run_id = await _fire_agent_service(
                 "org", org_id,
-                brain=context.config.get("agent_service_brain", "openrouter"),
-                model=context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                 task=task, agent_type=agent_type,
             )
             await db_module.update_agent_run(
@@ -2429,8 +2423,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                 try:
                     svc_url, svc_run_id = await _fire_agent_service(
                         c["name"], org_id,
-                        brain=context.config.get("agent_service_brain", "openrouter"),
-                        model=context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                        brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                         task=orch_task, agent_type=child_type,
                     )
                     await db_module.update_agent_run(
@@ -2480,8 +2473,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                 try:
                     svc_url, svc_run_id = await _fire_agent_service(
                         c["name"], org_id,
-                        brain=context.config.get("agent_service_brain", "openrouter"),
-                        model=context.config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+                        brain="", model="",   # "" = the choke point decides (org subscription, else config default)
                         task=client_task, agent_type="osint",
                     )
                     await db_module.update_agent_run(

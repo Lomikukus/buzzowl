@@ -56,8 +56,7 @@ async def _fire_product_deep_research(org_id: int, company: dict, product_names:
     )
     svc_url, svc_run_id = await _fire_agent_service(
         subject=company["name"], org_id=org_id,
-        brain=config.get("agent_service_brain", "openrouter"),
-        model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+        brain="", model="",   # "" = the choke point decides (org subscription, else config default)
         task=task, agent_type="product_deep_research",
     )
     db_run_id = await db_module.create_agent_run(
@@ -140,8 +139,7 @@ async def upsert_seller_company_endpoint(body: dict, user: dict = Depends(curren
         svc_url, svc_run_id = await _fire_agent_service(
             subject=name,
             org_id=user["org_id"],
-            brain=config.get("agent_service_brain", "openrouter"),
-            model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+            brain="", model="",   # "" = the choke point decides (org subscription, else config default)
             task=task,
             agent_type="product_research",
         )
@@ -309,8 +307,7 @@ async def trigger_deep_research(body: dict, user: dict = Depends(current_user)):
         svc_url, svc_run_id = await _fire_agent_service(
             subject=company["name"],
             org_id=user["org_id"],
-            brain=config.get("agent_service_brain", "openrouter"),
-            model=config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+            brain="", model="",   # "" = the choke point decides (org subscription, else config default)
             task=task,
             agent_type="product_deep_research",
         )
