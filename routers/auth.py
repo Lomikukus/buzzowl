@@ -47,6 +47,18 @@ async def current_user(request: Request, authorization: Optional[str] = Header(N
         from routers.operator import is_suspended
         if await is_suspended(user["org_id"]):
             raise HTTPException(status_code=402, detail="This workspace is suspended (subscription inactive) — read-only until it is resumed")
+    # Warm the org's LLM overlay for the rest of this request. llm.resolve() is
+    # synchronous and only READS that cache (llm.complete/_call_brain_sync run
+    # in executors), so a request that reaches an LLM call with a cold cache
+    # silently resolves against the PLATFORM config instead of this workspace's
+    # provider. The load is cached for 60s, so this is a dict lookup almost
+    # every time. Background paths (callbacks, heartbeats) have no request and
+    # must keep warming it themselves.
+    try:
+        import llm as _llm_mod
+        await _llm_mod.ensure_org_overlay(user["org_id"])
+    except Exception:
+        pass          # never fail a request over the cache
     return user
 
 
