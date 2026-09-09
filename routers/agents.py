@@ -932,7 +932,12 @@ async def _handle_product_research_callback(org_id: int, svc_run_id, company_nam
             prompt = _PRODUCT_EXTRACTION_PROMPT.format(document_content=doc["content"][:8000], requested_line="")
             loop = asyncio.get_event_loop()
             # org_id matters: without it resolve() serves the platform provider
-            # instead of this workspace's own (or its subscription).
+            # instead of this workspace's own (or its subscription). And the
+            # overlay cache must be warm first — llm.complete() is sync and
+            # only READS the cache, while this callback fires minutes after the
+            # run started, well past the 60s TTL. A cold cache resolves to the
+            # platform provider just as silently as a missing org_id did.
+            await llm.ensure_org_overlay(org_id)
             raw = await loop.run_in_executor(None, _call_pipeline_brain, prompt, org_id)
             raw = _re.sub(r'```\w*\n?', '', raw).strip()
             try:
@@ -1034,7 +1039,12 @@ async def _handle_product_deep_research_callback(org_id: int, svc_run_id, compan
             )
             loop = asyncio.get_event_loop()
             # org_id matters: without it resolve() serves the platform provider
-            # instead of this workspace's own (or its subscription).
+            # instead of this workspace's own (or its subscription). And the
+            # overlay cache must be warm first — llm.complete() is sync and
+            # only READS the cache, while this callback fires minutes after the
+            # run started, well past the 60s TTL. A cold cache resolves to the
+            # platform provider just as silently as a missing org_id did.
+            await llm.ensure_org_overlay(org_id)
             raw = await loop.run_in_executor(None, _call_pipeline_brain, prompt, org_id)
             raw = _re.sub(r'```\w*\n?', '', raw).strip()
             try:

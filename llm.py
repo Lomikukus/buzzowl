@@ -344,6 +344,14 @@ def resolve(role: str = "default", model: Optional[str] = None,
     if not isinstance(org_id, int) or isinstance(org_id, bool):
         org_id = None            # never trust a stray value in the org slot
     ov = _org_overlay_sync(org_id)
+    if org_id and ov is None:
+        # Cold cache on a sync path: resolve() cannot await the load, so it is
+        # about to answer with the PLATFORM provider for a workspace that may
+        # well have its own. That used to be silent — the product-extraction
+        # step 401'd against openrouter while the org had a working provider.
+        logger.warning("no cached LLM overlay for org %s — resolving against the platform "
+                       "config; the caller should `await ensure_org_overlay(org_id)` first",
+                       org_id)
     if ov:
         if ov.get("plan") == "premium":
             b = ov.get("budget")
