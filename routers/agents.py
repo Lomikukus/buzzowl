@@ -343,6 +343,31 @@ async def _recover_orphaned_run(db_run_id: int, subject: Optional[str], retries_
     return True
 
 
+async def _persist_tool_calls(db_run_id: int, svc_url: str, svc_run_id, status: str) -> int:
+    """Copy a finished run's tool_calls from agent-pi onto our row.
+
+    The watcher normally does this, but it is an asyncio task: a server restart
+    mid-run kills it and the row then keeps its counters forever with an empty
+    detail list — the agents page shows "69 tool calls" above "Searches (0)".
+    The callback survives that, so it does the same fetch as a backstop.
+    Returns how many calls were stored (0 = nothing to do, or unreachable).
+    """
+    try:
+        tok = config.get("agent_service_token", "")
+        ph = {"Authorization": f"Bearer {tok}"} if tok else {}
+        async with httpx.AsyncClient(timeout=10.0) as hc:
+            r = await hc.get(f"{svc_url}/runs/{svc_run_id}", headers=ph)
+            r.raise_for_status()
+            data = r.json()
+        tcs = [_clean_tool_call(t) for t in (data.get("tool_calls") or [])]
+        if tcs:
+            await db_module.update_agent_run(db_run_id, status, tool_calls=tcs)
+        return len(tcs)
+    except Exception as exc:
+        logger.debug("could not persist tool_calls for db_run=%s: %s", db_run_id, exc)
+        return 0
+
+
 async def _watch_agent_service_run(
     db_run_id: int, svc_url: str, svc_run_id: int,
     subject: Optional[str] = None, retries_left: int = 1,
@@ -691,6 +716,18 @@ async def agent_service_callback(body: dict, request: Request):
             output={**prior_output, "service_run_id": svc_run_id, **output},
             error=error,
         )
+        # Backstop for a watcher that did not survive (server restart, or a
+        # caller whose asyncio task outlived its process): without this the row
+        # keeps counters with an empty tool-call list and the run detail is
+        # lost for good.
+        if not (body.get("tool_calls") or prior_output.get("tool_calls")):
+            existing_run = await db_module.get_agent_run(db_run_id)
+            if not (existing_run or {}).get("tool_calls"):
+                await _persist_tool_calls(
+                    db_run_id,
+                    prior_output.get("service_url") or _get_service_url(agent_type),
+                    svc_run_id, final_status,
+                )
 
     # After enrichment or people_search: fire contact_extraction via Pi
     if final_status == "done" and db_run_id and org_id:

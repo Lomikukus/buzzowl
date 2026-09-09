@@ -65,15 +65,21 @@ async def _fire_pain_point_research(
         triggered_by=None,
     )
 
+    from routers.agents import resolve_run_target
+    _prov, research_brain, research_model = await resolve_run_target(
+        org_id, research_brain, research_model, brain_from_config=True)
+    # Resolve the synthesis brain here too, before storing it: the record used
+    # to keep the raw config value ("openrouter"), which then showed up in the
+    # run's Output panel as the brain that ran — while the callback resolved it
+    # again and actually used the workspace's subscription.
+    _, pi_brain, pi_model = await resolve_run_target(
+        org_id, pi_brain, pi_model, brain_from_config=True)
+
     # Store pi_brain/pi_model in the DB now so the callback still has them later
     await db_module.update_agent_run(
         run_id, "pending",
         output={"_pi_brain": pi_brain, "_pi_model": pi_model},
     )
-
-    from routers.agents import resolve_run_target
-    _prov, research_brain, research_model = await resolve_run_target(
-        org_id, research_brain, research_model, brain_from_config=True)
     payload = {
         "task": task,
         "agent_type": "pain_point_research",
