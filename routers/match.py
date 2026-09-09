@@ -71,11 +71,14 @@ async def _fire_pain_point_research(
         output={"_pi_brain": pi_brain, "_pi_model": pi_model},
     )
 
+    from routers.agents import resolve_run_target
+    _prov, research_brain, research_model = await resolve_run_target(
+        org_id, research_brain, research_model, brain_from_config=True)
     payload = {
         "task": task,
         "agent_type": "pain_point_research",
         "org_id": org_id,
-        "provider": llm.provider_for_brain(research_brain),
+        "provider": _prov,
         "brain": research_brain,
         "model": research_model,
         "subject": client_name,

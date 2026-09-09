@@ -1125,12 +1125,14 @@ async def _fetch_event_via_pi(event_link: str, event_name: str, org_id: int) -> 
         f"with all extracted details."
     )
 
+    from routers.agents import resolve_run_target
+    _prov, brain, model = await resolve_run_target(org_id, brain, model, brain_from_config=True)
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
                 f"{pi_url}/runs",
                 json={"agent_type": "research", "task": task, "subject": event_name or "event",
-                      "org_id": org_id, "provider": llm.provider_for_brain(brain),
+                      "org_id": org_id, "provider": _prov,
                       "brain": brain, "model": model},
                 headers=headers,
             )

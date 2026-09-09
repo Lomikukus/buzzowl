@@ -435,3 +435,24 @@ async def test_no_llm_call_drops_the_org_context():
                 if line.rstrip().endswith(")"):
                     offenders.append(f"{path.name}:{i}")
     assert not offenders, "LLM calls without org context: " + ", ".join(offenders)
+
+
+async def test_no_run_is_fired_around_the_resolver():
+    """match_synthesis and pain-point research POSTed to agent-pi themselves,
+    building provider/brain/model from config — so they never saw the org's
+    subscription and finished with zero tool calls while reporting "done".
+    Every payload that names a provider must come from resolve_run_target."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    allowed = {"agents.py:250", "chat.py:769"}   # the two resolvers themselves
+    offenders = []
+    for path in sorted((root / "routers").glob("*.py")):
+        if path.name == "benchmark.py":
+            continue          # explicit brain/model comparison tool, by design
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            if "provider_for_brain(" in line and f"{path.name}:{i}" not in allowed:
+                offenders.append(f"{path.name}:{i}")
+    assert not offenders, (
+        "these build a run payload without resolve_run_target: " + ", ".join(offenders))

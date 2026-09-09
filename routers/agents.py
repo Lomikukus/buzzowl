@@ -223,6 +223,33 @@ def _get_service_url(agent_type: str) -> str:
     return config.get("agent_service_url_pi", config.get("agent_service_url", "http://localhost:8001"))
 
 
+async def resolve_run_target(org_id: int, brain: str = "", model: str = "",
+                             *, brain_from_config: bool = False) -> tuple[str, str, str]:
+    """(provider, brain, model) for an agent-pi run.
+
+    One rule, one place. A brain the USER asked for always wins (the manual-run
+    endpoint passes body.brain, empty when unspecified). A brain that is merely
+    the deployment default — empty, or read straight out of config.yaml by the
+    caller, which is what brain_from_config marks — gives way to the
+    workspace's connected subscription: on such an install that default is
+    keyless and the run dies on "No API key for provider: openrouter" with a
+    perfectly good subscription sitting unused.
+
+    Every caller that fires a run must go through this, including the ones that
+    POST to /runs themselves instead of using _fire_agent_service — match
+    synthesis and pain-point research did not, and finished with zero tool
+    calls while reporting "done".
+    """
+    if not brain or brain_from_config:
+        await llm.ensure_org_overlay(org_id)
+        sub, org_has_own = llm.org_subscription(org_id)
+        if sub and not org_has_own:
+            brain, model = sub[0], sub[1]
+    brain = brain or config.get("agent_service_brain", "openrouter")
+    model = model or config.get("agent_service_model", "deepseek/deepseek-v4-flash")
+    return llm.provider_for_brain(brain), brain, model
+
+
 async def _fire_agent_service(
     subject: str,
     org_id: int,
@@ -235,18 +262,8 @@ async def _fire_agent_service(
 ) -> tuple[str, int]:
     """POST a run to the correct agent service. Returns (svc_url, run_id)."""
     svc_url = _get_service_url(agent_type)
-    # A brain the USER asked for always wins (the manual-run endpoint passes
-    # body.brain, empty when unspecified). A brain that is merely the
-    # deployment default — empty here, or read straight out of config.yaml by
-    # the caller, which is what brain_from_config marks — gives way to the
-    # workspace's connected subscription: on such an install that default is
-    # keyless, and the run would die on "No API key for provider: openrouter"
-    # with a perfectly good subscription sitting unused.
-    if not brain or brain_from_config:
-        await llm.ensure_org_overlay(org_id)
-        sub, org_has_own = llm.org_subscription(org_id)
-        if sub and not org_has_own:
-            brain, model = sub[0], sub[1]
+    _provider, brain, model = await resolve_run_target(
+        org_id, brain, model, brain_from_config=brain_from_config)
     if callback_url is None:
         server_url = config.get("server_url", "http://host.docker.internal:8000")
         callback_url = f"{server_url}/api/agents/callback"
@@ -260,9 +277,9 @@ async def _fire_agent_service(
         "subject": subject,
         # provider is the canonical field; brain stays one release for
         # not-yet-rebuilt Pi containers (Pi maps brain→provider itself).
-        "provider": llm.provider_for_brain(brain or config.get("agent_service_brain", "openrouter")),
-        "brain": brain or config.get("agent_service_brain", "openrouter"),
-        "model": model or config.get("agent_service_model", "deepseek/deepseek-v4-flash"),
+        "provider": _provider,
+        "brain": brain,
+        "model": model,
         "callback_url": callback_url,
     }
     headers = {}
@@ -1300,11 +1317,13 @@ async def _handle_pain_point_callback(
             triggered_by=None,
         )
 
+        _prov, pi_brain, pi_model = await resolve_run_target(
+            org_id, pi_brain, pi_model, brain_from_config=True)
         payload = {
             "task": task,
             "agent_type": "match_synthesis",
             "org_id": org_id,
-            "provider": llm.provider_for_brain(pi_brain),
+            "provider": _prov,
             "brain": pi_brain,
             "model": pi_model,
             "subject": client_name,
@@ -1476,11 +1495,13 @@ async def _maybe_trigger_pain_point_research(org_id: int, client_name: str) -> N
             triggered_by=None,
         )
 
+        _prov, hermes_brain, hermes_model = await resolve_run_target(
+            org_id, hermes_brain, hermes_model, brain_from_config=True)
         payload = {
             "task": task,
             "agent_type": "pain_point_research",
             "org_id": org_id,
-            "provider": llm.provider_for_brain(hermes_brain),
+            "provider": _prov,
             "brain": hermes_brain,
             "model": hermes_model,
             "subject": client_name,

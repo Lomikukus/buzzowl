@@ -1691,7 +1691,7 @@ def _career_listing_links(html: str, base_url: str) -> list[str]:
     return [u for _, u in ranked[:3]]
 
 
-async def _extract_jobs(name: str, text: str) -> tuple[list, list]:
+async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None) -> tuple[list, list]:
     """One LLM call → (positions, inferred_needs) from careers-page text."""
     if len(text) < 200:
         return [], []
@@ -1699,7 +1699,11 @@ async def _extract_jobs(name: str, text: str) -> tuple[list, list]:
     from routers.knowledge import _call_brain_sync
     prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000])
     try:
-        reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt))
+        # org_id + a warm overlay, or resolve() answers with the platform
+        # provider (see llm.resolve's cold-cache warning) — _call_brain_sync is
+        # synchronous and only reads the cache.
+        await llm.ensure_org_overlay(org_id)
+        reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id))
     except Exception as exc:
         console.print(f"[yellow]jobs extract LLM failed for {name}: {exc}[/yellow]")
         return [], []
@@ -1851,17 +1855,17 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") ->
         listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
         listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
         listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
-        positions, needs = await _extract_jobs(name, listing)
+        positions, needs = await _extract_jobs(name, listing, org_id)
 
     # (2) Careers-page text (good for sites that list roles inline).
     if not positions:
         text, html = await _fetch_page_raw(url, wait_ms=3500)
-        positions, needs = await _extract_jobs(name, text)
+        positions, needs = await _extract_jobs(name, text, org_id)
         # (3) Landing page with no roles → follow its job-listing links.
         if not positions and html:
             for link in _career_listing_links(html, url):
                 sub_text, _ = await _fetch_page_raw(link, wait_ms=5000)
-                p2, n2 = await _extract_jobs(name, sub_text)
+                p2, n2 = await _extract_jobs(name, sub_text, org_id)
                 if p2:
                     positions, needs, effective_url = p2, n2, link
                     break
