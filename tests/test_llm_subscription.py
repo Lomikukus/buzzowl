@@ -412,3 +412,26 @@ async def test_hosted_install_gets_no_synthetic_provider(monkeypatch):
         assert not ov.get("providers")
     finally:
         llm.invalidate_org_overlay(ORG_ID)
+
+
+async def test_no_llm_call_drops_the_org_context():
+    """Same class as the brain-pinning guard: an LLM call without org_id
+    resolves against the platform config, not the workspace — which is how the
+    product-extraction step ended up on a keyless openrouter while the org had
+    a working provider."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders = []
+    for path in sorted((root / "routers").glob("*.py")):
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if re.search(r"run_in_executor\(\s*None,\s*_call_pipeline_brain,\s*\w+\s*\)", line):
+                offenders.append(f"{path.name}:{i}")
+            if re.search(r"\bllm\.(complete|chat|acomplete|achat|stream)\(", line) and "org_id" not in line:
+                # multi-line calls carry org_id on a later line; only flag one-liners
+                if line.rstrip().endswith(")"):
+                    offenders.append(f"{path.name}:{i}")
+    assert not offenders, "LLM calls without org context: " + ", ".join(offenders)

@@ -931,7 +931,9 @@ async def _handle_product_research_callback(org_id: int, svc_run_id, company_nam
             from routers.pipeline import _call_pipeline_brain  # lazy import — avoid circular at module load
             prompt = _PRODUCT_EXTRACTION_PROMPT.format(document_content=doc["content"][:8000], requested_line="")
             loop = asyncio.get_event_loop()
-            raw = await loop.run_in_executor(None, _call_pipeline_brain, prompt)
+            # org_id matters: without it resolve() serves the platform provider
+            # instead of this workspace's own (or its subscription).
+            raw = await loop.run_in_executor(None, _call_pipeline_brain, prompt, org_id)
             raw = _re.sub(r'```\w*\n?', '', raw).strip()
             try:
                 m = _re.search(r'\{.*\}', raw, flags=_re.DOTALL)
@@ -1031,7 +1033,9 @@ async def _handle_product_deep_research_callback(org_id: int, svc_run_id, compan
                 document_content=doc["content"][:8000], requested_line=requested_line
             )
             loop = asyncio.get_event_loop()
-            raw = await loop.run_in_executor(None, _call_pipeline_brain, prompt)
+            # org_id matters: without it resolve() serves the platform provider
+            # instead of this workspace's own (or its subscription).
+            raw = await loop.run_in_executor(None, _call_pipeline_brain, prompt, org_id)
             raw = _re.sub(r'```\w*\n?', '', raw).strip()
             try:
                 m = _re.search(r'\{.*\}', raw, flags=_re.DOTALL)
