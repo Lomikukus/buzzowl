@@ -93,6 +93,54 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 .cite-link { color: var(--c-bluehi, #9cdcfe); font-size: 0.72em; vertical-align: super; text-decoration: none; }
 .cite-link:hover { text-decoration: underline; }
 .ref-entry { scroll-margin-top: 1rem; }
+
+/* Print-only header for the brief PDF: on screen the client name lives in the
+   sidebar, which print hides, so the page would otherwise say nothing about
+   whose account it is. */
+.brief-print-header { display: none; }
+
+/* "PDF" on the Account Intelligence Brief = print just that section and let the
+   browser save it (same approach as the match report's Export button). Scoped
+   to body.printing-brief so an ordinary Cmd+P on this page still prints the
+   whole client view. */
+@media print {
+  body.printing-brief { background: #fff !important; color: #000 !important; }
+  /* The app is a fixed-height flex shell; undo it or the print stops after
+     the first screenful. */
+  body.printing-brief .page,
+  body.printing-brief .body,
+  body.printing-brief .main,
+  body.printing-brief .tab-panel { display: block !important; height: auto !important;
+                                   overflow: visible !important; }
+  body.printing-brief #main-nav,
+  body.printing-brief .sidebar,
+  body.printing-brief .tab-nav,
+  body.printing-brief .tab-panel:not(#tab-overview),
+  body.printing-brief #tab-overview > *:not(#briefSection),
+  body.printing-brief #briefSection .brief-header,
+  body.printing-brief #briefEmpty,
+  body.printing-brief .mp-overlay { display: none !important; }
+  body.printing-brief .tab-panel { padding: 0 !important; }
+  body.printing-brief .brief-print-header { display: block !important; margin-bottom: 1rem;
+                                            padding-bottom: 0.6rem; border-bottom: 1px solid #999; }
+  body.printing-brief .brief-print-title { font-size: 1.15rem; font-weight: 700; color: #000; }
+  body.printing-brief .brief-print-sub   { font-size: 0.8rem; color: #444; margin-top: 0.15rem; }
+  body.printing-brief .brief-body { background: #fff !important; padding: 0 !important;
+                                    color: #000 !important; }
+  body.printing-brief .brief-body h1,
+  body.printing-brief .brief-body h2 { color: #000 !important; border-bottom: 1px solid #ccc !important;
+                                       break-after: avoid; }
+  body.printing-brief .brief-body h3 { color: #000 !important; break-after: avoid; }
+  body.printing-brief .brief-body p,
+  body.printing-brief .brief-body li,
+  body.printing-brief .brief-body strong { color: #000 !important; }
+  body.printing-brief .brief-body a,
+  body.printing-brief .cite-link { color: #000 !important; text-decoration: none; }
+  /* Keep a claim and its evidence together where the browser allows it. */
+  body.printing-brief .brief-body li,
+  body.printing-brief .brief-body p { break-inside: avoid; }
+  @page { margin: 18mm 16mm; }
+}
 .generating-msg { color: var(--c-blue, #569cd6); font-size: 0.82rem; display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--c-line2, #333); border-top-color: var(--c-blue, #569cd6); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -387,8 +435,16 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
               <div class="brief-meta" id="briefMeta">No brief generated yet</div>
             </div>
             <div style="display:flex;gap:0.5rem">
+              <button class="btn" id="briefPdfBtn" style="display:none" onclick="downloadBriefPdf()"
+                      title="Print this brief — choose &quot;Save as PDF&quot; in the print dialog">⬇ PDF</button>
               <button class="btn btn-teal" id="generateBtn" onclick="generateBrief()">Generate Brief</button>
             </div>
+          </div>
+          <!-- Only rendered when printing (see the @media print block): the
+               client name and date live in the sidebar, which print hides. -->
+          <div class="brief-print-header" id="briefPrintHeader">
+            <div class="brief-print-title" id="briefPrintTitle"></div>
+            <div class="brief-print-sub" id="briefPrintSub"></div>
           </div>
           <div id="briefContainer">
             <div class="brief-body empty" id="briefEmpty">No brief yet. Click <strong>Generate Brief</strong> to create an AI-synthesised account intelligence report.</div>
@@ -1117,10 +1173,50 @@ function showBrief(content, generatedAt) {
     el.innerHTML = marked.parse(content);
     processRenderedBrief(el);
     if (generatedAt) document.getElementById('briefMeta').textContent = `Generated ${String(generatedAt).slice(0,10)}`;
+    _briefGeneratedAt = generatedAt ? String(generatedAt).slice(0, 10) : '';
+    document.getElementById('briefPdfBtn').style.display = '';
     updateOverviewEmptyState();
 }
 
 function generateBrief() { _autoGenerateBrief(); }
+
+let _briefGeneratedAt = '';
+
+// Print the brief on its own. The browser's print dialog offers "Save as PDF"
+// on every platform we support, which keeps selectable text and working links —
+// a rasterised client-side PDF would lose both, and a server-side renderer
+// would mean a new dependency for one button.
+function downloadBriefPdf() {
+    const printedOn = new Date().toISOString().slice(0, 10);
+    document.getElementById('briefPrintTitle').textContent =
+        `Account Intelligence Brief — ${clientName}`;
+    document.getElementById('briefPrintSub').textContent =
+        (_briefGeneratedAt ? `Generated ${_briefGeneratedAt} · ` : '') + `Printed ${printedOn} · Buzzowl`;
+
+    // The document title becomes the suggested PDF filename in Chrome, Edge and
+    // Safari, so set it for the duration of the print.
+    const restoreTitle = document.title;
+    const slug = clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    document.title = `account-intelligence-brief-${slug}-${printedOn}`;
+    document.body.classList.add('printing-brief');
+
+    let cleaned = false;
+    const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        document.body.classList.remove('printing-brief');
+        document.title = restoreTitle;
+        window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+    try {
+        window.print();
+    } finally {
+        // afterprint is the normal path; this catches the browsers that never
+        // fire it, so the page can never be left stuck in print mode.
+        setTimeout(cleanup, 1000);
+    }
+}
 
 // ── Findings (lazy) ───────────────────────────────────────────────────────
 async function loadFindings() {
