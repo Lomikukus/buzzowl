@@ -1388,6 +1388,17 @@ _NEWS_SCORE_PROMPT = (
     "CANDIDATES:\n{listing}"
 )
 
+
+def _news_rules_block(rules: str) -> str:
+    """Normalize a learned-rules block for _NEWS_SCORE_PROMPT's {rules} slot:
+    '' stays '' (no dangling blank line before "Return STRICT JSON..."), and
+    any other text always gets exactly one trailing newline — whether or not
+    the caller's text already ends in one — so "Return STRICT JSON..." always
+    starts on its own line."""
+    rules = (rules or "").rstrip("\n")
+    return f"{rules}\n" if rules else ""
+
+
 # YYYY/MM/DD or YYYY-MM-DD embedded in a URL path/slug, e.g. .../2025/03/12/...
 _URL_DATE_RE = re.compile(r"(20\d\d)[/-](\d\d)[/-](\d\d)")
 
@@ -1595,7 +1606,7 @@ async def _client_news_scan(
         return result
 
     prompt = _NEWS_SCORE_PROMPT.format(
-        subject=name, n=len(fresh), listing=_news_listing(fresh), rules="",
+        subject=name, n=len(fresh), listing=_news_listing(fresh), rules=_news_rules_block(""),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
@@ -1978,7 +1989,7 @@ async def _market_news_scan(
         return result
 
     prompt = _NEWS_SCORE_PROMPT.format(
-        subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh), rules="",
+        subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh), rules=_news_rules_block(""),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
