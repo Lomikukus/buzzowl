@@ -282,12 +282,12 @@ async def part_done(org_id: int, client_name: str, part: str, status: str, *,
 
 async def _run_python_part(org_id: int, client_name: str, part: str) -> None:
     """Run a Python-side intake part (jobs or news) and report the outcome via
-    part_done(). The actual scan functions are provided by other work packages
-    (WP2 for jobs, WP3 for news) — imported lazily here so this module (and
-    anything importing it, including tests) doesn't need those packages merged
-    yet. `_client_news_scan` in particular does not exist on this branch yet;
-    an ImportError/AttributeError from either import is treated as that part
-    having failed, never as a crash."""
+    part_done(). `_scan_client_jobs` (WP2) and `_client_news_scan` (WP3) are
+    both real now, imported lazily here (as routers.pipeline itself does
+    elsewhere) to avoid an import cycle at module load time — an
+    ImportError/AttributeError from either import is treated as that part
+    having failed, never as a crash, in case either ever goes missing again
+    (e.g. mid-refactor on some other branch)."""
     client = await db_module.get_client(org_id, client_name)
     if not client:
         await part_done(org_id, client_name, part, "failed", error="client not found")
@@ -314,19 +314,20 @@ async def _run_python_part(org_id: int, client_name: str, part: str) -> None:
                 from routers.pipeline import _client_news_scan
                 result = await _client_news_scan(org_id, client, run_id=run_id) or {}
         except (ImportError, AttributeError):
-            # The function doesn't exist yet on this branch (news, until WP3
-            # merges) — map to a short, human-readable reason so a raw Python
-            # exception message never ends up verbatim in the brief's
-            # missing-parts line.
+            # Defensive: the function should always be importable now that
+            # WP2/WP3 are merged, but map a missing one to a short,
+            # human-readable reason rather than a raw Python exception
+            # message ending up verbatim in the brief's missing-parts line.
             error = f"{part} scan not available"
         except TypeError as exc:
             # Two very different causes share this exception type: a stale
-            # call signature (jobs, until WP2's run_id kwarg lands — "not
-            # available yet", same as above) vs. a genuine TypeError raised
-            # from inside an otherwise-working scan (a real bug, not a
-            # missing feature). Only the former should be swallowed as
-            # "not available"; the latter must surface like any other scan
-            # failure below, not get mislabelled.
+            # call signature ("not available", same as above — defensive,
+            # shouldn't happen once callers stay in sync with WP2/WP3's
+            # signatures) vs. a genuine TypeError raised from inside an
+            # otherwise-working scan (a real bug, not a missing feature).
+            # Only the former should be swallowed as "not available"; the
+            # latter must surface like any other scan failure below, not get
+            # mislabelled.
             msg = str(exc)
             if "unexpected keyword argument" in msg or "positional argument" in msg:
                 error = f"{part} scan not available"
