@@ -81,6 +81,40 @@ async def test_record_appends_run_id_to_sources_of_truth():
     assert merged["sources_of_truth"] == [42]
 
 
+async def test_record_dedupes_blocked_urls_by_url_keeping_newest_at():
+    # A repeated block of the same URL must update its `at` in place, not
+    # re-append a duplicate entry (the 20-cap would otherwise fill up with
+    # copies of one URL — the WP4 review nit).
+    existing = {"metadata": {"domain": "acme.com", "blocked_urls": [
+        {"url": "https://acme.com/x", "kind": "403", "at": "t0"},
+        {"url": "https://acme.com/y", "kind": "403", "at": "t0"},
+    ]}}
+    db = _db(get_document=existing)
+    with patch.object(playbook, "db_module", db):
+        merged = await playbook.record(1, "acme.com", {"blocked_urls": [
+            {"url": "https://acme.com/x", "kind": "403", "at": "t1"},
+        ]})
+    assert len(merged["blocked_urls"]) == 2
+    by_url = {b["url"]: b for b in merged["blocked_urls"]}
+    assert by_url["https://acme.com/x"]["at"] == "t1"
+    assert by_url["https://acme.com/y"]["at"] == "t0"
+
+
+# ---------------------------------------------------------------------------
+# _mirror_summary
+# ---------------------------------------------------------------------------
+
+async def test_mirror_summary_skips_when_no_client_has_that_domain():
+    db = MagicMock()
+    db.list_clients = AsyncMock(return_value=[
+        {"id": 1, "name": "Other Co", "metadata": {"website": "https://other.com"}},
+    ])
+    db.update_client_metadata = AsyncMock()
+    with patch.object(playbook, "db_module", db):
+        await playbook._mirror_summary(1, "acme.com", {"careers": {"url": "https://acme.com/jobs"}})
+    db.update_client_metadata.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # render_block
 # ---------------------------------------------------------------------------

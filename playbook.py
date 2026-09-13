@@ -149,6 +149,27 @@ def _merge_list(old, new, cap: int) -> list:
     return cur[-cap:] if cap else cur
 
 
+def _merge_blocked_urls(old, new, cap: int) -> list:
+    """Union by `url`, not by whole-dict equality: every re-block of the same
+    URL carries a fresh `at`, so comparing whole dicts (the generic
+    `_merge_list`) never sees a repeat as a duplicate and the cap fills up
+    with N copies of the same URL instead of N distinct ones. Keeps the
+    newest `at` for a given URL and preserves first-seen order."""
+    by_url: dict = {}
+    order: list = []
+    for item in list(old or []) + list(new or []):
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        if not url:
+            continue
+        if url not in by_url:
+            order.append(url)
+        by_url[url] = item  # later entry (newer `at`) wins
+    merged = [by_url[u] for u in order]
+    return merged[-cap:] if cap else merged
+
+
 def _merge_dict_field(old: dict, new: dict) -> dict:
     """One level deep: scalars overwrite, lists union+bound. Keys the patch
     doesn't mention (e.g. careers.url when a patch only sets last_failure_at)
@@ -182,7 +203,10 @@ def _merge(existing: dict, patch: dict, *, domain: str, website: str) -> dict:
         if key in _TOP_DICT_FIELDS and isinstance(value, dict):
             merged[key] = _merge_dict_field(merged.get(key) or {}, value)
         elif key in _TOP_LIST_CAPS and isinstance(value, list):
-            merged[key] = _merge_list(merged.get(key), value, _TOP_LIST_CAPS[key])
+            if key == "blocked_urls":
+                merged[key] = _merge_blocked_urls(merged.get(key), value, _TOP_LIST_CAPS[key])
+            else:
+                merged[key] = _merge_list(merged.get(key), value, _TOP_LIST_CAPS[key])
         else:
             merged[key] = value
     return merged
