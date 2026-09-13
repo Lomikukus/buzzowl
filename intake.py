@@ -85,9 +85,14 @@ def _missing_parts(parts: dict) -> list[str]:
 
 
 def _part_done_after(part_state: dict, ref: Optional[datetime]) -> bool:
-    """True when `part_state` is terminal and finished strictly after `ref`
-    (or `ref` is None, i.e. there's nothing to compare against yet)."""
-    if part_state.get("status") not in _TERMINAL_PART_STATES:
+    """True when `part_state` finished successfully (status == 'done') strictly
+    after `ref` (or `ref` is None, i.e. there's nothing to compare against
+    yet). Deliberately excludes 'failed': a late failure doesn't add anything
+    new to fold into the brief text — it only updates `missing` from the live
+    part state — so it must not by itself trigger a full LLM regeneration
+    (see _maybe_finish's 'partial' branch, and its `force` path for how an
+    all-failed conclusion still gets closed out)."""
+    if part_state.get("status") != "done":
         return False
     if ref is None:
         return True
@@ -96,28 +101,28 @@ def _part_done_after(part_state: dict, ref: Optional[datetime]) -> bool:
 
 
 def is_active(meta: Optional[dict]) -> bool:
-    """True while a client's intake is still collecting. False once the brief
-    is terminal (written/refreshed/failed) — and, defensively, also when it is
-    'partial' but every part has since become terminal anyway (all done, or a
-    mix of done/failed): that combination should normally never arise (an
-    all-terminal finish is written as 'written', not 'partial' — see
-    _finish()), but treating it as inactive too means a corner case here can
-    never leave sweep()/the client-page poller spinning on a client that has
-    nothing left to wait for. Used to gate part_done()/note_run_started()
-    (no-op once the collection point has closed) and to pick the legacy vs.
-    intake-aware branch in agents._brief_then_match."""
+    """True while a client's intake is still collecting — i.e. its brief has
+    not reached a terminal state yet (written/refreshed/failed). A 'partial'
+    brief is always active, INCLUDING the case where every part happens to be
+    terminal already: that's a legitimate, temporary state (see _finish()'s
+    handling of a part landing while its own LLM call was still running) that
+    is waiting for exactly one more refresh pass, not a state to short-circuit
+    out of here — sweep()'s all-terminal check plus the one-time-refresh guard
+    in _maybe_finish are what actually close it out. (An earlier version of
+    this function special-cased 'partial + all parts terminal' as inactive,
+    defensively, because _finish used to compute 'missing'/all-terminal from a
+    stale pre-write snapshot and could leave exactly that combination stuck
+    forever with no other mechanism to revisit it. Now that _finish recomputes
+    from the current state right before writing, that combination is expected
+    and self-resolving — this function no longer needs to lie about it.)
+    Used to gate part_done()/note_run_started() (no-op once the collection
+    point has closed) and to pick the legacy vs. intake-aware branch in
+    agents._brief_then_match."""
     intake = (meta or {}).get("intake") or {}
     if not intake:
         return False
     brief = intake.get("brief") or {}
-    status = brief.get("status")
-    if status in _TERMINAL_BRIEF_STATES:
-        return False
-    if status == "partial":
-        parts = intake.get("parts") or {}
-        if all((parts.get(p) or {}).get("status") in _TERMINAL_PART_STATES for p in PARTS):
-            return False
-    return True
+    return brief.get("status") not in _TERMINAL_BRIEF_STATES
 
 
 def summary(meta: Optional[dict]) -> dict:
@@ -358,37 +363,71 @@ async def _maybe_finish(org_id: int, client_name: str, meta: dict, *, force: boo
             return  # the one-time refresh already happened
         written_at = _parse_iso(brief.get("written_at"))
         became_done_since = any(_part_done_after(parts.get(p) or {}, written_at) for p in PARTS)
-        if not (became_done_since or force):
-            return  # nothing new since the partial brief was written
-        await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=True)
-        return
+        if became_done_since:
+            # A part genuinely finished (successfully) since the partial
+            # brief was written — this is "the" one-time refresh, a nicer
+            # regeneration triggered by real new information.
+            await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=True)
+            return
+        if force:
+            # The absolute cap forced this, not a natural completion (a late
+            # FAILURE alone doesn't reach here either — see _part_done_after)
+            # — treat it as a plain finish rather than "the" refresh.
+            # sweep()'s cap path marks any still-open part 'failed' first, so
+            # _finish's own recompute (see its docstring) lands on a genuine
+            # all-terminal state and ends in one write ('written'), not
+            # 'refreshed'.
+            await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=False)
+            return
+        return  # nothing new since the partial brief was written
 
     if all_terminal or deadline_passed or force:
-        # all_terminal tells _finish this is a genuine conclusion (every part
-        # is done or failed — nothing left to wait for), not a deadline/cap
-        # cutting the collection short with parts still queued/running: only
-        # the latter should ever produce 'partial' (see _finish's target pick).
-        await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=False, all_terminal=all_terminal)
+        # Whether this genuinely concludes (every part done/failed) or is a
+        # deadline/cap cutting collection short with parts still
+        # queued/running, _finish decides which by recomputing from the
+        # current state right before it writes (see its docstring) — the
+        # `all_terminal` computed here is only used for this gate, not passed
+        # on.
+        await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=False)
 
 
-async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh: bool = False,
-                   all_terminal: bool = False) -> None:
+async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh: bool = False) -> None:
     """Write (or refresh) the brief exactly once. `db.cas_client_intake_brief`
     is the single-flight gate: only the caller that wins the waiting|partial →
     writing transition actually calls _auto_generate_brief.
 
-    `all_terminal=True` means every part is already done-or-failed — this is a
-    genuine, final conclusion, so the result is 'written' even if `missing` is
-    non-empty (some parts failed; their names are still recorded and still
-    show up in the brief text). Only a deadline/absolute-cap cutting the
-    collection short while parts are still queued/running produces 'partial'
-    (all_terminal=False, refresh=False) — the one state that stays active,
-    waiting for its one-time refresh."""
+    `missing` as passed in is a snapshot from BEFORE this call's own (up to
+    180s) _auto_generate_brief — and a part can legitimately finish while
+    that's running: part_done() keeps working the whole time (is_active() is
+    still True while brief.status == 'writing'; it's only _maybe_finish that
+    no-ops on a 'writing' brief, deliberately, so it doesn't race this very
+    write). So right before writing the brief, the CURRENT parts are re-read
+    from the DB and `missing`/`all_terminal` are both recomputed from that —
+    the `missing` parameter is never trusted for the write itself, only
+    passed to _auto_generate_brief as the prompt's "as of when we started"
+    context, and `refresh` is the only caller-supplied signal that survives
+    into the write (it says whether the caller intended this as the one-time
+    refresh, not whether it succeeds at being final — see below).
+
+    If a part reached 'done' strictly *after* our own CAS-win — i.e. during
+    this call's own generation, not something the caller already knew about —
+    the brief text we just generated doesn't reflect it yet. Even if that
+    happens to make every part terminal now, this write stays 'partial' (with
+    the recomputed `missing`, `refreshed_at` untouched) instead of finalizing
+    on stale content: the ordinary one-time-refresh path (_maybe_finish's
+    'partial' branch, driven by sweep or a stray part_done) picks it up next
+    and produces a properly-refreshed brief once this generation is out of
+    the way. The same applies if, after recomputing, something is *still* not
+    terminal (only relevant for a forced/refresh call) — that can't be final
+    either. Only when nothing new landed during this call AND everything is
+    genuinely terminal now does the simple rule apply: 'refreshed' if this
+    call was itself the one-time refresh, else 'written'."""
     updated = await db_module.cas_client_intake_brief(org_id, client_name, ["waiting", "partial"], "writing")
     if updated is None:
         return  # lost the race — another caller is already handling this
 
     now = _iso(_now())
+    cas_won_at = _parse_iso(now)
     await db_module.set_client_intake_path(org_id, client_name, ["intake", "brief", "entered_writing_at"], now)
 
     from routers.knowledge import _auto_generate_brief
@@ -404,15 +443,35 @@ async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh:
     attempt = intake.get("attempt", 1)
 
     if ok:
-        target = "refreshed" if refresh else ("written" if all_terminal else "partial")
+        # Recompute from the current state — never trust the pre-CAS snapshot
+        # the caller decided to finish on (see docstring above).
+        current_client = await db_module.get_client(org_id, client_name)
+        current_meta = (current_client or {}).get("metadata") or {}
+        current_parts = (current_meta.get("intake") or {}).get("parts") or intake.get("parts") or {}
+        all_terminal_now = all((current_parts.get(p) or {}).get("status") in _TERMINAL_PART_STATES for p in PARTS)
+        missing_now = _missing_parts(current_parts)
+        landed_during_write = any(_part_done_after(current_parts.get(p) or {}, cas_won_at) for p in PARTS)
+
+        if landed_during_write or not all_terminal_now:
+            target = "partial"
+            refreshed_at = prior_brief.get("refreshed_at")
+        else:
+            target = "refreshed" if refresh else "written"
+            refreshed_at = now if refresh else prior_brief.get("refreshed_at")
+
         brief_patch = {
             "status": target,
             "written_at": now,
-            "missing": missing,
-            "refreshed_at": now if refresh else prior_brief.get("refreshed_at"),
+            "missing": missing_now,
+            "refreshed_at": refreshed_at,
             "error": None,
         }
         await db_module.set_client_intake_path(org_id, client_name, ["intake", "brief"], brief_patch)
+        if landed_during_write:
+            # Not really final — the content is already known-stale, so don't
+            # match against it. The follow-up refresh's own finalize (once it
+            # lands with nothing new arriving mid-write) triggers the match.
+            return
         if not (refresh and await _has_match_report(org_id, client_name)):
             try:
                 from routers.agents import _maybe_trigger_pain_point_research
