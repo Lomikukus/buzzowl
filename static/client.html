@@ -1149,11 +1149,27 @@ const INTAKE_PARTS = ['osint', 'research', 'jobs', 'news'];
 const INTAKE_LABELS = { osint: 'OSINT', research: 'Research', jobs: 'Jobs', news: 'News' };
 const INTAKE_SYMBOLS = { queued: '○', running: '⟳', done: '✓', failed: '✗' };
 
+// Show the strip while the collection point is active, or briefly afterwards
+// so the final "written"/"refreshed"/"failed" chip is still visible — but it
+// must disappear at rest, so gate on `active` rather than on `trigger` (which
+// stays set forever once an intake has ever run for this client).
+const INTAKE_STRIP_LINGER_MS = 60 * 60 * 1000; // 1 hour
+
+function _intakeShouldShow(data) {
+    if (!data || !data.trigger) return false;
+    if (data.active) return true;
+    const writtenAt = (data.brief || {}).written_at;
+    if (!writtenAt) return false;
+    const writtenMs = new Date(writtenAt).getTime();
+    if (Number.isNaN(writtenMs)) return false;
+    return (Date.now() - writtenMs) < INTAKE_STRIP_LINGER_MS;
+}
+
 function renderIntake(data) {
     _intakeActive = !!(data && data.active);
     const strip = document.getElementById('intakeStrip');
     if (!strip) return;
-    if (!data || !data.trigger) { strip.style.display = 'none'; return; }
+    if (!_intakeShouldShow(data)) { strip.style.display = 'none'; return; }
     strip.style.display = '';
 
     const parts = data.parts || {};
@@ -1219,9 +1235,10 @@ function startIntakePolling() {
         if (partChanged || ['written', 'refreshed'].includes(briefStatus)) {
             loadJobs(); loadSignals(); loadBrief(); loadMatchSummary();
         }
-        const stillRunning = Object.values(parts).some(p => p.status === 'queued' || p.status === 'running');
-        const briefTerminal = ['written', 'refreshed', 'failed'].includes(briefStatus);
-        if (briefTerminal && !stillRunning) {
+        // Stop the instant the collection point itself says it's done — this is
+        // the single source of truth (is_active() on the backend), not a
+        // frontend guess reconstructed from part/brief statuses.
+        if (!data.active) {
             clearInterval(_intakePollTimer);
             _intakePollTimer = null;
         }
