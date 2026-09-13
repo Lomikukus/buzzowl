@@ -1796,6 +1796,79 @@ _IT_MGMT_TITLE_KEYS = ("it", "digital", "software", "develop", "engineer", "inge
                        "leitung", "head", "director", "projekt", "project", "consultant", "berater",
                        "architekt", "product", "analyst", "controlling", "transformation", "scrum")
 
+# Apprentice/intern/student/thesis titles — dropped by _filter_positions unless
+# an IT/management word (below) also appears in the title.
+_JUNIOR_TITLE_RE = re.compile(
+    r"\b(ausbildung|azubi|praktikum|werkstudent|duales studium|dh-studium|trainee|"
+    r"intern(ship)?|bachelor|master thesis|abschlussarbeit|ferienjob|minijob|aushilfe|student)\b",
+    re.IGNORECASE,
+)
+
+# Same pool as _IT_MGMT_TITLE_KEYS plus a few explicit acronyms/roles, EXCEPT
+# "controlling": that alone is too often a genuinely junior finance-trainee
+# program ("Trainee Controlling") to serve as an override signal here, even
+# though it's a fine tie-breaker for the sitemap-title ranking above. Short,
+# generic tokens ("it", "sap", "erp", the C-level acronyms) need a real word
+# boundary or they match inside unrelated words (bare "it" hits "Mitarbeiter",
+# "Sicherheit", ...); the longer/specific ones stay plain substrings so they
+# still match inside German compounds like "Fachinformatiker".
+_IT_MGMT_WORD_KEYS = tuple(k for k in _IT_MGMT_TITLE_KEYS if k != "controlling") + (
+    "cio", "cto", "ciso", "devops", "sap", "erp", "entwickler", "architect",
+)
+_SHORT_IT_MGMT_KEYS = {"it", "sap", "erp", "cio", "cto", "ciso"}
+_IT_MGMT_WORD_RE = re.compile(
+    "|".join(
+        rf"\b{re.escape(k)}\b" if k in _SHORT_IT_MGMT_KEYS else re.escape(k)
+        for k in _IT_MGMT_WORD_KEYS
+    ),
+    re.IGNORECASE,
+)
+
+
+def _filter_positions(positions: list) -> list:
+    """Drop apprenticeship/internship/student/thesis/minijob roles unless the
+    title also carries an IT/management word, dedupe titles case-insensitively,
+    and cap at 20. Applied after every _extract_jobs call so junior/duplicate
+    noise never reaches the stored jobs doc, the findings, or the brief."""
+    out: list = []
+    seen_titles: set = set()
+    for p in positions or []:
+        if not isinstance(p, dict):
+            continue
+        title = str(p.get("title") or "").strip()
+        if not title:
+            continue
+        key = title.lower()
+        if key in seen_titles:
+            continue
+        if _JUNIOR_TITLE_RE.search(title) and not _IT_MGMT_WORD_RE.search(title):
+            continue
+        seen_titles.add(key)
+        out.append(p)
+        if len(out) >= 20:
+            break
+    return out
+
+
+def _sitemap_listing_url(url: str) -> str:
+    """Best-guess listing/landing URL for a job posting found via the sitemap
+    (e.g. .../jobs/backend-engineer-123 -> .../jobs/) — used as the discovered
+    careers-page candidate. The sitemap step itself only ever needs the domain
+    (see _sitemap_job_urls below), so an imperfect path here only affects the
+    page-text fallback, never the sitemap re-scan."""
+    p = urlparse(url)
+    path = p.path
+    low = path.lower()
+    end = 0
+    for k in _JOB_DETAIL_KEYS:
+        idx = low.find(k)
+        if idx != -1:
+            end = max(end, idx + len(k))
+    trimmed = path[:end] if end else (path.rsplit("/", 1)[0] + "/")
+    if not trimmed.endswith("/"):
+        trimmed = trimmed.rsplit("/", 1)[0] + "/"
+    return f"{p.scheme}://{p.netloc}{trimmed or '/'}"
+
 
 async def _sitemap_job_urls(base_url: str, limit: int = 130) -> list[tuple[str, str]]:
     """Harvest individual job-posting URLs from the site's sitemap(s) — the
