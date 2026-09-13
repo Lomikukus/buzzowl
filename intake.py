@@ -218,7 +218,14 @@ async def note_run_started(org_id: int, client_name: str, db_run_id: int) -> Non
     dispatched. This is deliberately what starts the 25-minute deadline clock:
     agent-pi has only 2 slots, so a newly created client's parts can sit queued
     behind other clients' runs for a while, and starting the clock at DB-row
-    creation would hand queued clients bogus partial briefs."""
+    creation would hand queued clients bogus partial briefs.
+
+    Note: sweep()'s lost-callback rescue (part_done() called from a stale
+    agent_runs row instead of a live callback/watcher) does NOT go through
+    this function, so it never sets deadline_at either. That's acceptable —
+    a client whose Pi parts are only ever discovered via that rescue path
+    still gets closed out eventually by the absolute cap, just not by the
+    (tighter) 25-minute deadline."""
     client = await db_module.get_client(org_id, client_name)
     if not client or not is_active(client.get("metadata")):
         return
@@ -506,9 +513,14 @@ async def sweep() -> None:
         reverted to 'waiting' so the next event retries it;
     (2) a part whose agent_runs row already finished (done/failed) while our
         copy of intake.parts still shows it queued/running is reconciled via
-        part_done() — the fallback for a lost HTTP callback;
-    (3) otherwise, re-check whether the deadline or the absolute cap has now
-        passed (or a partial brief is due its one-time refresh)."""
+        part_done() — the fallback for a lost HTTP callback. Note this path
+        never calls note_run_started(), so it never sets deadline_at either;
+        see that function's docstring;
+    (3) otherwise, re-check whether the deadline, the absolute cap, or plain
+        all-terminal-ness (parts can all finish without a deadline ever being
+        set — e.g. right after (1) resets a stuck 'writing' brief) means the
+        brief should be (re)written now — or a partial brief is due its
+        one-time refresh."""
     clients = await db_module.list_clients_with_open_intake()
     now = _now()
     absolute_cap_min = config.get("intake_absolute_cap_min", 90)
@@ -520,10 +532,9 @@ async def sweep() -> None:
         intake = meta.get("intake") or {}
         if not intake:
             continue
-        # list_clients_with_open_intake()'s WHERE only sees brief.status, which
-        # can't tell partial-but-still-waiting apart from the defensive
-        # partial-but-everything-is-actually-terminal case is_active() also
-        # treats as inactive (see its docstring) — skip it here instead.
+        # list_clients_with_open_intake()'s WHERE already restricts to
+        # waiting/writing/partial, all of which is_active() now always reads
+        # as active — this is just a cheap belt-and-suspenders re-check.
         if not is_active(meta):
             continue
         brief = intake.get("brief") or {}
@@ -561,6 +572,7 @@ async def sweep() -> None:
         started_at = _parse_iso(intake.get("started_at"))
         deadline = _parse_iso(intake.get("deadline_at"))
         cap_passed = bool(started_at and now - started_at > timedelta(minutes=absolute_cap_min))
+        all_terminal = all((parts.get(p) or {}).get("status") in _TERMINAL_PART_STATES for p in PARTS)
 
         # The absolute cap is checked independently of the deadline branch —
         # once deadline_at is set (any part reached 'running'), the deadline
@@ -569,6 +581,23 @@ async def sweep() -> None:
         # cap as an elif after it would make the cap unreachable exactly when
         # a client has been stuck the longest.
         if cap_passed:
-            await _maybe_finish(org_id, name, meta, force=True)
-        elif deadline is not None and (now >= deadline or brief.get("status") == "partial"):
+            # Force-finish: anything still queued/running past the absolute
+            # cap is timed out — mark it 'failed' up front so _finish's own
+            # post-generation recompute (see its docstring) lands on a
+            # genuine all_terminal=True and this ends in ONE write, instead
+            # of repeating every sweep tick with the same stale 'missing'
+            # (which used to get mislabelled 'refreshed' on the second pass).
+            updated_meta = meta
+            for part in PARTS:
+                st = parts.get(part) or {}
+                if st.get("status") in _TERMINAL_PART_STATES:
+                    continue
+                result = await db_module.set_client_intake_path(
+                    org_id, name, ["intake", "parts", part],
+                    {**st, "status": "failed", "done_at": _iso(now), "error": "timed out (absolute cap)"},
+                )
+                if result is not None:
+                    updated_meta = result
+            await _maybe_finish(org_id, name, updated_meta, force=True)
+        elif all_terminal or (deadline is not None and (now >= deadline or brief.get("status") == "partial")):
             await _maybe_finish(org_id, name, meta)
