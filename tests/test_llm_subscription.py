@@ -487,13 +487,21 @@ async def test_no_run_is_fired_around_the_resolver():
     import re
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    allowed = {"agents.py:250", "chat.py:769"}   # the two resolvers themselves
+    # The two resolvers themselves, keyed by ENCLOSING FUNCTION rather than by
+    # line number: a line-keyed allowlist breaks on any edit above it (three
+    # parallel branches had to bump it in one week) and, worse, can silently
+    # bless a new bare call that lands on the old line.
+    allowed = {"agents.py": {"resolve_run_target"}, "chat.py": {"_resolve_pi_chat_target"}}
     offenders = []
     for path in sorted((root / "routers").glob("*.py")):
         if path.name == "benchmark.py":
             continue          # explicit brain/model comparison tool, by design
+        current_fn = ""
         for i, line in enumerate(path.read_text().splitlines(), 1):
-            if "provider_for_brain(" in line and f"{path.name}:{i}" not in allowed:
-                offenders.append(f"{path.name}:{i}")
+            fn = re.match(r"\s*(?:async\s+)?def\s+(\w+)\(", line)
+            if fn:
+                current_fn = fn.group(1)
+            if "provider_for_brain(" in line and current_fn not in allowed.get(path.name, set()):
+                offenders.append(f"{path.name}:{i} ({current_fn or 'module level'})")
     assert not offenders, (
         "these build a run payload without resolve_run_target: " + ", ".join(offenders))
