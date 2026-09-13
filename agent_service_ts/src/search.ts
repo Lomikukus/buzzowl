@@ -116,12 +116,12 @@ export async function fetchPage(url: string, maxChars = 3000): Promise<string> {
 
 // -- Page fetch (browser-rendered via self-hosted Playwright service) --
 
-export async function fetchPageBrowser(url: string, maxChars = 5000): Promise<string> {
+export async function fetchPageBrowser(url: string, maxChars = 5000, waitMs = 3500): Promise<string> {
   try {
     const resp = await fetch(`${config.browserServiceUrl}/fetch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, max_chars: maxChars }),
+      body: JSON.stringify({ url, max_chars: maxChars, wait_ms: waitMs }),
       signal: AbortSignal.timeout(45_000),
     });
     if (!resp.ok) throw new Error(`browser-service ${resp.status}`);
