@@ -518,6 +518,20 @@ async def test_lessons_propose_dedupes_and_output_is_all_proposed():
     db.index_document.assert_awaited_once()
 
 
+def test_bound_lessons_caps_proposed_to_20_and_decided_to_100():
+    proposed = [{"id": f"p{i}", "status": "proposed"} for i in range(25)]
+    decided = [{"id": f"d{i}", "status": "approved"} for i in range(105)]
+    bounded = playbook._bound_lessons(decided + proposed)
+
+    result_proposed = [l for l in bounded if l["status"] == "proposed"]
+    result_decided = [l for l in bounded if l["status"] != "proposed"]
+    assert len(result_proposed) == 20
+    assert len(result_decided) == 100
+    # the newest (tail) entries are the ones kept
+    assert result_proposed[-1]["id"] == "p24"
+    assert result_decided[-1]["id"] == "d104"
+
+
 def test_lessons_block_only_injects_approved_matching_scope():
     lessons = [
         {"text": "Approved research rule", "scope": "research", "status": "approved"},
