@@ -3637,6 +3637,16 @@ async def _start_heartbeat_scheduler() -> None:
         job_count += 1
     except Exception as exc:
         console.print(f"  [yellow]Outreach worker not scheduled: {exc}[/yellow]")
+    # Intake sweeper (WP5): reconciles lost callbacks and closes out collection
+    # points whose deadline/absolute cap has passed. Cheap when nothing is open.
+    try:
+        import intake
+        context._scheduler.add_job(intake.sweep, "interval", id="intake_sweeper",
+                                   seconds=60, coalesce=True, max_instances=1,
+                                   misfire_grace_time=30)
+        job_count += 1
+    except Exception as exc:
+        console.print(f"  [yellow]Intake sweeper not scheduled: {exc}[/yellow]")
     try:
         import imap_sync as _imap
         context._scheduler.add_job(_imap.poll_once, "interval", id="imap_sync",
