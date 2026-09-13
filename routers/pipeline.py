@@ -1533,8 +1533,8 @@ async def _run_market_monitor(org_id: int) -> dict:
 # Open-positions (jobs) monitoring → inferred needs → match analysis
 # ---------------------------------------------------------------------------
 
-_CAREERS_KEYS = ("career", "careers", "jobs", "job", "stellen", "karriere",
-                 "vacanc", "join-us", "positions", "joboffers", "jobangebote")
+_CAREERS_KEYS = ("career", "careers", "jobs", "job", "stellen", "stellenangebote", "karriere",
+                 "vacanc", "join-us", "join", "positions", "joboffers", "jobangebote")
 
 _JOBS_EXTRACT_PROMPT = (
     "Below is the text of {client}'s careers/jobs page. Extract the OPEN POSITIONS and infer what "
@@ -1568,72 +1568,6 @@ _JOBS_EXTRACT_PROMPT = (
     "& compliance', 'Driving a digital-transformation program'). If the page shows no concrete "
     'individual job listings, return {{"positions": [], "inferred_needs": []}}.\n\nPAGE TEXT:\n{page}'
 )
-
-
-async def _discover_careers_url(org_id: int, client: dict) -> str:
-    """Find a client's careers/jobs page. Gathers SearXNG candidates, then lets
-    the LLM pick the company's official open-positions listing (it's better at
-    spotting the right page than URL heuristics); falls back to own-domain /
-    careers-ish ranking if the LLM is unavailable or unsure."""
-    meta = client.get("metadata") or {}
-    if not (meta.get("website") or "").strip():
-        website = await _resolve_client_website(org_id, client)
-        if website:
-            meta["website"] = website
-            client["metadata"] = meta
-    domain = _client_domain(client)
-    name = client["name"]
-    queries = [f'"{name}" careers open positions', f'"{name}" jobs karriere stellenangebote']
-    if domain:
-        queries.insert(0, f"site:{domain} careers jobs stellen")
-
-    candidates: list[dict] = []
-    seen: set = set()
-    for q in queries:
-        try:
-            results = await _searxng_results(q)
-        except Exception:
-            continue
-        for r in results:
-            url = (r.get("url") or "").strip()
-            if not url.startswith("http") or url in seen:
-                continue
-            seen.add(url)
-            candidates.append({"url": url, "title": (r.get("title") or "")[:120]})
-    if not candidates:
-        return ""
-
-    # LLM picks the best careers/open-positions URL from the candidates.
-    listing = "\n".join(f"{i+1}. {c['title']} — {c['url']}" for i, c in enumerate(candidates[:15]))
-    prompt = (
-        f"Which of these URLs is {name}'s official careers / open-positions listing page "
-        f"(where you can browse their current job openings)? Prefer a page on the company's own "
-        f"domain{(' (' + domain + ')') if domain else ''} or its official applicant-tracking system "
-        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday). Reply with ONLY the single best URL, "
-        f"or 'none' if none qualify.\n\n{listing}"
-    )
-    try:
-        reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
-        m = re.search(r"https?://\S+", reply)
-        if m:
-            picked = m.group(0).rstrip(").,>\"'")
-            if any(picked == c["url"] for c in candidates) or (domain and domain in picked):
-                return picked
-    except Exception as exc:
-        console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
-
-    # Heuristic fallback: own-domain + careers-ish keyword.
-    ranked: list[tuple[int, str]] = []
-    for c in candidates:
-        url = c["url"]
-        host = urlparse(url).netloc.lower().replace("www.", "")
-        score = (2 if domain and domain in host else 0) + (1 if any(k in url.lower() for k in _CAREERS_KEYS) else 0)
-        if score:
-            ranked.append((score, url))
-    if ranked:
-        ranked.sort(reverse=True)
-        return ranked[0][1]
-    return ""
 
 
 # Job-LISTING link terms only (the landing page is already "career/karriere" — we
@@ -1672,11 +1606,15 @@ async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000)
     return text, html
 
 
-def _career_listing_links(html: str, base_url: str) -> list[str]:
-    """Job-listing links on a careers landing page (so we can follow through to
-    the actual openings when the landing page itself lists none)."""
+def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "") -> list[str]:
+    """Rank links on a page by relevance to `keys` (substring match against the
+    full URL) plus ATS-host / own-domain bonuses. Generalises the old
+    _career_listing_links so the same code harvests a careers-page link off a
+    homepage (keys=_CAREERS_KEYS) or a job-listing link off a careers landing
+    page (keys=_JOB_LINK_KEYS) today, and a newsroom link (WP3) later."""
     from urllib.parse import urljoin
     base_host = urlparse(base_url).netloc.lower().replace("www.", "")
+    own_domain = (own_domain or base_host).lower().replace("www.", "")
     ranked: list[tuple[int, str]] = []
     seen: set = set()
     for m in re.finditer(r'href=["\']([^"\']+)["\']', html or "", re.I):
@@ -1689,25 +1627,155 @@ def _career_listing_links(html: str, base_url: str) -> list[str]:
         low = full.lower()
         host = urlparse(full).netloc.lower().replace("www.", "")
         is_ats = any(a in host for a in _ATS_HOSTS) and host != base_host
-        is_listing = any(k in low for k in _JOB_LINK_KEYS)
-        if full in seen or not (is_ats or is_listing):
+        is_match = any(k in low for k in keys)
+        if full in seen or not (is_ats or is_match):
             continue
         seen.add(full)
-        score = (3 if is_ats else 0) + (1 if base_host and base_host in host else 0) \
+        score = (3 if is_ats else 0) + (1 if own_domain and own_domain in host else 0) \
                   + (1 if any(t in low for t in ("stellenangebote", "all-jobs", "open-positions", "joblist", "stellensuche")) else 0)
         ranked.append((score, full))
     ranked.sort(reverse=True)
     return [u for _, u in ranked[:3]]
 
 
-async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None) -> tuple[list, list]:
-    """One LLM call → (positions, inferred_needs) from careers-page text."""
-    if len(text) < 200:
+async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = None) -> list[dict]:
+    """Ordered candidate careers/jobs URLs, cheapest and most reliable first:
+    a fresh (<=60 days) playbook careers URL short-circuits everything else
+    (no HTTP, no SearXNG); then the client's own recorded careers_url; then a
+    homepage link harvest; then a sitemap probe of the site root; then the
+    legacy SearXNG queries as the last resort. Each candidate carries the tier
+    it came from so the caller never has to re-derive it."""
+    name = client["name"]
+    meta = client.get("metadata") or {}
+    candidates: list[dict] = []
+    seen: set = set()
+
+    def _add(url: str, tier: str, title: str = "") -> None:
+        url = (url or "").strip()
+        if not url.startswith("http") or url in seen:
+            return
+        seen.add(url)
+        candidates.append({"url": url, "tier": tier, "title": title[:120]})
+
+    careers_pb = (pb or {}).get("careers") or {}
+    pb_url = (careers_pb.get("url") or "").strip()
+    if pb_url:
+        last_success = careers_pb.get("last_success_at")
+        fresh = False
+        if last_success:
+            try:
+                fresh = (datetime.now(timezone.utc) - datetime.fromisoformat(last_success)) <= timedelta(days=60)
+            except (ValueError, TypeError):
+                fresh = False
+        if fresh:
+            return [{"url": pb_url, "tier": "playbook", "title": ""}]
+        _add(pb_url, "playbook")
+
+    _add((meta.get("careers_url") or "").strip(), "metadata")
+
+    if not (meta.get("website") or "").strip():
+        website = await _resolve_client_website(org_id, client)
+        if website:
+            meta["website"] = website
+            client["metadata"] = meta
+    website = (meta.get("website") or "").strip()
+    domain = _client_domain(client)
+
+    if website:
+        _home_text, home_html = await _fetch_page_raw(website)
+        if home_html:
+            for link in _harvest_links(home_html, website, _CAREERS_KEYS, domain):
+                _add(link, "homepage")
+
+        sitemap_jobs = await _sitemap_job_urls(website)
+        if sitemap_jobs:
+            _add(_sitemap_listing_url(sitemap_jobs[0][1]), "sitemap")
+
+    queries = [f'"{name}" careers open positions', f'"{name}" jobs karriere stellenangebote']
+    if domain:
+        queries.insert(0, f"site:{domain} careers jobs stellen")
+    for q in queries:
+        try:
+            results = await _searxng_results(q)
+        except Exception:
+            continue
+        for r in results:
+            _add((r.get("url") or "").strip(), "searxng", r.get("title") or "")
+
+    return candidates
+
+
+async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = None) -> tuple[str, str]:
+    """Find a client's careers/jobs page. Cheap candidates (playbook, known
+    metadata, homepage harvest, sitemap probe) come first and, if only one
+    surfaces, it is used directly with no LLM call at all. Once SearXNG
+    candidates are in the mix, the LLM picks the best one — but the pick is
+    only accepted when it lands on the client's own domain or a known ATS
+    host, so it can never wander off to an unrelated URL. Falls back to a
+    own-domain + careers-keyword heuristic ranking when the LLM is
+    unavailable, unsure, or picks something off-domain."""
+    candidates = await _careers_candidates(org_id, client, pb)
+    if not candidates:
+        return "", ""
+    if len(candidates) == 1:
+        return candidates[0]["url"], candidates[0]["tier"]
+
+    domain = _client_domain(client)
+    name = client["name"]
+
+    def _own_or_ats(url: str) -> bool:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        return bool(domain and (host == domain or host.endswith("." + domain))) or \
+            any(a in host for a in _ATS_HOSTS)
+
+    listing = "\n".join(
+        f"{i+1}. {c['title'] or c['url']} — {c['url']}" for i, c in enumerate(candidates[:15])
+    )
+    prompt = (
+        f"Which of these URLs is {name}'s official careers / open-positions listing page "
+        f"(where you can browse their current job openings)? Prefer a page on the company's own "
+        f"domain{(' (' + domain + ')') if domain else ''} or its official applicant-tracking system "
+        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday). Reply with ONLY the single best URL, "
+        f"or 'none' if none qualify.\n\n{listing}"
+    )
+    try:
+        reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
+        m = re.search(r"https?://\S+", reply)
+        if m:
+            picked = m.group(0).rstrip(").,>\"'")
+            match = next((c for c in candidates if c["url"] == picked), None)
+            if match and _own_or_ats(picked):
+                return match["url"], match["tier"]
+    except Exception as exc:
+        console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
+
+    # Heuristic fallback: own-domain + careers-ish keyword wins, tier preserved.
+    ranked: list[tuple[int, dict]] = []
+    for c in candidates:
+        host = urlparse(c["url"]).netloc.lower().replace("www.", "")
+        score = (2 if domain and (host == domain or host.endswith("." + domain)) else 0) \
+              + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
+        if score:
+            ranked.append((score, c))
+    if ranked:
+        ranked.sort(key=lambda t: t[0], reverse=True)
+        return ranked[0][1]["url"], ranked[0][1]["tier"]
+    return "", ""
+
+
+async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None,
+                         *, min_len: int = 200) -> tuple[list, list]:
+    """One LLM call → (positions, inferred_needs) from careers-page text.
+    `min_len` is lower for the sitemap-derived listing (already known-real
+    titles, just possibly few of them since the accept threshold is now a
+    single hit) than for raw fetched page text (where a short body usually
+    means an empty/JS-only page not worth an LLM call)."""
+    if len(text) < min_len:
         return [], []
     prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000])
     try:
-        # llm.acomplete warms the org overlay itself, or resolve() answers
-        # with the platform provider (see llm.resolve's cold-cache warning).
+        # Subscription bridge is text-only: acomplete (never a tool-using
+        # chat/agent loop) — it warms the org overlay itself.
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
     except Exception as exc:
         console.print(f"[yellow]jobs extract LLM failed for {name}: {exc}[/yellow]")
