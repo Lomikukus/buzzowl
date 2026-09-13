@@ -1843,30 +1843,29 @@ _IT_MGMT_TITLE_KEYS = ("it", "digital", "software", "develop", "engineer", "inge
                        "architekt", "product", "analyst", "controlling", "transformation", "scrum")
 
 # Apprentice/intern/student/thesis titles — dropped by _filter_positions unless
-# an IT/management word (below) also appears in the title.
+# an IT/management word (below) also appears in the title. Covers the common
+# German inflections too (Studentische, Studentin/Studenten, Bachelorand/in,
+# Masterand/in) — a bare "student" boundary doesn't match "Studentische"
+# since German compounds have no internal word boundary to anchor on.
 _JUNIOR_TITLE_RE = re.compile(
     r"\b(ausbildung|azubi|praktikum|werkstudent|duales studium|dh-studium|trainee|"
-    r"intern(ship)?|bachelor|master thesis|abschlussarbeit|ferienjob|minijob|aushilfe|student)\b",
+    r"intern(ship)?|bachelor|bachelorand|master thesis|masterand|abschlussarbeit|"
+    r"ferienjob|minijob|aushilfe|student(ische?|in|en)?)\b",
     re.IGNORECASE,
 )
 
-# Same pool as _IT_MGMT_TITLE_KEYS plus a few explicit acronyms/roles, EXCEPT
-# "controlling": that alone is too often a genuinely junior finance-trainee
-# program ("Trainee Controlling") to serve as an override signal here, even
-# though it's a fine tie-breaker for the sitemap-title ranking above. Short,
-# generic tokens ("it", "sap", "erp", the C-level acronyms) need a real word
-# boundary or they match inside unrelated words (bare "it" hits "Mitarbeiter",
-# "Sicherheit", ...); the longer/specific ones stay plain substrings so they
-# still match inside German compounds like "Fachinformatiker".
-_IT_MGMT_WORD_KEYS = tuple(k for k in _IT_MGMT_TITLE_KEYS if k != "controlling") + (
-    "cio", "cto", "ciso", "devops", "sap", "erp", "entwickler", "architect",
-)
-_SHORT_IT_MGMT_KEYS = {"it", "sap", "erp", "cio", "cto", "ciso"}
+# Deliberately narrow — used ONLY to decide whether a title that already looks
+# junior (_JUNIOR_TITLE_RE matched) should be kept anyway. This is NOT the
+# same pool as _IT_MGMT_TITLE_KEYS above (that one just ranks sitemap titles
+# for a truncation cap, where over-matching is harmless): here a broad word
+# list reintroduces exactly the junior titles the filter exists to drop —
+# "system" kept "Ausbildung Fachkraft für Systemgastronomie", "digital" kept
+# "Ausbildung Mediengestalter Digital und Print", "projekt" kept "Trainee
+# Projektmanagement". Only unambiguous IT/senior-tech or senior-leadership
+# terms qualify as an override.
 _IT_MGMT_WORD_RE = re.compile(
-    "|".join(
-        rf"\b{re.escape(k)}\b" if k in _SHORT_IT_MGMT_KEYS else re.escape(k)
-        for k in _IT_MGMT_WORD_KEYS
-    ),
+    r"fachinformatiker|informatik|software|entwickler|developer|engineer|data|cloud|"
+    r"security|cyber|devops|sap|erp|\bit\b|architekt|architect|cio|cto|ciso|head of|leiter",
     re.IGNORECASE,
 )
 
