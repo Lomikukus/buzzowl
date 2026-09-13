@@ -301,14 +301,25 @@ async def _run_python_part(org_id: int, client_name: str, part: str) -> None:
             else:
                 from routers.pipeline import _client_news_scan
                 result = await _client_news_scan(org_id, client, run_id=run_id) or {}
-        except (ImportError, AttributeError, TypeError):
-            # ImportError/AttributeError: the function doesn't exist yet on this
-            # branch (news, until WP3 merges). TypeError: it exists but with a
-            # different signature (jobs, until WP2's run_id kwarg lands) — both
-            # map to the same short, human-readable reason so a raw Python
-            # exception message (e.g. "got an unexpected keyword argument
-            # 'run_id'") never ends up verbatim in the brief's missing-parts line.
+        except (ImportError, AttributeError):
+            # The function doesn't exist yet on this branch (news, until WP3
+            # merges) — map to a short, human-readable reason so a raw Python
+            # exception message never ends up verbatim in the brief's
+            # missing-parts line.
             error = f"{part} scan not available"
+        except TypeError as exc:
+            # Two very different causes share this exception type: a stale
+            # call signature (jobs, until WP2's run_id kwarg lands — "not
+            # available yet", same as above) vs. a genuine TypeError raised
+            # from inside an otherwise-working scan (a real bug, not a
+            # missing feature). Only the former should be swallowed as
+            # "not available"; the latter must surface like any other scan
+            # failure below, not get mislabelled.
+            msg = str(exc)
+            if "unexpected keyword argument" in msg or "positional argument" in msg:
+                error = f"{part} scan not available"
+            else:
+                error = msg
         except Exception as exc:  # never crash the intake pipeline over a scan bug
             error = str(exc)
     if error is None:
