@@ -1406,7 +1406,7 @@ async def _apply_market_signals(org_id: int) -> int:
                         for c in shortlist)
         )
         try:
-            reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
+            reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
             matches = _parse_json_list(reply)
         except Exception as exc:
             console.print(f"[yellow]market apply LLM failed: {exc}[/yellow]")
@@ -1617,7 +1617,7 @@ async def _discover_careers_url(org_id: int, client: dict) -> str:
         f"or 'none' if none qualify.\n\n{listing}"
     )
     try:
-        reply = (await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))).strip()
+        reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
         m = re.search(r"https?://\S+", reply)
         if m:
             picked = m.group(0).rstrip(").,>\"'")
@@ -1708,15 +1708,11 @@ async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None) -> t
     """One LLM call → (positions, inferred_needs) from careers-page text."""
     if len(text) < 200:
         return [], []
-    loop = asyncio.get_running_loop()
-    from routers.knowledge import _call_brain_sync
     prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000])
     try:
-        # org_id + a warm overlay, or resolve() answers with the platform
-        # provider (see llm.resolve's cold-cache warning) — _call_brain_sync is
-        # synchronous and only reads the cache.
-        await llm.ensure_org_overlay(org_id)
-        reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id))
+        # llm.acomplete warms the org overlay itself, or resolve() answers
+        # with the platform provider (see llm.resolve's cold-cache warning).
+        reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
     except Exception as exc:
         console.print(f"[yellow]jobs extract LLM failed for {name}: {exc}[/yellow]")
         return [], []
@@ -1818,7 +1814,7 @@ async def _map_needs_to_products(org_id: int, client_name: str, needs: list) -> 
         "Include only products that truly fit; use an empty products list if none fit."
     )
     try:
-        reply = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
+        reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
         raw = _parse_json_list(reply)
     except Exception as exc:
         console.print(f"[yellow]need→product map failed for {client_name}: {exc}[/yellow]")

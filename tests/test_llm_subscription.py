@@ -315,8 +315,13 @@ async def test_no_call_site_hardcodes_the_deployment_brain():
     import re
 
     root = pathlib.Path(__file__).resolve().parent.parent
+    paths = sorted((root / "routers").glob("*.py"))
+    for extra in ("intake.py", "playbook.py"):
+        p = root / extra
+        if p.exists():
+            paths.append(p)
     offenders = []
-    for path in sorted((root / "routers").glob("*.py")):
+    for path in paths:
         src = path.read_text()
         for call in re.finditer(r"_fire_agent_service\(", src):
             window = src[call.start():call.start() + 400]
@@ -423,8 +428,13 @@ async def test_no_llm_call_drops_the_org_context():
     import re
 
     root = pathlib.Path(__file__).resolve().parent.parent
+    paths = sorted((root / "routers").glob("*.py"))
+    for extra in ("intake.py", "playbook.py"):
+        p = root / extra
+        if p.exists():
+            paths.append(p)
     offenders = []
-    for path in sorted((root / "routers").glob("*.py")):
+    for path in paths:
         for i, line in enumerate(path.read_text().splitlines(), 1):
             if line.lstrip().startswith("#"):
                 continue
@@ -435,6 +445,43 @@ async def test_no_llm_call_drops_the_org_context():
                 if line.rstrip().endswith(")"):
                     offenders.append(f"{path.name}:{i}")
     assert not offenders, "LLM calls without org context: " + ", ".join(offenders)
+
+
+async def test_no_bare_brain_call_outside_knowledge():
+    """_call_brain_sync is a synchronous, cache-only read — it skips the
+    ensure_org_overlay warm-up that llm.acomplete does itself, which is how
+    routers/internal.py's create_client and the pipeline's careers/needs/
+    market-signal/jobs-extract calls used to fire on a cold overlay (WP0 bug
+    sweep). routers/knowledge.py owns the helper (its definition plus its own
+    in-file uses); everywhere new must go through llm.acomplete(...,
+    org_id=...) instead.
+
+    A few older call sites outside this sweep's pipeline (routers/
+    evaluation.py, routers/today.py, routers/products.py) still use the bare
+    helper — same bug class, but out of scope for WP0. Allowlisted by exact
+    line so this test still catches every new bare call and shrinks as each
+    one is migrated."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    paths = sorted((root / "routers").glob("*.py"))
+    for extra in ("intake.py", "playbook.py"):
+        p = root / extra
+        if p.exists():
+            paths.append(p)
+    pre_existing = {
+        "evaluation.py:627", "today.py:637", "products.py:892", "products.py:1063",
+    }
+    offenders = []
+    for path in paths:
+        if path.name == "knowledge.py":
+            continue
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            if "_call_brain_sync(" in line and f"{path.name}:{i}" not in pre_existing:
+                offenders.append(f"{path.name}:{i}")
+    assert not offenders, (
+        "these call _call_brain_sync directly instead of llm.acomplete, "
+        "skipping the org overlay warm-up: " + ", ".join(offenders))
 
 
 async def test_no_run_is_fired_around_the_resolver():
