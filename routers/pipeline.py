@@ -1585,6 +1585,35 @@ _ATS_HOSTS = ("personio.", "greenhouse.io", "lever.co", "myworkdayjobs.com", "wo
               "rexx-systems.", "guidecom.", "umantis.", "jobs.")
 
 
+def _ats_match(host: str) -> bool:
+    """True when `host` IS one of _ATS_HOSTS (label-anchored) or a subdomain of
+    one — never merely a substring. A bare `a in host` check (the previous
+    implementation) accepted "jobs.evil.com" for the "jobs." entry, since that
+    string appears literally in the attacker's own host.
+
+    _ATS_HOSTS has two shapes: a full domain ("greenhouse.io", "lever.co",
+    "myworkdayjobs.com", "join.com", "icims.com", "taleo.net") — anchored the
+    obvious way, host == a or host.endswith("." + a); and a bare label with a
+    trailing dot ("personio.", "workday.", "smartrecruiters.", "jobs.", ...)
+    for vendors that operate under several TLDs (personio.de, personio.com, ...),
+    where stripping the dot and applying the same suffix check would require
+    the label to be the WHOLE remaining host (never true once a TLD follows)
+    and silently stop matching every one of these 14 entries. Anchor those on
+    the label instead: it must be the second-from-last DNS label — i.e. the
+    one immediately before the TLD — so "xyz.personio.de" matches (personio is
+    second-to-last) but "jobs.evil.com" and "personio.evil.com" do not (evil
+    is second-to-last, not the vendor label)."""
+    labels = host.split(".") if host else []
+    for a in _ATS_HOSTS:
+        if a.endswith("."):
+            label = a.rstrip(".")
+            if len(labels) >= 2 and labels[-2] == label:
+                return True
+        elif host == a or host.endswith("." + a):
+            return True
+    return False
+
+
 async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000) -> tuple[str, str]:
     """Return (visible_text, raw_html). raw_html is the plain GET body ('' if the
     page is JS-only); useful for harvesting links to a deeper listing page."""
@@ -1626,7 +1655,7 @@ def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "") 
             continue
         low = full.lower()
         host = urlparse(full).netloc.lower().replace("www.", "")
-        is_ats = any(a in host for a in _ATS_HOSTS) and host != base_host
+        is_ats = _ats_match(host) and host != base_host
         is_match = any(k in low for k in keys)
         if full in seen or not (is_ats or is_match):
             continue
