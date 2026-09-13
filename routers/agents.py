@@ -471,7 +471,13 @@ async def _watch_agent_service_run(
                         logger.warning("intake.part_done from watcher failed: %s", ix_err)
                 break
             else:
-                if not started_noted and subject:
+                # agent-pi reports 'queued' while a run waits for one of its two
+                # FIFO slots (runner.ts:21, index.ts:75) — only a 'running' poll
+                # means the agent has actually started, so only that should ever
+                # start the intake deadline clock (intake.note_run_started).
+                # Otherwise clients queued behind a busy slot get a bogus
+                # deadline_at before their agent has done any work.
+                if status == "running" and not started_noted and subject:
                     started_noted = True
                     try:
                         run_info = await db_module.get_agent_run(db_run_id)
