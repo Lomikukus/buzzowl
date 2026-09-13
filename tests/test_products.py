@@ -334,7 +334,8 @@ class TestBulkMail:
                 return_value="[context]",
             ),
             patch(
-                "routers.products._call_brain_sync",
+                "routers.products.llm.acomplete",
+                new_callable=AsyncMock,
                 return_value=fake_email,
             ),
             patch("server.db_module.get_embedding", return_value=[0.1] * 768),
@@ -413,7 +414,7 @@ class TestBulkMail:
                 new_callable=AsyncMock,
                 return_value="[context]",
             ),
-            patch("routers.products._call_brain_sync", return_value=fake_email),
+            patch("routers.products.llm.acomplete", new_callable=AsyncMock, return_value=fake_email),
             patch("server.db_module.get_embedding", return_value=[0.1] * 768),
             patch("server.db_module.index_document", new_callable=AsyncMock, return_value=102),
             patch("server.db_module.link_document", new_callable=AsyncMock),

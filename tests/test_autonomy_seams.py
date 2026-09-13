@@ -258,7 +258,7 @@ async def test_nba_level2_llm_can_override_within_bounds(monkeypatch):
     monkeypatch.setattr(_today, "db_module", MagicMock(index_document=idx))
     reply = ('[{"client":"HasDraft","action":"mail","reason":"hot signal, mail first"},'
              ' {"client":"NoDraft","action":"send_draft","reason":"send it"}]')
-    monkeypatch.setattr("routers.knowledge._call_brain_sync", lambda p, **kw: reply)
+    monkeypatch.setattr(_today.llm, "acomplete", AsyncMock(return_value=reply))
 
     snap = await _today.compute_nba_queue(1)
     q = {e["client"]: e for e in snap["queue"]}
@@ -281,10 +281,10 @@ async def test_nba_level0_never_changes_action(monkeypatch):
     monkeypatch.setattr(context, "db_module", db)
     monkeypatch.setattr(_today, "db_module", MagicMock(index_document=AsyncMock()))
     captured = {}
-    def brain(p, **kw):
+    async def brain(p, **kw):
         captured["prompt"] = p
         return '[{"client":"A","action":"mail","reason":"r"}]'
-    monkeypatch.setattr("routers.knowledge._call_brain_sync", brain)
+    monkeypatch.setattr(_today.llm, "acomplete", brain)
     snap = await _today.compute_nba_queue(1)
     assert "allowed_actions" not in captured["prompt"]           # legacy prompt
     assert snap["queue"][0]["suggested_action"] == "research"     # action untouched

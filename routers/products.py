@@ -32,7 +32,6 @@ from routers.knowledge import (
     _clean_mail_output,
     _MAIL_TEMPLATE_PROMPT,
     _MAIL_TYPE_LABELS,
-    _call_brain_sync,
     _slugify,
     _get_source_refs,
     _fetch_event_via_pi,
@@ -809,7 +808,6 @@ async def bulk_mail_for_product(
 
     org_id = user["org_id"]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    loop = asyncio.get_event_loop()
 
     db_module.log_prompt(org_id, user["id"], "mail",
                          body.get("custom_instructions") or f"bulk {template_type}",
@@ -889,7 +887,7 @@ async def bulk_mail_for_product(
                         context=context,
                     )
 
-                    generated = await loop.run_in_executor(None, lambda p=prompt: _call_brain_sync(p, org_id=user["org_id"]))
+                    generated = await llm.acomplete(prompt, role="research", timeout=180, org_id=user["org_id"])
 
                     if '---SOURCES---' in generated:
                         _parts = generated.split('---SOURCES---', 1)
@@ -966,7 +964,6 @@ async def multi_product_mail(body: dict, user: dict = Depends(current_user)):
 
     org_id = user["org_id"]
     today  = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    loop   = asyncio.get_event_loop()
 
     products = []
     for pid in product_ids:
@@ -1060,7 +1057,7 @@ async def multi_product_mail(body: dict, user: dict = Depends(current_user)):
                         mode_block=mode_block,
                         context=context,
                     )
-                    generated = await loop.run_in_executor(None, lambda p=prompt: _call_brain_sync(p, org_id=user["org_id"]))
+                    generated = await llm.acomplete(prompt, role="research", timeout=180, org_id=user["org_id"])
 
                     if '---SOURCES---' in generated:
                         _parts = generated.split('---SOURCES---', 1)

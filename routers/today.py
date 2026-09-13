@@ -8,7 +8,6 @@ snapshot is stored as a type=nba_queue documents row (no new tables) and
 served to the home-page panel and the /today page.
 """
 
-import asyncio
 import json
 import logging
 from collections import defaultdict
@@ -19,6 +18,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import context
+import llm
 from context import DB_AVAILABLE, db_module, cache_get, cache_set
 from routers.auth import current_user, _limit
 
@@ -631,10 +631,8 @@ async def compute_nba_queue(
     picks: dict[str, dict] = {}
     if use_llm and entries:
         try:
-            from routers.knowledge import _call_brain_sync
             prompt = _build_reason_prompt(entries, choose_action=choose_action)
-            loop = asyncio.get_running_loop()
-            text = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
+            text = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
             picks = _parse_reason_action_json(text)
             llm_used = bool(picks)
         except Exception as exc:

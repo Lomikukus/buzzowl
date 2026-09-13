@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, Response
 
+import llm
 from context import DB_AVAILABLE, db_module
 from routers.auth import current_user
 
@@ -619,12 +620,9 @@ async def draft_broadcast(body: dict, user: dict = Depends(current_user)):
         "with \\n for line breaks in message. Do not include anything outside the JSON."
     )
 
-    import asyncio
     import re as _re
-    from routers.knowledge import _call_brain_sync
-    loop = asyncio.get_running_loop()
     try:
-        text = await loop.run_in_executor(None, lambda: _call_brain_sync(instruction, org_id=user["org_id"]))
+        text = await llm.acomplete(instruction, role="research", timeout=180, org_id=user["org_id"])
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI draft failed: {exc}")
 

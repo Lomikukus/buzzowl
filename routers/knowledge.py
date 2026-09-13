@@ -1463,9 +1463,8 @@ async def _auto_generate_brief(org_id: int, client_name: str) -> bool:
             return False
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         context = await _build_brief_context(org_id, client)
-        loop = asyncio.get_event_loop()
         prompt = _BRIEF_PROMPT.format(today=today, context=context)
-        brief_content = await loop.run_in_executor(None, lambda: _call_brain_sync(prompt, org_id=org_id))
+        brief_content = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
         if not brief_content:
             return False
         doc_id_str = f"brief-{hashlib.sha256(client_name.encode()).hexdigest()[:12]}-{today}"
