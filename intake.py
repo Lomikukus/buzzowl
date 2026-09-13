@@ -96,15 +96,28 @@ def _part_done_after(part_state: dict, ref: Optional[datetime]) -> bool:
 
 
 def is_active(meta: Optional[dict]) -> bool:
-    """True while a client's intake is still collecting — i.e. its brief has
-    not reached a terminal state yet. Used to gate part_done()/note_run_started()
+    """True while a client's intake is still collecting. False once the brief
+    is terminal (written/refreshed/failed) — and, defensively, also when it is
+    'partial' but every part has since become terminal anyway (all done, or a
+    mix of done/failed): that combination should normally never arise (an
+    all-terminal finish is written as 'written', not 'partial' — see
+    _finish()), but treating it as inactive too means a corner case here can
+    never leave sweep()/the client-page poller spinning on a client that has
+    nothing left to wait for. Used to gate part_done()/note_run_started()
     (no-op once the collection point has closed) and to pick the legacy vs.
     intake-aware branch in agents._brief_then_match."""
     intake = (meta or {}).get("intake") or {}
     if not intake:
         return False
     brief = intake.get("brief") or {}
-    return brief.get("status") not in _TERMINAL_BRIEF_STATES
+    status = brief.get("status")
+    if status in _TERMINAL_BRIEF_STATES:
+        return False
+    if status == "partial":
+        parts = intake.get("parts") or {}
+        if all((parts.get(p) or {}).get("status") in _TERMINAL_PART_STATES for p in PARTS):
+            return False
+    return True
 
 
 def summary(meta: Optional[dict]) -> dict:
@@ -280,8 +293,14 @@ async def _run_python_part(org_id: int, client_name: str, part: str) -> None:
             else:
                 from routers.pipeline import _client_news_scan
                 result = await _client_news_scan(org_id, client, run_id=run_id) or {}
-        except (ImportError, AttributeError):
-            error = "news scan not available" if part == "news" else f"{part} scan not available"
+        except (ImportError, AttributeError, TypeError):
+            # ImportError/AttributeError: the function doesn't exist yet on this
+            # branch (news, until WP3 merges). TypeError: it exists but with a
+            # different signature (jobs, until WP2's run_id kwarg lands) — both
+            # map to the same short, human-readable reason so a raw Python
+            # exception message (e.g. "got an unexpected keyword argument
+            # 'run_id'") never ends up verbatim in the brief's missing-parts line.
+            error = f"{part} scan not available"
         except Exception as exc:  # never crash the intake pipeline over a scan bug
             error = str(exc)
     if error is None:
@@ -319,19 +338,33 @@ async def _maybe_finish(org_id: int, client_name: str, meta: dict, *, force: boo
         if brief.get("refreshed_at") is not None:
             return  # the one-time refresh already happened
         written_at = _parse_iso(brief.get("written_at"))
-        if not any(_part_done_after(parts.get(p) or {}, written_at) for p in PARTS):
+        became_done_since = any(_part_done_after(parts.get(p) or {}, written_at) for p in PARTS)
+        if not (became_done_since or force):
             return  # nothing new since the partial brief was written
         await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=True)
         return
 
     if all_terminal or deadline_passed or force:
-        await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=False)
+        # all_terminal tells _finish this is a genuine conclusion (every part
+        # is done or failed — nothing left to wait for), not a deadline/cap
+        # cutting the collection short with parts still queued/running: only
+        # the latter should ever produce 'partial' (see _finish's target pick).
+        await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=False, all_terminal=all_terminal)
 
 
-async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh: bool = False) -> None:
+async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh: bool = False,
+                   all_terminal: bool = False) -> None:
     """Write (or refresh) the brief exactly once. `db.cas_client_intake_brief`
     is the single-flight gate: only the caller that wins the waiting|partial →
-    writing transition actually calls _auto_generate_brief."""
+    writing transition actually calls _auto_generate_brief.
+
+    `all_terminal=True` means every part is already done-or-failed — this is a
+    genuine, final conclusion, so the result is 'written' even if `missing` is
+    non-empty (some parts failed; their names are still recorded and still
+    show up in the brief text). Only a deadline/absolute-cap cutting the
+    collection short while parts are still queued/running produces 'partial'
+    (all_terminal=False, refresh=False) — the one state that stays active,
+    waiting for its one-time refresh."""
     updated = await db_module.cas_client_intake_brief(org_id, client_name, ["waiting", "partial"], "writing")
     if updated is None:
         return  # lost the race — another caller is already handling this
@@ -352,7 +385,7 @@ async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh:
     attempt = intake.get("attempt", 1)
 
     if ok:
-        target = "refreshed" if refresh else ("partial" if missing else "written")
+        target = "refreshed" if refresh else ("written" if all_terminal else "partial")
         brief_patch = {
             "status": target,
             "written_at": now,
@@ -409,11 +442,21 @@ async def sweep() -> None:
         intake = meta.get("intake") or {}
         if not intake:
             continue
+        # list_clients_with_open_intake()'s WHERE only sees brief.status, which
+        # can't tell partial-but-still-waiting apart from the defensive
+        # partial-but-everything-is-actually-terminal case is_active() also
+        # treats as inactive (see its docstring) — skip it here instead.
+        if not is_active(meta):
+            continue
         brief = intake.get("brief") or {}
 
         if brief.get("status") == "writing":
             entered = _parse_iso(brief.get("entered_writing_at"))
-            if entered and now - entered > timedelta(minutes=10):
+            # A missing timestamp means _finish crashed between winning the CAS
+            # and writing entered_writing_at — there's no way to tell how long
+            # ago that was, so treat it as stale right away rather than waiting
+            # on a timestamp that will never arrive.
+            if entered is None or now - entered > timedelta(minutes=10):
                 await db_module.set_client_intake_path(
                     org_id, name, ["intake", "brief"],
                     {**brief, "status": "waiting", "entered_writing_at": None},
@@ -439,10 +482,15 @@ async def sweep() -> None:
 
         started_at = _parse_iso(intake.get("started_at"))
         deadline = _parse_iso(intake.get("deadline_at"))
-        if deadline is not None:
-            if now >= deadline or brief.get("status") == "partial":
-                await _maybe_finish(org_id, name, meta)
-        elif started_at and now - started_at > timedelta(minutes=absolute_cap_min):
-            # No Pi part ever started running (deadline_at never got set) —
-            # the 90-minute absolute cap is the only thing that can close this out.
+        cap_passed = bool(started_at and now - started_at > timedelta(minutes=absolute_cap_min))
+
+        # The absolute cap is checked independently of the deadline branch —
+        # once deadline_at is set (any part reached 'running'), the deadline
+        # branch below stays true forever (now >= deadline never goes back to
+        # false, and a still-partial brief keeps matching too), so nesting the
+        # cap as an elif after it would make the cap unreachable exactly when
+        # a client has been stuck the longest.
+        if cap_passed:
             await _maybe_finish(org_id, name, meta, force=True)
+        elif deadline is not None and (now >= deadline or brief.get("status") == "partial"):
+            await _maybe_finish(org_id, name, meta)
