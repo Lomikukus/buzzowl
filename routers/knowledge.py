@@ -950,8 +950,13 @@ Most important points from the last 1–3 meetings: what was agreed, pain points
 ## Strategic Intelligence
 Key research findings, recent news, competitive pressures, market signals.
 
+## Hiring Signals
+Open roles from the client's careers page, IT/management roles first, and what the overall hiring
+pattern implies about their priorities and initiatives. Cite the careers page as the source. If no
+jobs data is available, write "(no data yet)".
+
 ## Active Signals
-Pain points, opportunities, and risks identified by agents. For each: type, headline, evidence.
+Pain points, opportunities, and risks identified by agents. For each: type, date, headline, evidence, source.
 
 ## Recommended Next Steps
 3–5 specific, actionable recommendations for the sales team.
@@ -1388,6 +1393,7 @@ async def _build_brief_context(org_id: int, client: dict) -> str:
             """,
             org_id, client_id,
         )
+        jobs_meta: Optional[dict] = None
         for row in doc_rows:
             dmeta = row["metadata"] or {}
             if isinstance(dmeta, str):
@@ -1395,13 +1401,41 @@ async def _build_brief_context(org_id: int, client: dict) -> str:
                     dmeta = json.loads(dmeta)
                 except Exception:
                     dmeta = {}
+            if row["type"] == "jobs":
+                # Rendered as its own structured [JOBS] block below instead —
+                # skip here so the hiring data doesn't appear twice in the brief.
+                if jobs_meta is None:
+                    jobs_meta = dmeta
+                continue
             date_str = str(row["created_at"])[:10]
             src = dmeta.get("source_url", "")
             header = f"[{row['type'].upper()}] {row['title']} ({date_str})"
+            if row["type"] == "signal" and dmeta.get("published_at"):
+                header += f"\nPublished: {dmeta['published_at']}"
             if src:
                 header += f"\nSource: {src}"
             content = (row["content"] or "")[:800]
             parts.append(f"{header}\n{content}")
+
+        # 3b. Hiring signals — structured block from the singleton jobs doc
+        # (metadata, not the doc's rendered content) so the brief prompt's
+        # "## Hiring Signals" section always sees the same shape of data.
+        if jobs_meta:
+            jobs_lines = ["[JOBS]", f"Source: {jobs_meta.get('careers_url') or '(unknown)'}"]
+            positions = jobs_meta.get("positions") or []
+            if positions:
+                jobs_lines.append("Positions:")
+                for p in positions[:12]:
+                    if not isinstance(p, dict):
+                        continue
+                    extra = " · ".join(x for x in (p.get("team") or "", p.get("location") or "") if x)
+                    jobs_lines.append(f"  - {p.get('title', '')}" + (f" ({extra})" if extra else ""))
+            needs = jobs_meta.get("inferred_needs") or []
+            if needs:
+                jobs_lines.append("Inferred needs: " + "; ".join(str(n) for n in needs))
+            if jobs_meta.get("last_scanned"):
+                jobs_lines.append(f"Last scanned: {jobs_meta['last_scanned']}")
+            parts.append("\n".join(jobs_lines))
 
         # 4. Industry research docs (linked via subject industry match, not client_id)
         industry = meta.get("industry", "")
