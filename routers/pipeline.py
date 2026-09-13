@@ -1744,18 +1744,24 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     own-domain + careers-keyword heuristic ranking when the LLM is
     unavailable, unsure, or picks something off-domain."""
     candidates = await _careers_candidates(org_id, client, pb)
+    domain = _client_domain(client)
+
+    def _own_or_ats(url: str) -> bool:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        return bool(domain and (host == domain or host.endswith("." + domain))) or _ats_match(host)
+
+    # Constrain EVERY path (single-candidate short-circuit, LLM pick, heuristic
+    # fallback) up front — filtering only inside the LLM branch let an
+    # off-domain lone candidate (or an LLM pick from an all-off-domain pool)
+    # through untouched, and that URL then persists in clients.metadata
+    # forever once a scan writes it back.
+    candidates = [c for c in candidates if _own_or_ats(c["url"])]
     if not candidates:
         return "", ""
     if len(candidates) == 1:
         return candidates[0]["url"], candidates[0]["tier"]
 
-    domain = _client_domain(client)
     name = client["name"]
-
-    def _own_or_ats(url: str) -> bool:
-        host = urlparse(url).netloc.lower().replace("www.", "")
-        return bool(domain and (host == domain or host.endswith("." + domain))) or \
-            any(a in host for a in _ATS_HOSTS)
 
     listing = "\n".join(
         f"{i+1}. {c['title'] or c['url']} — {c['url']}" for i, c in enumerate(candidates[:15])
