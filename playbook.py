@@ -640,9 +640,11 @@ async def _resolve_reflection_domain(org_id: int, subject: Optional[str], tool_c
 async def reflect_on_run(org_id: int, db_run_id: int, *, subject: Optional[str] = None) -> None:
     """Callback-time reflection for a finished research/osint/pain_point_research
     run (called on both 'done' and 'failed' — a run that got 403'd everywhere
-    still teaches useful blocked_urls). Idempotent via output.reflected, since
-    both the callback and the watcher backstop may schedule this for the same
-    run. Runs at callback time, not later, because agent_runs.tool_calls gets
+    still teaches useful blocked_urls). Idempotent via output.reflected: today
+    routers/agents.py's agent_service_callback is the ONLY scheduler, but
+    idempotency is what will let a future watcher backstop schedule this too
+    (for a run whose callback never arrived) without double-recording. Runs
+    at callback time, not later, because agent_runs.tool_calls gets
     compacted by retention after 14 days.
 
     `subject` is the run's own subject string (agents.py's callback and
@@ -687,16 +689,20 @@ async def _reflect_on_run_body(org_id: int, db_run_id: int, subject: Optional[st
 
     if not tool_calls:
         # Nothing was fetched (or the log is genuinely empty) — leave
-        # `reflected` unset rather than stamping it: a later attempt (e.g.
-        # once the watcher backstop fills in tool_calls) can still run.
+        # `reflected` unset rather than stamping it. Nothing retries this
+        # today (the callback above is the only scheduler), but staying
+        # unstamped keeps this run eligible for a future backstop scheduler
+        # (e.g. a watcher) to pick up instead of losing the evidence for good.
         logger.info("playbook.reflect_on_run: run=%s has no tool calls — nothing to reflect", db_run_id)
         return
 
     domain = await _resolve_reflection_domain(org_id, subject, tool_calls)
     if not domain:
         # Blocker fix: an undeterminable domain must NOT stamp `reflected`
-        # either — this run's evidence isn't lost, it just waits for a later
-        # attempt (e.g. once the client's website gets configured).
+        # either. Nothing retries this today (the callback above is the only
+        # scheduler), but staying unstamped keeps the run eligible once a
+        # backstop scheduler exists (e.g. once the client's website gets
+        # configured and a future pass re-attempts it).
         logger.info(
             "playbook.reflect_on_run: no determinable domain for run=%s (subject=%r) — leaving unreflected",
             db_run_id, subject,
