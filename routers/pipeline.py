@@ -1928,7 +1928,7 @@ async def _apply_market_signals(org_id: int) -> int:
 
 
 async def _market_news_scan(
-    org_id: int, industry: str, focus: str, *, run_id: Optional[int] = None,
+    org_id: int, industry: str, focus: str, *, run_id: Optional[int] = None, max_write: int = 8,
 ) -> dict:
     """Score fresh market/industry news with a single text LLM call and write
     the relevant ones as unlinked type='signal' documents (scope='market',
@@ -1936,7 +1936,8 @@ async def _market_news_scan(
     afterwards). Dedupes against scope='market' signals already written in
     the last 30 days. `industry` drives the search terms when set; for a
     source-change-triggered scan (no specific industry) `focus`'s free-text
-    description is used instead. Returns
+    description is used instead. Writes are capped at max_write, like
+    _client_news_scan. Returns
     {found, scored, written, max_relevance, error}."""
     result: dict = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0, "error": None}
     term = (industry or focus or "market").strip()
@@ -2004,6 +2005,8 @@ async def _market_news_scan(
     written = 0
     max_rel = 0
     for item in scores:
+        if written >= max_write:
+            break
         if not isinstance(item, dict):
             continue
         try:
