@@ -2680,6 +2680,71 @@ async def update_client_metadata(org_id: int, name: str, patch: dict) -> Optiona
         return dict(row) if row else None
 
 
+async def set_client_intake_path(org_id: int, name: str, path: list[str], value) -> Optional[dict]:
+    """Atomically set one nested path inside clients.metadata (used for
+    clients.metadata.intake.* — see intake.py). The shallow `metadata || patch`
+    merge in update_client_metadata() above would clobber the rest of the
+    `intake` object when two parts (osint/research/jobs/news) finish at nearly
+    the same time and both merge a whole new top-level `intake` dict; jsonb_set
+    only replaces the value at the given path, leaving sibling keys intact.
+    Returns the updated metadata dict, or None if the client wasn't found (or
+    has no `intake` object to update yet — start() must write it first)."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE clients SET metadata = jsonb_set(metadata, $3::text[], $4::jsonb, true)
+            WHERE org_id = $1 AND lower(name) = lower($2) AND metadata ? 'intake'
+            RETURNING metadata
+            """,
+            org_id, name, path, value,
+        )
+        return row["metadata"] if row else None
+
+
+async def cas_client_intake_brief(org_id: int, name: str, from_states: list[str], to_state: str) -> Optional[dict]:
+    """Compare-and-set clients.metadata.intake.brief.status: only writes (and
+    returns the updated metadata) when the current status is one of
+    `from_states`. Returns None when the caller lost the race — some other
+    caller already moved the brief out of `from_states` first. This is the
+    single-process equivalent of a row lock: it lets several concurrent
+    part_done()/sweep() calls all decide "the brief should be (re)written now"
+    without more than one of them actually doing it (see intake._finish)."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE clients
+            SET metadata = jsonb_set(metadata, '{intake,brief,status}', $4::jsonb, true)
+            WHERE org_id = $1 AND lower(name) = lower($2)
+              AND metadata->'intake'->'brief'->>'status' = ANY($3)
+            RETURNING metadata
+            """,
+            org_id, name, from_states, to_state,
+        )
+        return row["metadata"] if row else None
+
+
+async def list_clients_with_open_intake() -> list[dict]:
+    """All clients (any org) whose intake collection point is still open
+    (brief status waiting/writing/partial) — used by intake.sweep()'s 60s
+    reconciliation loop. No org_id filter: the sweeper is server-wide."""
+    if not _pool:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, org_id, name, metadata
+            FROM clients
+            WHERE metadata->'intake'->'brief'->>'status' = ANY($1)
+            """,
+            ["waiting", "writing", "partial"],
+        )
+        return [dict(r) for r in rows]
+
+
 async def update_contact_metadata(org_id: int, name: str, patch: dict) -> Optional[dict]:
     """Merge patch into contact metadata. Returns updated contact row or None."""
     if not _pool:
