@@ -1801,11 +1801,16 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     except Exception as exc:
         console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
 
-    # Heuristic fallback: own-domain + careers-ish keyword wins, tier preserved.
+    # Heuristic fallback: own-domain / ATS-host + careers-ish keyword wins, tier
+    # preserved. An ATS host counts on its own (score 2, same as own-domain) —
+    # a bare "https://company.personio.de/" with no careers keyword in the URL
+    # is still a real candidate worth returning, not a 0-score drop, when the
+    # LLM pick is unavailable.
     ranked: list[tuple[int, dict]] = []
     for c in candidates:
         host = urlparse(c["url"]).netloc.lower().replace("www.", "")
         score = (2 if domain and (host == domain or host.endswith("." + domain)) else 0) \
+              + (2 if _ats_match(host) else 0) \
               + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
         if score:
             ranked.append((score, c))
