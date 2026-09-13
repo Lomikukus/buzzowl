@@ -1533,8 +1533,8 @@ async def _run_market_monitor(org_id: int) -> dict:
 # Open-positions (jobs) monitoring → inferred needs → match analysis
 # ---------------------------------------------------------------------------
 
-_CAREERS_KEYS = ("career", "careers", "jobs", "job", "stellen", "karriere",
-                 "vacanc", "join-us", "positions", "joboffers", "jobangebote")
+_CAREERS_KEYS = ("career", "careers", "jobs", "job", "stellen", "stellenangebote", "karriere",
+                 "vacanc", "join-us", "join", "positions", "joboffers", "jobangebote")
 
 _JOBS_EXTRACT_PROMPT = (
     "Below is the text of {client}'s careers/jobs page. Extract the OPEN POSITIONS and infer what "
@@ -1570,72 +1570,6 @@ _JOBS_EXTRACT_PROMPT = (
 )
 
 
-async def _discover_careers_url(org_id: int, client: dict) -> str:
-    """Find a client's careers/jobs page. Gathers SearXNG candidates, then lets
-    the LLM pick the company's official open-positions listing (it's better at
-    spotting the right page than URL heuristics); falls back to own-domain /
-    careers-ish ranking if the LLM is unavailable or unsure."""
-    meta = client.get("metadata") or {}
-    if not (meta.get("website") or "").strip():
-        website = await _resolve_client_website(org_id, client)
-        if website:
-            meta["website"] = website
-            client["metadata"] = meta
-    domain = _client_domain(client)
-    name = client["name"]
-    queries = [f'"{name}" careers open positions', f'"{name}" jobs karriere stellenangebote']
-    if domain:
-        queries.insert(0, f"site:{domain} careers jobs stellen")
-
-    candidates: list[dict] = []
-    seen: set = set()
-    for q in queries:
-        try:
-            results = await _searxng_results(q)
-        except Exception:
-            continue
-        for r in results:
-            url = (r.get("url") or "").strip()
-            if not url.startswith("http") or url in seen:
-                continue
-            seen.add(url)
-            candidates.append({"url": url, "title": (r.get("title") or "")[:120]})
-    if not candidates:
-        return ""
-
-    # LLM picks the best careers/open-positions URL from the candidates.
-    listing = "\n".join(f"{i+1}. {c['title']} — {c['url']}" for i, c in enumerate(candidates[:15]))
-    prompt = (
-        f"Which of these URLs is {name}'s official careers / open-positions listing page "
-        f"(where you can browse their current job openings)? Prefer a page on the company's own "
-        f"domain{(' (' + domain + ')') if domain else ''} or its official applicant-tracking system "
-        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday). Reply with ONLY the single best URL, "
-        f"or 'none' if none qualify.\n\n{listing}"
-    )
-    try:
-        reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
-        m = re.search(r"https?://\S+", reply)
-        if m:
-            picked = m.group(0).rstrip(").,>\"'")
-            if any(picked == c["url"] for c in candidates) or (domain and domain in picked):
-                return picked
-    except Exception as exc:
-        console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
-
-    # Heuristic fallback: own-domain + careers-ish keyword.
-    ranked: list[tuple[int, str]] = []
-    for c in candidates:
-        url = c["url"]
-        host = urlparse(url).netloc.lower().replace("www.", "")
-        score = (2 if domain and domain in host else 0) + (1 if any(k in url.lower() for k in _CAREERS_KEYS) else 0)
-        if score:
-            ranked.append((score, url))
-    if ranked:
-        ranked.sort(reverse=True)
-        return ranked[0][1]
-    return ""
-
-
 # Job-LISTING link terms only (the landing page is already "career/karriere" — we
 # want the link through to the actual openings). Deliberately excludes bare
 # "position" (matches "politische-positionen"), "career"/"karriere" and "search".
@@ -1645,10 +1579,45 @@ _JOB_LINK_KEYS = ("/jobs", "jobs/", "=jobs", "stellenangebote", "stellenanzeigen
                   "all-jobs", "/stellen", "/job/", "joblisting")
 
 # Applicant-tracking-system hosts — a link to one is almost always the real listing.
+# Deliberately excludes a bare "jobs." entry: see _ats_match's docstring.
 _ATS_HOSTS = ("personio.", "greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.",
               "successfactors.", "smartrecruiters.", "softgarden.", "join.com", "recruitee.",
               "jobvite.", "icims.com", "taleo.net", "concludis.", "prescreen.", "d-vinci.",
-              "rexx-systems.", "guidecom.", "umantis.", "jobs.")
+              "rexx-systems.", "guidecom.", "umantis.")
+
+
+def _ats_match(host: str) -> bool:
+    """True when `host` IS one of _ATS_HOSTS (label-anchored) or a subdomain of
+    one — never merely a substring.
+
+    _ATS_HOSTS has two shapes: a full domain ("greenhouse.io", "lever.co",
+    "myworkdayjobs.com", "join.com", "icims.com", "taleo.net") — anchored the
+    obvious way, host == a or host.endswith("." + a); and a bare label with a
+    trailing dot ("personio.", "workday.", "smartrecruiters.", ...) for
+    vendors that operate under several TLDs (personio.de, personio.com, ...),
+    where stripping the dot and applying the same suffix check would require
+    the label to be the WHOLE remaining host (never true once a TLD follows)
+    and silently stop matching every one of these 13 entries. Anchor those on
+    the label instead: it must be the second-from-last DNS label — i.e. the
+    one immediately before the TLD — so "xyz.personio.de" matches (personio is
+    second-to-last) but "personio.evil.com" does not (evil is second-to-last,
+    not the vendor label).
+
+    There is deliberately no "jobs." entry: "jobs" is a generic subdomain
+    word, not a vendor name, so anchoring it the same way would accept
+    jobs.<anything>.<tld> wholesale — a client's own jobs.<domain> (already
+    covered by _own_or_ats's own-domain arm, e.g. jobs.apleona.com is
+    own-domain for apleona.com) as well as an attacker's jobs.evil.com or an
+    unrelated jobs.de/jobs.com."""
+    labels = host.split(".") if host else []
+    for a in _ATS_HOSTS:
+        if a.endswith("."):
+            label = a.rstrip(".")
+            if len(labels) >= 2 and labels[-2] == label:
+                return True
+        elif host == a or host.endswith("." + a):
+            return True
+    return False
 
 
 async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000) -> tuple[str, str]:
@@ -1672,11 +1641,15 @@ async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000)
     return text, html
 
 
-def _career_listing_links(html: str, base_url: str) -> list[str]:
-    """Job-listing links on a careers landing page (so we can follow through to
-    the actual openings when the landing page itself lists none)."""
+def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "") -> list[str]:
+    """Rank links on a page by relevance to `keys` (substring match against the
+    full URL) plus ATS-host / own-domain bonuses. Generalises the old
+    _career_listing_links so the same code harvests a careers-page link off a
+    homepage (keys=_CAREERS_KEYS) or a job-listing link off a careers landing
+    page (keys=_JOB_LINK_KEYS) today, and a newsroom link (WP3) later."""
     from urllib.parse import urljoin
     base_host = urlparse(base_url).netloc.lower().replace("www.", "")
+    own_domain = (own_domain or base_host).lower().replace("www.", "")
     ranked: list[tuple[int, str]] = []
     seen: set = set()
     for m in re.finditer(r'href=["\']([^"\']+)["\']', html or "", re.I):
@@ -1688,26 +1661,178 @@ def _career_listing_links(html: str, base_url: str) -> list[str]:
             continue
         low = full.lower()
         host = urlparse(full).netloc.lower().replace("www.", "")
-        is_ats = any(a in host for a in _ATS_HOSTS) and host != base_host
-        is_listing = any(k in low for k in _JOB_LINK_KEYS)
-        if full in seen or not (is_ats or is_listing):
+        is_ats = _ats_match(host) and host != base_host
+        is_match = any(k in low for k in keys)
+        if full in seen or not (is_ats or is_match):
             continue
         seen.add(full)
-        score = (3 if is_ats else 0) + (1 if base_host and base_host in host else 0) \
+        score = (3 if is_ats else 0) + (1 if own_domain and own_domain in host else 0) \
                   + (1 if any(t in low for t in ("stellenangebote", "all-jobs", "open-positions", "joblist", "stellensuche")) else 0)
         ranked.append((score, full))
     ranked.sort(reverse=True)
     return [u for _, u in ranked[:3]]
 
 
-async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None) -> tuple[list, list]:
-    """One LLM call → (positions, inferred_needs) from careers-page text."""
-    if len(text) < 200:
+async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = None) -> list[dict]:
+    """Ordered candidate careers/jobs URLs, cheapest and most reliable first:
+    a fresh (<=60 days) playbook careers URL short-circuits everything else
+    (no HTTP, no SearXNG); then the client's own recorded careers_url; then a
+    homepage link harvest; then a sitemap probe of the site root; then the
+    legacy SearXNG queries as the last resort. Each candidate carries the tier
+    it came from so the caller never has to re-derive it."""
+    name = client["name"]
+    meta = client.get("metadata") or {}
+    candidates: list[dict] = []
+    seen: set = set()
+
+    def _add(url: str, tier: str, title: str = "") -> None:
+        url = (url or "").strip()
+        if not url.startswith("http") or url in seen:
+            return
+        seen.add(url)
+        candidates.append({"url": url, "tier": tier, "title": title[:120]})
+
+    careers_pb = (pb or {}).get("careers") or {}
+    pb_url = (careers_pb.get("url") or "").strip()
+    if pb_url:
+        last_success = careers_pb.get("last_success_at")
+        fresh = False
+        if last_success:
+            try:
+                fresh = (datetime.now(timezone.utc) - datetime.fromisoformat(last_success)) <= timedelta(days=60)
+            except (ValueError, TypeError):
+                fresh = False
+        if fresh:
+            return [{"url": pb_url, "tier": "playbook", "title": ""}]
+        _add(pb_url, "playbook")
+
+    _add((meta.get("careers_url") or "").strip(), "metadata")
+
+    if not (meta.get("website") or "").strip():
+        website = await _resolve_client_website(org_id, client)
+        if website:
+            meta["website"] = website
+            client["metadata"] = meta
+    website = (meta.get("website") or "").strip()
+    domain = _client_domain(client)
+
+    if website:
+        _home_text, home_html = await _fetch_page_raw(website)
+        if home_html:
+            for link in _harvest_links(home_html, website, _CAREERS_KEYS, domain):
+                _add(link, "homepage")
+
+        sitemap_jobs = await _sitemap_job_urls(website)
+        # Cache the crawl on the client dict (keyed by the site's own host) so
+        # _scan_client_jobs can reuse it instead of crawling the same sitemap
+        # a second time right after discovery returns.
+        site_host = urlparse(website).netloc.lower().replace("www.", "")
+        if site_host:
+            client["_sitemap_cache"] = {"host": site_host, "jobs": sitemap_jobs}
+        if sitemap_jobs:
+            _add(_sitemap_listing_url(sitemap_jobs[0][1]), "sitemap")
+
+    # Cheap, own-domain-ish tiers already found something — SearXNG is the
+    # last resort, not a blanket cross-check run on every discovery.
+    if candidates:
+        return candidates
+
+    queries = [f'"{name}" careers open positions', f'"{name}" jobs karriere stellenangebote']
+    if domain:
+        queries.insert(0, f"site:{domain} careers jobs stellen")
+    for q in queries:
+        try:
+            results = await _searxng_results(q)
+        except Exception:
+            continue
+        for r in results:
+            _add((r.get("url") or "").strip(), "searxng", r.get("title") or "")
+
+    return candidates
+
+
+async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = None) -> tuple[str, str]:
+    """Find a client's careers/jobs page. Cheap candidates (playbook, known
+    metadata, homepage harvest, sitemap probe) come first and, if only one
+    surfaces, it is used directly with no LLM call at all. Once SearXNG
+    candidates are in the mix, the LLM picks the best one — but the pick is
+    only accepted when it lands on the client's own domain or a known ATS
+    host, so it can never wander off to an unrelated URL. Falls back to a
+    own-domain + careers-keyword heuristic ranking when the LLM is
+    unavailable, unsure, or picks something off-domain."""
+    candidates = await _careers_candidates(org_id, client, pb)
+    domain = _client_domain(client)
+
+    def _own_or_ats(url: str) -> bool:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        return bool(domain and (host == domain or host.endswith("." + domain))) or _ats_match(host)
+
+    # Constrain EVERY path (single-candidate short-circuit, LLM pick, heuristic
+    # fallback) up front — filtering only inside the LLM branch let an
+    # off-domain lone candidate (or an LLM pick from an all-off-domain pool)
+    # through untouched, and that URL then persists in clients.metadata
+    # forever once a scan writes it back.
+    candidates = [c for c in candidates if _own_or_ats(c["url"])]
+    if not candidates:
+        return "", ""
+    if len(candidates) == 1:
+        return candidates[0]["url"], candidates[0]["tier"]
+
+    name = client["name"]
+
+    listing = "\n".join(
+        f"{i+1}. {c['title'] or c['url']} — {c['url']}" for i, c in enumerate(candidates[:15])
+    )
+    prompt = (
+        f"Which of these URLs is {name}'s official careers / open-positions listing page "
+        f"(where you can browse their current job openings)? Prefer a page on the company's own "
+        f"domain{(' (' + domain + ')') if domain else ''} or its official applicant-tracking system "
+        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday). Reply with ONLY the single best URL, "
+        f"or 'none' if none qualify.\n\n{listing}"
+    )
+    try:
+        reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
+        m = re.search(r"https?://\S+", reply)
+        if m:
+            picked = m.group(0).rstrip(").,>\"'")
+            match = next((c for c in candidates if c["url"] == picked), None)
+            if match and _own_or_ats(picked):
+                return match["url"], match["tier"]
+    except Exception as exc:
+        console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
+
+    # Heuristic fallback: own-domain / ATS-host + careers-ish keyword wins, tier
+    # preserved. An ATS host counts on its own (score 2, same as own-domain) —
+    # a bare "https://company.personio.de/" with no careers keyword in the URL
+    # is still a real candidate worth returning, not a 0-score drop, when the
+    # LLM pick is unavailable.
+    ranked: list[tuple[int, dict]] = []
+    for c in candidates:
+        host = urlparse(c["url"]).netloc.lower().replace("www.", "")
+        score = (2 if domain and (host == domain or host.endswith("." + domain)) else 0) \
+              + (2 if _ats_match(host) else 0) \
+              + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
+        if score:
+            ranked.append((score, c))
+    if ranked:
+        ranked.sort(key=lambda t: t[0], reverse=True)
+        return ranked[0][1]["url"], ranked[0][1]["tier"]
+    return "", ""
+
+
+async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None,
+                         *, min_len: int = 200) -> tuple[list, list]:
+    """One LLM call → (positions, inferred_needs) from careers-page text.
+    `min_len` is lower for the sitemap-derived listing (already known-real
+    titles, just possibly few of them since the accept threshold is now a
+    single hit) than for raw fetched page text (where a short body usually
+    means an empty/JS-only page not worth an LLM call)."""
+    if len(text) < min_len:
         return [], []
     prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000])
     try:
-        # llm.acomplete warms the org overlay itself, or resolve() answers
-        # with the platform provider (see llm.resolve's cold-cache warning).
+        # Subscription bridge is text-only: acomplete (never a tool-using
+        # chat/agent loop) — it warms the org overlay itself.
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
     except Exception as exc:
         console.print(f"[yellow]jobs extract LLM failed for {name}: {exc}[/yellow]")
@@ -1727,6 +1852,78 @@ _IT_MGMT_TITLE_KEYS = ("it", "digital", "software", "develop", "engineer", "inge
                        "security", "cyber", "cloud", "system", "informatik", "manager", "leiter",
                        "leitung", "head", "director", "projekt", "project", "consultant", "berater",
                        "architekt", "product", "analyst", "controlling", "transformation", "scrum")
+
+# Apprentice/intern/student/thesis titles — dropped by _filter_positions unless
+# an IT/management word (below) also appears in the title. Covers the common
+# German inflections too (Studentische, Studentin/Studenten, Bachelorand/in,
+# Masterand/in) — a bare "student" boundary doesn't match "Studentische"
+# since German compounds have no internal word boundary to anchor on.
+_JUNIOR_TITLE_RE = re.compile(
+    r"\b(ausbildung|azubi|praktikum|werkstudent|duales studium|dh-studium|trainee|"
+    r"intern(ship)?|bachelor|bachelorand|master thesis|masterand|abschlussarbeit|"
+    r"ferienjob|minijob|aushilfe|student(ische?|in|en)?)\b",
+    re.IGNORECASE,
+)
+
+# Deliberately narrow — used ONLY to decide whether a title that already looks
+# junior (_JUNIOR_TITLE_RE matched) should be kept anyway. This is NOT the
+# same pool as _IT_MGMT_TITLE_KEYS above (that one just ranks sitemap titles
+# for a truncation cap, where over-matching is harmless): here a broad word
+# list reintroduces exactly the junior titles the filter exists to drop —
+# "system" kept "Ausbildung Fachkraft für Systemgastronomie", "digital" kept
+# "Ausbildung Mediengestalter Digital und Print", "projekt" kept "Trainee
+# Projektmanagement". Only unambiguous IT/senior-tech or senior-leadership
+# terms qualify as an override.
+_IT_MGMT_WORD_RE = re.compile(
+    r"fachinformatiker|informatik|software|entwickler|developer|engineer|data|cloud|"
+    r"security|cyber|devops|sap|erp|\bit\b|architekt|architect|cio|cto|ciso|head of|leiter",
+    re.IGNORECASE,
+)
+
+
+def _filter_positions(positions: list) -> list:
+    """Drop apprenticeship/internship/student/thesis/minijob roles unless the
+    title also carries an IT/management word, dedupe titles case-insensitively,
+    and cap at 20. Applied after every _extract_jobs call so junior/duplicate
+    noise never reaches the stored jobs doc, the findings, or the brief."""
+    out: list = []
+    seen_titles: set = set()
+    for p in positions or []:
+        if not isinstance(p, dict):
+            continue
+        title = str(p.get("title") or "").strip()
+        if not title:
+            continue
+        key = title.lower()
+        if key in seen_titles:
+            continue
+        if _JUNIOR_TITLE_RE.search(title) and not _IT_MGMT_WORD_RE.search(title):
+            continue
+        seen_titles.add(key)
+        out.append(p)
+        if len(out) >= 20:
+            break
+    return out
+
+
+def _sitemap_listing_url(url: str) -> str:
+    """Best-guess listing/landing URL for a job posting found via the sitemap
+    (e.g. .../jobs/backend-engineer-123 -> .../jobs/) — used as the discovered
+    careers-page candidate. The sitemap step itself only ever needs the domain
+    (see _sitemap_job_urls below), so an imperfect path here only affects the
+    page-text fallback, never the sitemap re-scan."""
+    p = urlparse(url)
+    path = p.path
+    low = path.lower()
+    end = 0
+    for k in _JOB_DETAIL_KEYS:
+        idx = low.find(k)
+        if idx != -1:
+            end = max(end, idx + len(k))
+    trimmed = path[:end] if end else (path.rsplit("/", 1)[0] + "/")
+    if not trimmed.endswith("/"):
+        trimmed = trimmed.rsplit("/", 1)[0] + "/"
+    return f"{p.scheme}://{p.netloc}{trimmed or '/'}"
 
 
 async def _sitemap_job_urls(base_url: str, limit: int = 130) -> list[tuple[str, str]]:
@@ -1831,7 +2028,8 @@ async def _map_needs_to_products(org_id: int, client_name: str, needs: list) -> 
     return [{"need": n, "products": by_need.get(n.strip().lower(), [])} for n in needs]
 
 
-async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") -> dict:
+async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
+                             run_id: Optional[int] = None) -> dict:
     """Fetch a client's careers page, extract open positions + inferred needs,
     store a singleton type='jobs' doc, and write the inferred needs as
     type='finding' docs so the match synthesis picks them up automatically.
@@ -1839,52 +2037,169 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") ->
     Sources, in order of reliability: (1) the site's sitemap of actual job
     postings — works even for JS/ATS pages that render listings client-side;
     (2) the careers-page text; (3) job-listing links followed from the landing
-    page. The LLM filters to IT/management roles and rejects category names."""
+    page. The LLM filters to IT/management roles and rejects category names;
+    _filter_positions then drops junior/apprentice noise on top.
+
+    Every attempt — success or failure — is recorded: a failure stamps the
+    existing jobs doc's last_attempt/last_error/attempts (bumping updated_at
+    so _run_jobs_monitor's LRU rotation stops retrying a never-yielding client
+    first) without ever clobbering a prior good scan's positions, and, once
+    playbook.py exists (WP4), records the careers tier so later scans and
+    other agents' tasks can skip straight to what worked."""
     name = client["name"]
     meta = client.get("metadata") or {}
+    domain = _client_domain(client)
+    jobs_doc_id = f"jobs-{client['id']}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # WP4 hasn't landed yet — the writer/reader must work fine without it.
+    try:
+        import playbook
+    except ImportError:
+        playbook = None
+    pb: Optional[dict] = None
+    if playbook is not None and domain:
+        try:
+            pb = await playbook.load(org_id, domain)
+        except Exception:
+            pb = None
+
     url = (careers_url or meta.get("careers_url") or "").strip()
+    tier = "metadata" if url else ""
     if not url:
-        url = await _discover_careers_url(org_id, client)
-    summary = {"client": name, "careers_url": url, "positions": 0, "needs": 0, "found": False}
-    if not url:
+        url, tier = await _discover_careers_url(org_id, client, pb)
+
+    summary = {"client": name, "careers_url": url, "positions": 0, "needs": 0,
+               "found": False, "tier": tier, "error": None}
+
+    async def _record_playbook(*, success: bool, reason: Optional[str], needs_js: bool,
+                                report_tier: Optional[str] = None) -> None:
+        if playbook is None or not domain:
+            return
+        # Omit "url" entirely when there's nothing to report (e.g. the "no
+        # careers page found" path) — an empty string here is inert today
+        # (playbook.record has no writer yet) but would clobber a good
+        # previously-recorded playbook URL once WP4 lands. last_failure_at /
+        # error below still get recorded either way.
+        careers_patch: dict = {"tier": report_tier if report_tier is not None else tier}
+        if url:
+            careers_patch["url"] = url
+        if success:
+            careers_patch["last_success_at"] = now_iso
+            careers_patch["error"] = None
+        else:
+            careers_patch["last_failure_at"] = now_iso
+            careers_patch["error"] = reason
+        patch: dict = {"careers": careers_patch}
+        if needs_js:
+            patch["needs_js"] = True
+        try:
+            await playbook.record(org_id, domain, patch, run_id=run_id)
+        except Exception as exc:
+            console.print(f"[yellow]playbook record failed for {name}: {exc}[/yellow]")
+
+    async def _stamp_failure(reason: str) -> dict:
+        summary["error"] = reason
+        existing = await db_module.get_document(org_id, jobs_doc_id)
+        existing_meta = (existing or {}).get("metadata") if existing else None
+        if isinstance(existing_meta, str):
+            try:
+                existing_meta = json.loads(existing_meta)
+            except Exception:
+                existing_meta = {}
+        existing_meta = existing_meta or {}
+        attempts = int(existing_meta.get("attempts") or 0) + 1
+        patch_meta = {"tier": tier, "last_attempt": now_iso, "last_error": reason, "attempts": attempts}
+        if existing:
+            # Merge-only patch (documents.metadata is a shallow `metadata || patch`
+            # merge) — a prior good scan's positions/careers_url are untouched.
+            await db_module.update_document(org_id, jobs_doc_id, {"metadata": patch_meta})
+        else:
+            new_id = await db_module.index_document(
+                org_id=org_id, doc_id=jobs_doc_id, doc_type="jobs",
+                title=f"Open positions — {name}",
+                content=f"# Open positions — {name}\n\n(no data yet — {reason})",
+                metadata={**patch_meta, "careers_url": url, "positions": [], "inferred_needs": [],
+                          "needs_mapped": [], "subject": name, "filtered_out": 0},
+                embedding=[], source="agent", agent_run_id=run_id,
+            )
+            # Link it exactly like the success path does below — an unlinked
+            # placeholder is invisible to _run_jobs_monitor's
+            # "MAX(updated_at) JOIN document_links" rotation query, so a
+            # never-successful client would keep heading the retry queue
+            # every run, the exact starvation this bookkeeping exists to fix.
+            if new_id and new_id > 0:
+                await db_module.link_document(new_id, "client", client["id"])
+        await _record_playbook(success=False, reason=reason, needs_js=False)
         return summary
 
+    if not url:
+        return await _stamp_failure("no careers page found")
+
+    original_url = url  # the URL the scan started from, for tier reporting below
     effective_url = url
     positions: list = []
     needs: list = []
+    filtered_out = 0
+    needs_js = False
 
-    # (1) Sitemap of actual postings — the JS-free ground truth. A JS/ATS careers
-    # page only exposes category filters to a fetch, but its sitemap lists every
-    # real opening (e.g. jobs.apleona.com → /offer/<slug>/<uuid>).
-    sitemap_jobs = await _sitemap_job_urls(url)
-    if len(sitemap_jobs) >= 3:
+    # (1) Sitemap of actual postings — the JS-free ground truth. A JS-heavy careers
+    # page (own-domain or ATS-hosted) only exposes category filters to a fetch, but
+    # its sitemap lists every real opening (e.g. jobs.apleona.com — apleona's own
+    # domain, not an ATS host — → /offer/<slug>/<uuid>). A single hit is trusted
+    # (lowered from 3): the sitemap can't lie about what's posted.
+    # Reuse the crawl _careers_candidates already did during discovery instead
+    # of hitting the same sitemap a second time when the host matches.
+    sitemap_cache = client.pop("_sitemap_cache", None)
+    url_host = urlparse(url).netloc.lower().replace("www.", "")
+    if sitemap_cache and sitemap_cache.get("host") == url_host:
+        sitemap_jobs = sitemap_cache.get("jobs") or []
+    else:
+        sitemap_jobs = await _sitemap_job_urls(url)
+    if len(sitemap_jobs) >= 1:
         listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
         listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
         listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
-        positions, needs = await _extract_jobs(name, listing, org_id)
+        raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
+        positions = _filter_positions(raw_positions)
+        filtered_out = len(raw_positions) - len(positions)
 
     # (2) Careers-page text (good for sites that list roles inline).
     if not positions:
         text, html = await _fetch_page_raw(url, wait_ms=3500)
-        positions, needs = await _extract_jobs(name, text, org_id)
+        plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()) if html else 0
+        raw_positions, needs = await _extract_jobs(name, text, org_id)
+        positions = _filter_positions(raw_positions)
+        filtered_out = len(raw_positions) - len(positions)
+        if positions and plain_len < 500:
+            needs_js = True  # only the browser-rendered fallback found anything
         # (3) Landing page with no roles → follow its job-listing links.
         if not positions and html:
-            for link in _career_listing_links(html, url):
-                sub_text, _ = await _fetch_page_raw(link, wait_ms=5000)
+            for link in _harvest_links(html, url, _JOB_LINK_KEYS, domain):
+                sub_text, sub_html = await _fetch_page_raw(link, wait_ms=5000)
+                sub_plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", sub_html)).strip()) if sub_html else 0
                 p2, n2 = await _extract_jobs(name, sub_text, org_id)
-                if p2:
-                    positions, needs, effective_url = p2, n2, link
+                p2f = _filter_positions(p2)
+                if p2f:
+                    positions, needs, effective_url = p2f, n2, link
+                    filtered_out = len(p2) - len(p2f)
+                    if sub_plain_len < 500:
+                        needs_js = True
                     break
 
-    now_iso = datetime.now(timezone.utc).isoformat()
     if effective_url and effective_url != meta.get("careers_url"):
         await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
 
+    # From here on `url` always means the URL actually used/found — both the
+    # failure stamp below and the success write further down must persist
+    # this (effective_url), not the originally discovered/known one; a
+    # step-(3) listing-link follow-through can differ from it.
+    url = effective_url
+    summary["careers_url"] = url
+
     # Nothing found anywhere — keep any prior good scan, just record we looked.
     if not positions and not needs:
-        return summary
-
-    url = effective_url
+        return await _stamp_failure("no positions found on careers page")
 
     # Attach each position's own posting URL (the sitemap path gives per-job URLs;
     # match the LLM-cleaned title back to the closest sitemap title).
@@ -1921,15 +2236,17 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") ->
     if needs:
         lines.append("\n## Inferred needs")
         lines += [f"- {n}" for n in needs]
-    jobs_doc_id = await db_module.index_document(
-        org_id=org_id, doc_id=f"jobs-{client['id']}", doc_type="jobs",
+    jobs_doc_id_int = await db_module.index_document(
+        org_id=org_id, doc_id=jobs_doc_id, doc_type="jobs",
         title=f"Open positions — {name}", content="\n".join(lines),
         metadata={"careers_url": url, "positions": positions, "inferred_needs": needs,
-                  "needs_mapped": needs_mapped, "last_scanned": now_iso, "subject": name},
-        embedding=[], source="agent",
+                  "needs_mapped": needs_mapped, "last_scanned": now_iso, "subject": name,
+                  "tier": tier, "last_attempt": now_iso, "last_error": None, "attempts": 0,
+                  "filtered_out": filtered_out},
+        embedding=[], source="agent", agent_run_id=run_id,
     )
-    if jobs_doc_id and jobs_doc_id > 0:
-        await db_module.link_document(jobs_doc_id, "client", client["id"])
+    if jobs_doc_id_int and jobs_doc_id_int > 0:
+        await db_module.link_document(jobs_doc_id_int, "client", client["id"])
 
     # Inferred needs → findings (deterministic ids = idempotent; match synthesis reads findings).
     for i, need in enumerate(needs):
@@ -1939,13 +2256,21 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") ->
             content=(f"Inferred from {name}'s open roles ({len(positions)} positions on their "
                      f"careers page): {need}."),
             metadata={"source_url": url, "from_jobs": True, "subject": name},
-            embedding=[], source="agent",
+            embedding=[], source="agent", agent_run_id=run_id,
         )
         if fid and fid > 0:
             await db_module.link_document(fid, "client", client["id"])
 
+    # A step-(3) listing-link follow-through means the URL that actually
+    # yielded positions is not the one discovery/metadata handed us — report
+    # that to the playbook instead of crediting the original discovery tier
+    # for a page that in fact returned nothing.
+    followed_link = url != original_url
+    await _record_playbook(success=True, reason=None, needs_js=needs_js,
+                            report_tier=("listing-link" if followed_link else tier))
+
     summary.update({"positions": len(positions), "needs": len(needs),
-                    "careers_url": effective_url, "found": bool(positions or needs)})
+                    "careers_url": url, "found": True, "tier": tier, "error": None})
     return summary
 
 
