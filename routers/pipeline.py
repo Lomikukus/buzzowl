@@ -1717,8 +1717,19 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
                 _add(link, "homepage")
 
         sitemap_jobs = await _sitemap_job_urls(website)
+        # Cache the crawl on the client dict (keyed by the site's own host) so
+        # _scan_client_jobs can reuse it instead of crawling the same sitemap
+        # a second time right after discovery returns.
+        site_host = urlparse(website).netloc.lower().replace("www.", "")
+        if site_host:
+            client["_sitemap_cache"] = {"host": site_host, "jobs": sitemap_jobs}
         if sitemap_jobs:
             _add(_sitemap_listing_url(sitemap_jobs[0][1]), "sitemap")
+
+    # Cheap, own-domain-ish tiers already found something — SearXNG is the
+    # last resort, not a blanket cross-check run on every discovery.
+    if candidates:
+        return candidates
 
     queries = [f'"{name}" careers open positions', f'"{name}" jobs karriere stellenangebote']
     if domain:
@@ -2110,7 +2121,14 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     # page only exposes category filters to a fetch, but its sitemap lists every
     # real opening (e.g. jobs.apleona.com → /offer/<slug>/<uuid>). A single hit
     # is trusted (lowered from 3): the sitemap can't lie about what's posted.
-    sitemap_jobs = await _sitemap_job_urls(url)
+    # Reuse the crawl _careers_candidates already did during discovery instead
+    # of hitting the same sitemap a second time when the host matches.
+    sitemap_cache = client.pop("_sitemap_cache", None)
+    url_host = urlparse(url).netloc.lower().replace("www.", "")
+    if sitemap_cache and sitemap_cache.get("host") == url_host:
+        sitemap_jobs = sitemap_cache.get("jobs") or []
+    else:
+        sitemap_jobs = await _sitemap_job_urls(url)
     if len(sitemap_jobs) >= 1:
         listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
         listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
