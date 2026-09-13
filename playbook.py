@@ -515,7 +515,10 @@ def _infer_domain(tool_calls: list) -> str:
             continue
         url = (tc.get("args") or {}).get("url") or ""
         host = _host_of(url)
-        if host and host not in _AGGREGATOR_DOMAINS:
+        # Suffix-match like routers/pipeline.py does (~:999) — exact-set
+        # membership missed subdomains (e.g. de.linkedin.com), which is how a
+        # run mostly fetching LinkedIn wrote a real site playbook for it.
+        if host and not any(host == agg or host.endswith("." + agg) for agg in _AGGREGATOR_DOMAINS):
             counts[host] += 1
     if not counts:
         return ""

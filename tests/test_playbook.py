@@ -195,6 +195,23 @@ def test_classify_tool_calls_binary_and_fetch_error_kinds():
 
 
 # ---------------------------------------------------------------------------
+# _infer_domain — pure
+# ---------------------------------------------------------------------------
+
+def test_infer_domain_rejects_aggregator_subdomains():
+    # _AGGREGATOR_DOMAINS is suffix-matched everywhere else (routers/pipeline.py
+    # ~:999); exact-set membership here missed subdomains like
+    # de.linkedin.com, so a run mostly fetching LinkedIn wrote a real site
+    # playbook for it (WP4 re-review nit 2).
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://de.linkedin.com/company/acme"}, "result": "c", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://de.linkedin.com/company/acme/about"}, "result": "c", "ts": "t1"},
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/careers"}, "result": "c", "ts": "t2"},
+    ]
+    assert playbook._infer_domain(tool_calls) == "acme.com"
+
+
+# ---------------------------------------------------------------------------
 # reflect_on_run
 # ---------------------------------------------------------------------------
 
