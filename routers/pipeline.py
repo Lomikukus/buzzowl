@@ -2062,10 +2062,11 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     summary = {"client": name, "careers_url": url, "positions": 0, "needs": 0,
                "found": False, "tier": tier, "error": None}
 
-    async def _record_playbook(*, success: bool, reason: Optional[str], needs_js: bool) -> None:
+    async def _record_playbook(*, success: bool, reason: Optional[str], needs_js: bool,
+                                report_tier: Optional[str] = None) -> None:
         if playbook is None or not domain:
             return
-        careers_patch = {"url": url, "tier": tier}
+        careers_patch = {"url": url, "tier": report_tier if report_tier is not None else tier}
         if success:
             careers_patch["last_success_at"] = now_iso
             careers_patch["error"] = None
@@ -2097,7 +2098,7 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
             # merge) — a prior good scan's positions/careers_url are untouched.
             await db_module.update_document(org_id, jobs_doc_id, {"metadata": patch_meta})
         else:
-            await db_module.index_document(
+            new_id = await db_module.index_document(
                 org_id=org_id, doc_id=jobs_doc_id, doc_type="jobs",
                 title=f"Open positions — {name}",
                 content=f"# Open positions — {name}\n\n(no data yet — {reason})",
@@ -2105,12 +2106,20 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                           "needs_mapped": [], "subject": name, "filtered_out": 0},
                 embedding=[], source="agent", agent_run_id=run_id,
             )
+            # Link it exactly like the success path does below — an unlinked
+            # placeholder is invisible to _run_jobs_monitor's
+            # "MAX(updated_at) JOIN document_links" rotation query, so a
+            # never-successful client would keep heading the retry queue
+            # every run, the exact starvation this bookkeeping exists to fix.
+            if new_id and new_id > 0:
+                await db_module.link_document(new_id, "client", client["id"])
         await _record_playbook(success=False, reason=reason, needs_js=False)
         return summary
 
     if not url:
         return await _stamp_failure("no careers page found")
 
+    original_url = url  # the URL the scan started from, for tier reporting below
     effective_url = url
     positions: list = []
     needs: list = []
@@ -2163,12 +2172,16 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     if effective_url and effective_url != meta.get("careers_url"):
         await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
 
+    # From here on `url` always means the URL actually used/found — both the
+    # failure stamp below and the success write further down must persist
+    # this (effective_url), not the originally discovered/known one; a
+    # step-(3) listing-link follow-through can differ from it.
+    url = effective_url
+    summary["careers_url"] = url
+
     # Nothing found anywhere — keep any prior good scan, just record we looked.
     if not positions and not needs:
-        summary["careers_url"] = effective_url
         return await _stamp_failure("no positions found on careers page")
-
-    url = effective_url
 
     # Attach each position's own posting URL (the sitemap path gives per-job URLs;
     # match the LLM-cleaned title back to the closest sitemap title).
@@ -2230,10 +2243,16 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         if fid and fid > 0:
             await db_module.link_document(fid, "client", client["id"])
 
-    await _record_playbook(success=True, reason=None, needs_js=needs_js)
+    # A step-(3) listing-link follow-through means the URL that actually
+    # yielded positions is not the one discovery/metadata handed us — report
+    # that to the playbook instead of crediting the original discovery tier
+    # for a page that in fact returned nothing.
+    followed_link = url != original_url
+    await _record_playbook(success=True, reason=None, needs_js=needs_js,
+                            report_tier=("listing-link" if followed_link else tier))
 
     summary.update({"positions": len(positions), "needs": len(needs),
-                    "careers_url": effective_url, "found": True, "tier": tier, "error": None})
+                    "careers_url": url, "found": True, "tier": tier, "error": None})
     return summary
 
 
