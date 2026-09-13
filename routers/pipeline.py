@@ -101,6 +101,7 @@ _HB_NAMES: dict[str, str] = {
     "rep_digest": "Rep Client Digest",
     "task_reminder": "Task Reminder (email)",
     "research_qa": "Research QA Reviewer",
+    "lessons_review": "Cross-Site Lessons Review",
 }
 
 
@@ -3546,6 +3547,17 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                 },
             )
 
+        elif agent_type == "lessons_review":
+            # Self-improving agent (WP4): propose cross-site navigation lessons
+            # from this week's site playbooks + failed runs. Never auto-approves —
+            # a human decides via POST /api/agents/lessons/{id}/decision.
+            import playbook
+            summary = await playbook.lessons_propose(org_id, run_id=run_id)
+            await db_module.update_agent_run(
+                run_id, "done",
+                output={"proposed": len(summary.get("proposed") or [])},
+            )
+
         else:
             from agents.runner import run_agent
             await run_agent(run_id, org_id, agent_type, task)
@@ -3598,6 +3610,9 @@ async def _start_heartbeat_scheduler() -> None:
                     "Sample recent agent-written research and flag quality problems (no LLM): "
                     "stale synthesis that lags newer findings, cross-client contamination, and "
                     "claims with no sources. Write flags into each doc + a QA summary report."),
+                "lessons_review": ("0 7 * * 1",
+                    "Propose cross-site navigation lessons from this week's playbooks and "
+                    "failed runs (human approval required)."),
             }
             # every org (multi-tenant): each existing org gets the types it lacks
             for org_row in await db_module.list_orgs():
