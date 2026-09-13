@@ -177,6 +177,21 @@ def test_classify_tool_calls_fixture():
     assert "acme careers" in result["good_queries"]
 
 
+def test_classify_tool_calls_only_records_own_domain_blocked_urls():
+    # A 403 on a THIRD-PARTY page (e.g. a competitor cited as evidence) is
+    # not a lesson about navigating the client's own site — must be dropped,
+    # not recorded into the client's playbook (WP4 re-review nit 4).
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/blocked"}, "result": "Error: HTTP 403", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://lidl.de/blocked"}, "result": "Error: HTTP 403", "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    urls = {b["url"] for b in result["blocked_urls"]}
+    assert "https://acme.com/blocked" in urls
+    assert "https://lidl.de/blocked" not in urls
+
+
 def test_classify_tool_calls_binary_and_fetch_error_kinds():
     domain = "acme.com"
     tool_calls = [

@@ -441,6 +441,10 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
     strong sign the plain GET never saw the JS-rendered page.
     good_queries = a web_search query followed within 3 calls by a fetch_page
     whose result was NOT one of the sentinels above.
+    blocked_urls only ever records fetches on `domain` itself (or a
+    subdomain) — a run that got 403'd on a THIRD-PARTY site (e.g. a
+    competitor's page cited as evidence) must not tell future runs on the
+    CLIENT's own site to avoid that third-party URL.
     """
     blocked_urls: list = []
     good_queries: list = []
@@ -480,7 +484,11 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
             kind = "binary"
 
         if kind and url:
-            blocked_urls.append({"url": url, "kind": kind, "at": now})
+            # Only ever record blocks on the CLIENT's own domain — a 403 on a
+            # third-party page (e.g. a competitor cited as evidence) is not a
+            # lesson about how to navigate the client's own site.
+            if _is_own_domain(url, domain):
+                blocked_urls.append({"url": url, "kind": kind, "at": now})
         elif kind is None and url:
             # A clean fetch — credit the most recent search within 3 calls.
             for j, query in pending_searches:
