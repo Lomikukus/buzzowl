@@ -1753,7 +1753,10 @@ async def _sitemap_job_urls(base_url: str, limit: int = 130) -> list[tuple[str, 
                 timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
             ) as http:
                 r = await http.get(u)
-                return r.text if r.status_code == 200 and "xml" in r.headers.get("content-type", "") + r.text[:100] else ""
+                ct = r.headers.get("content-type", "").lower()
+                head = r.text[:300]
+                ok = r.status_code == 200 and ("xml" in ct or "<urlset" in head or "<sitemapindex" in head)
+                return r.text if ok else ""
         except Exception:
             return ""
 
