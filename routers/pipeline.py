@@ -808,14 +808,25 @@ async def _trigger_osint(client_name: str, org_id: int, run_id: Optional[int] = 
 # Heartbeat scheduler
 # ---------------------------------------------------------------------------
 
-async def _searxng_results(query: str, limit: int = 10) -> list[dict]:
-    """Raw SearXNG JSON results — shared by news gate + source discovery. [] on failure."""
+async def _searxng_results(
+    query: str, limit: int = 10, *,
+    categories: str | None = None, time_range: str | None = None, language: str | None = None,
+) -> list[dict]:
+    """Raw SearXNG JSON results — shared by news gate + source discovery. [] on failure.
+
+    Each result dict keeps whatever SearXNG returns (url/title/content/engine/
+    publishedDate); categories/time_range/language are only added to the request
+    when the caller passes them, so existing callers see no behavior change."""
     searxng_url = context.config.get("searxng_url", "http://localhost:8080").rstrip("/")
+    params = {"q": query, "format": "json", "safesearch": 0}
+    if categories:
+        params["categories"] = categories
+    if time_range:
+        params["time_range"] = time_range
+    if language:
+        params["language"] = language
     async with httpx.AsyncClient(timeout=10.0) as http:
-        resp = await http.get(
-            f"{searxng_url}/search",
-            params={"q": query, "format": "json", "safesearch": 0},
-        )
+        resp = await http.get(f"{searxng_url}/search", params=params)
         resp.raise_for_status()
         return (resp.json().get("results") or [])[:limit]
 
