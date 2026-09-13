@@ -1160,7 +1160,9 @@ _NEWS_SIGNAL_SCORING_HINT = (
     "metadata.relevance_score (1-5; 5 = major strategic event such as M&A, CEO/CTO change, "
     "large investment, or regulatory action). Score honestly — scores of 4 or higher "
     "trigger a deeper product-match analysis. Pass source_url for each signal — the URL of "
-    "the page the development came from — so the reader can open the original article."
+    "the page the development came from — so the reader can open the original article. "
+    "Use web_search with category='news' and time_range='month' first to find recent coverage, "
+    "and include each article's publication date in the signal."
 )
 
 
