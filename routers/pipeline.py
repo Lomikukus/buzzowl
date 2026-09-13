@@ -1486,10 +1486,10 @@ async def _news_candidates(org_id: int, client: dict) -> list[dict]:
     news search, name+industry, own-domain site search, and (only when those
     come up thin) a generic name+news fallback. Drops skip-host results,
     dedupes by normalized URL, and requires a resolvable published date
-    within the last 90 days — an own-domain result without a publishedDate
-    gets one more chance via a date embedded in its URL (_parse_published),
-    but is dropped like everything else if that also comes up empty. Caps
-    at 15.
+    within the last 90 days — any result without a publishedDate gets one
+    more chance via a date embedded in its URL (_parse_published applies
+    this fallback uniformly, not just to own-domain results), but is
+    dropped like everything else if that also comes up empty. Caps at 15.
 
     Raises when every SearXNG query in this call failed (a real outage) so
     _client_news_scan can distinguish "SearXNG is down" from "no news found";
