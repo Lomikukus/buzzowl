@@ -260,6 +260,11 @@ async def record(
         merged["version"] = 1
 
         try:
+            # Note: db.index_document upserts on (org_id, doc_id) but does not
+            # overwrite agent_run_id on conflict, so this row's agent_run_id
+            # stays whichever run FIRST created it — not the latest writer.
+            # `sources_of_truth` (appended above) is the authoritative list of
+            # every run that has contributed to this playbook.
             await db_module.index_document(
                 org_id=org_id,
                 doc_id=_doc_id(domain),
@@ -655,6 +660,11 @@ async def enrich_task(org_id: int, subject: str, task: str, agent_type: str) -> 
                 block = render_block(pb)
                 if block:
                     task = f"{task}\n\n{block}"
+                # Feeds routers/agents.py's `use_browser_fetch` payload field.
+                # Moot on any deployment with Camofox configured — Pi's
+                # fetch_page prefers Camofox unconditionally there (it already
+                # renders JS), so this flag only matters as the plain-GET vs.
+                # browser-service fallback choice when Camofox is absent.
                 needs_js = bool(pb.get("needs_js"))
     except Exception:
         logger.debug("playbook.enrich_task: site playbook lookup failed for subject=%s", subject, exc_info=True)
