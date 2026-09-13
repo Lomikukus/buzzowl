@@ -43,7 +43,7 @@ export function buildTools(
   sourcesAcc?: SourceRef[],
 ): AgentTool[] {
   function log(tool: string, args: unknown, result: string) {
-    toolCallLog.push({ tool, args, result: result.replace(/\0/g, '').slice(0, 300), ts: new Date().toISOString() });
+    toolCallLog.push({ tool, args, result: result.replace(/\0/g, '').slice(0, 600), ts: new Date().toISOString() });
   }
 
   // URLs the agent actually fetched this run — appended as clickable links to
