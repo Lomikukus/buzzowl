@@ -390,6 +390,51 @@ class TestPartDone:
 
         mock_finish.assert_not_called()
 
+    async def test_last_part_failing_after_partial_closes_out_without_regenerating(self):
+        """Coordinator follow-up GAP: when the LAST outstanding part FAILS
+        after a deadline-triggered partial brief was written, nothing became
+        'done' since written_at (so the became_done_since refresh branch
+        doesn't fire) and force is False — but every part is now terminal.
+        Leaving the brief 'partial' would keep the intake active forever
+        (is_active() treats every 'partial' as active): swept every 60s until
+        the 90-minute absolute cap, the client page polling /intake every 5s
+        the whole time, with `missing` stuck on stale "still running" wording
+        instead of the real failure reason. The 'partial' branch's
+        `all_terminal` close-out must patch the brief to 'written' in place —
+        no second LLM call — and still run the match-trigger step."""
+        t0 = intake._now() - timedelta(minutes=30)
+        deadline = t0 + timedelta(minutes=25)
+        parts = _parts(osint="done", research="done", jobs="done", news="running")
+        for p in ("osint", "research", "jobs"):
+            parts[p]["done_at"] = intake._iso(t0 + timedelta(minutes=5))
+        state = _intake_state(parts=parts, deadline_at=intake._iso(deadline), started_at=intake._iso(t0))
+        db = _LiveIntakeDB({"intake": dict(state)})
+
+        mock_brief = AsyncMock(return_value=True)
+        mock_match = AsyncMock()
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
+        ):
+            # Phase 1: the deadline fires with news still running -> 'partial'.
+            await intake._maybe_finish(1, "Bosch AG", db.metadata)
+            assert db.metadata["intake"]["brief"]["status"] == "partial"
+            assert mock_brief.await_count == 1
+            mock_match.reset_mock()
+
+            # Phase 2: news is the one still-outstanding part, and it fails.
+            await intake.part_done(1, "Bosch AG", "news", "failed", error="boom")
+
+        final_brief = db.metadata["intake"]["brief"]
+        assert final_brief["status"] == "written"
+        assert final_brief["missing"] == ["news (failed: boom)"]
+        assert final_brief.get("closed_at") is not None
+        assert intake.is_active(db.metadata) is False
+        mock_brief.assert_awaited_once()  # unchanged since phase 1 — no regeneration
+        mock_match.assert_called_once()  # the close-out still runs the match gate
+
     async def test_finish_failure_resets_status_and_increments_attempt(self):
         state = _intake_state(parts=_parts(osint="done", research="done", jobs="done", news="done"))
         writing_meta = {"intake": {**state, "brief": {**state["brief"], "status": "writing"}}}
@@ -436,12 +481,13 @@ class TestPartDone:
     async def test_sweep_cap_force_fails_stuck_parts_then_finishes_written(self):
         """Nit 1: past the absolute cap, sweep() must mark any still
         queued/running part 'failed' ("timed out (absolute cap)") BEFORE
-        forcing a finish — otherwise _finish's recompute (still seeing those
-        parts as not-yet-terminal) writes another 'partial' with the same
-        `missing`, repeating every 60s sweep tick with a real generation each
-        time and getting mislabelled 'refreshed' whenever a stray became_done
-        check happens to pass. Pre-failing them makes the very next
-        recompute genuinely all_terminal, ending it in one write ('written')."""
+        forcing a finish. Once that pre-marking makes every part terminal,
+        _maybe_finish's 'partial' branch closes it out itself, in place, with
+        no LLM call (see its `all_terminal` branch) — a late failure has
+        nothing new to regenerate the brief text over — so this ends in one
+        direct patch to 'written', not a repeated 'partial' generation every
+        60s sweep tick (which used to get mislabelled 'refreshed' whenever a
+        stray became_done check happened to pass)."""
         started_at = intake._now() - timedelta(minutes=100)  # past the 90-min cap
         parts = _parts(osint="done", research="done", jobs="running", news="queued")
         partial_brief = {
@@ -472,7 +518,8 @@ class TestPartDone:
         assert final_brief["status"] == "written"
         assert "jobs (failed: timed out (absolute cap))" in final_brief["missing"]
         assert "news (failed: timed out (absolute cap))" in final_brief["missing"]
-        mock_brief.assert_awaited_once()  # one write ends it, not one per sweep tick
+        assert final_brief.get("closed_at") is not None
+        mock_brief.assert_not_awaited()  # no LLM call — a failure adds nothing to regenerate
         mock_match.assert_called_once()
 
     async def test_sweep_finishes_all_terminal_brief_without_a_deadline(self):
