@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import llm
+import playbook
 from routers.auth import current_user
 
 logger = logging.getLogger("wk.match")
@@ -56,6 +57,11 @@ async def _fire_pain_point_research(
 
     from routers.agents import _PAIN_POINT_RESEARCH_TEMPLATE, _watch_agent_service_run
     task = _PAIN_POINT_RESEARCH_TEMPLATE.format(client_name=client_name)
+    use_browser_fetch = False
+    try:
+        task, use_browser_fetch = await playbook.enrich_task(org_id, client_name, task, "pain_point_research")
+    except Exception:
+        logger.warning("playbook.enrich_task failed for client=%r", client_name, exc_info=True)
 
     run_id = await db_module.create_agent_run(
         org_id=org_id,
@@ -89,6 +95,7 @@ async def _fire_pain_point_research(
         "model": research_model,
         "subject": client_name,
         "callback_url": f"{server_url}/api/agents/callback",
+        "use_browser_fetch": use_browser_fetch,
     }
 
     svc_token = config.get("agent_service_token", "")
