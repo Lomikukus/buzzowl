@@ -122,11 +122,19 @@ def is_active(meta: Optional[dict]) -> bool:
 
 def summary(meta: Optional[dict]) -> dict:
     """UI-facing view of the intake state for GET /api/clients/{name}/intake
-    and static/client.html's #intakeStrip."""
+    and static/client.html's #intakeStrip.
+
+    `percent` counts terminal parts (done OR failed — a failed part isn't
+    still "in progress") plus the brief itself as one more stage, out of
+    len(PARTS) + 1 total: a written/refreshed/failed brief with all four
+    parts terminal reads 100%, not 80%."""
     intake = (meta or {}).get("intake") or {}
     parts_state = intake.get("parts") or {}
     parts = {p: (parts_state.get(p) or _empty_part()) for p in PARTS}
-    done = sum(1 for p in PARTS if parts[p].get("status") == "done")
+    brief = intake.get("brief") or _empty_brief()
+    terminal_parts = sum(1 for p in PARTS if parts[p].get("status") in _TERMINAL_PART_STATES)
+    brief_done = 1 if brief.get("status") in _TERMINAL_BRIEF_STATES else 0
+    total_stages = len(PARTS) + 1
     return {
         "active": is_active(meta),
         "trigger": intake.get("trigger"),
@@ -134,8 +142,8 @@ def summary(meta: Optional[dict]) -> dict:
         "deadline_at": intake.get("deadline_at"),
         "attempt": intake.get("attempt", 1),
         "parts": parts,
-        "brief": intake.get("brief") or _empty_brief(),
-        "percent": round(done / len(PARTS) * 100) if PARTS else 0,
+        "brief": brief,
+        "percent": round((terminal_parts + brief_done) / total_stages * 100) if total_stages else 0,
     }
 
 
