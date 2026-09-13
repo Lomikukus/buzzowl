@@ -27,6 +27,7 @@ from context import DB_AVAILABLE, console, db_module
 from context import _default_org_id, cache_get, cache_set, cache_clear
 from routers.auth import current_user
 from routers.pipeline import (
+    _client_news_scan,
     _discover_client_sources,
     _monitor_client,
     _trigger_osint,
@@ -760,6 +761,20 @@ async def check_client_sources_endpoint(name: str, user: dict = Depends(current_
         raise HTTPException(status_code=404, detail="Client not found")
     summary = await _monitor_client(user["org_id"], client)
     return {"ok": True, **summary}
+
+
+@router.post("/api/clients/{name}/news/scan")
+async def scan_client_news_endpoint(name: str, user: dict = Depends(current_user)):
+    """Run the news pipeline scan for this client right now (one text LLM
+    call, no Pi slot) and write any relevant fresh articles as signals."""
+    cache_clear(user["org_id"])
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    client = await db_module.get_client(user["org_id"], name)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    result = await _client_news_scan(user["org_id"], client)
+    return {"ok": True, **result}
 
 
 @router.get("/api/clients/{name}")

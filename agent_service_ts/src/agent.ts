@@ -223,6 +223,7 @@ Use ONLY URLs that appear in the research findings — do not invent any.
 
 ## Rules
 - Do NOT do web searches — all context is already in the task.
+- Weigh dated news signals and open roles from the task as evidence for fit, and cite them with their URLs like any other finding.
 - Call write_document(type="match_report", title="Match: [client name] — [today's date]") with the full report.
 - Stop immediately after write_document returns.`,
 

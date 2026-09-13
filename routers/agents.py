@@ -188,6 +188,7 @@ _MATCH_SYNTHESIS_TEMPLATE = (
     "You also have the seller's complete product catalog below.\n\n"
     "SELLER PRODUCTS:\n{product_list}\n\n"
     "PAIN POINT RESEARCH SUMMARY (each finding includes its source URL):\n{pain_point_summary}\n\n"
+    "{news_signals}"
     "{hiring_signals}"
     "Produce a detailed product-client match report. For EACH seller product:\n"
     "(1) Assign a fit score 1–10 using this rubric:\n"
@@ -1257,7 +1258,10 @@ async def _handle_pain_point_callback(
 ) -> None:
     """After Hermes pain_point_research: read findings, build product catalog, fire Pi match_synthesis."""
     try:
-        # Collect pain point findings for this client (recent, limited to keep context manageable)
+        # Collect pain-point findings, dated news signals, and jobs-derived
+        # findings for this client — one connection, three scoped queries
+        # (the old single 40-doc query buried the highest-signal dated news
+        # under a pile of stale, low-value findings).
         async with db_module._pool.acquire() as conn:
             findings = await conn.fetch(
                 """
@@ -1267,22 +1271,81 @@ async def _handle_pain_point_callback(
                 WHERE d.org_id = $1 AND c.name ILIKE $2
                   AND d.type IN ('finding', 'research', 'osint')
                 ORDER BY d.created_at DESC
-                LIMIT 40
+                LIMIT 15
+                """,
+                org_id, client_name,
+            )
+            signal_rows = await conn.fetch(
+                """
+                SELECT d.content, d.metadata, d.created_at FROM documents d
+                JOIN document_links dl ON dl.document_id = d.id AND dl.entity_type = 'client'
+                JOIN clients c ON c.id = dl.entity_id
+                WHERE d.org_id = $1 AND c.name ILIKE $2
+                  AND d.type = 'signal'
+                  AND COALESCE((d.metadata->>'relevance_score')::float, 0) >= 2
+                ORDER BY d.created_at DESC
+                LIMIT 10
+                """,
+                org_id, client_name,
+            )
+            jobs_findings = await conn.fetch(
+                """
+                SELECT d.content, d.metadata->>'source_url' AS source_url FROM documents d
+                JOIN document_links dl ON dl.document_id = d.id AND dl.entity_type = 'client'
+                JOIN clients c ON c.id = dl.entity_id
+                WHERE d.org_id = $1 AND c.name ILIKE $2
+                  AND d.type = 'finding' AND d.metadata->>'from_jobs' = 'true'
+                ORDER BY d.created_at DESC
                 """,
                 org_id, client_name,
             )
 
-        def _fmt_finding(r) -> str:
-            text = (r["content"] or "")[:1200]
+        def _fmt_finding(r, max_chars: Optional[int] = 1200) -> str:
+            text = (r["content"] or "")
+            if max_chars:
+                text = text[:max_chars]
             url = (r["source_url"] or "").strip()
             # Append source URL on its own line if it isn't already in the text
             if url and url not in text:
                 text += f"\nSource: {url}"
             return text
 
-        pain_point_summary = "\n\n---\n\n".join(
-            _fmt_finding(r) for r in findings if r["content"]
-        ) or f"No specific findings in the knowledge base for {client_name}. Use your general knowledge of this company's industry challenges."
+        # All from_jobs findings are included in full (not capped/truncated
+        # like the general findings above) — they're few and each one is a
+        # concrete hiring-driven signal worth keeping intact.
+        pain_blocks = [_fmt_finding(r) for r in findings if r["content"]]
+        pain_blocks += [_fmt_finding(r, max_chars=None) for r in jobs_findings if r["content"]]
+        pain_point_summary = "\n\n---\n\n".join(pain_blocks) or (
+            f"No specific findings in the knowledge base for {client_name}. "
+            "Use your general knowledge of this company's industry challenges."
+        )
+
+        def _fmt_signal(r) -> str:
+            meta = r["metadata"] or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+            signal_type = meta.get("signal_type") or "news"
+            date_str = (meta.get("published_at") or "")[:10] or r["created_at"].strftime("%Y-%m-%d")
+            try:
+                relevance = int(float(meta.get("relevance_score")))
+            except (TypeError, ValueError):
+                relevance = 0
+            text = (r["content"] or "")[:600]
+            url = (meta.get("source_url") or "").strip()
+            if url and url not in text:
+                text += f"\nSource: {url}"
+            return f"[{signal_type} · {date_str} · relevance {relevance}]\n{text}"
+
+        news_signals = ""
+        signal_blocks = [_fmt_signal(r) for r in signal_rows if r["content"]]
+        if signal_blocks:
+            news_signals = (
+                "RECENT NEWS SIGNALS (dated, each with source URL — cite by date):\n"
+                + "\n\n---\n\n".join(signal_blocks) + "\n\n"
+            )
 
         # Seller's product catalog for the MATCH — FOCUS products only (fall back
         # to all only when the org has no focus products). Non-focus products
@@ -1338,6 +1401,7 @@ async def _handle_pain_point_callback(
             client_name=client_name,
             product_list=product_list,
             pain_point_summary=pain_point_summary,
+            news_signals=news_signals,
             hiring_signals=hiring_signals,
             today_date=today_date,
         )
