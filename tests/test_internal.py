@@ -1,9 +1,11 @@
 """
 tests/test_internal.py — token-authed internal endpoints for the Pi agent service.
 
-Covers the two chat-action endpoints Pi calls back into:
+Covers the chat-action endpoints Pi calls back into:
   - POST /api/internal/find-people  → routers.agents._start_people_search
   - POST /api/internal/tasks         → db.create_task
+  - POST /api/internal/clients       → db.upsert_client (+ OSINT/research triggers)
+  - POST /api/internal/contacts      → db.upsert_contact
 
 Auth: Bearer {agent_service_token}. When the token is empty (dev), auth is skipped.
 """
@@ -221,3 +223,72 @@ class TestInternalCreateTask:
             )
         assert resp.status_code == 401
         mock_ct.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/internal/clients
+# ---------------------------------------------------------------------------
+
+class TestInternalCreateClient:
+    def test_create_client_ok(self, app_client):
+        """Regression: cache_clear(org_id) used to run before org_id was
+        assigned in the function body — an UnboundLocalError on every call,
+        500ing this endpoint outright and breaking the agent's create_client
+        tool and the contact_extraction agent's client step."""
+        with (
+            patch("routers.internal.DB_AVAILABLE", True),
+            patch("routers.internal.config") as mock_cfg,
+            patch("routers.internal.db_module.embed_text", new_callable=AsyncMock, return_value=[0.1]),
+            patch("routers.internal.db_module.upsert_client", new_callable=AsyncMock, return_value=7),
+            patch("routers.internal._trigger_osint", new_callable=AsyncMock) as mock_osint,
+            patch("routers.internal._trigger_research", new_callable=AsyncMock) as mock_research,
+        ):
+            mock_cfg.get = _cfg(token="")
+            resp = app_client.post(
+                "/api/internal/clients",
+                json={"org_id": 1, "name": "Bosch", "metadata": {"industry": "Automotive"}},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "id": 7, "name": "Bosch"}
+        mock_osint.assert_called_once()
+        mock_research.assert_called_once()
+
+    def test_create_client_missing_org_id_400(self, app_client):
+        with (
+            patch("routers.internal.DB_AVAILABLE", True),
+            patch("routers.internal.config") as mock_cfg,
+        ):
+            mock_cfg.get = _cfg(token="")
+            resp = app_client.post("/api/internal/clients", json={"name": "Bosch"})
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /api/internal/contacts
+# ---------------------------------------------------------------------------
+
+class TestInternalCreateContact:
+    def test_create_contact_ok(self, app_client):
+        """Same cache_clear-before-assignment regression as clients above."""
+        with (
+            patch("routers.internal.DB_AVAILABLE", True),
+            patch("routers.internal.config") as mock_cfg,
+            patch("routers.internal.db_module.embed_text", new_callable=AsyncMock, return_value=[0.1]),
+            patch("routers.internal.db_module.upsert_contact", new_callable=AsyncMock, return_value=9),
+        ):
+            mock_cfg.get = _cfg(token="")
+            resp = app_client.post(
+                "/api/internal/contacts",
+                json={"org_id": 1, "name": "Jane Doe", "role": "CTO"},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "id": 9, "name": "Jane Doe"}
+
+    def test_create_contact_missing_org_id_400(self, app_client):
+        with (
+            patch("routers.internal.DB_AVAILABLE", True),
+            patch("routers.internal.config") as mock_cfg,
+        ):
+            mock_cfg.get = _cfg(token="")
+            resp = app_client.post("/api/internal/contacts", json={"name": "Jane Doe"})
+        assert resp.status_code == 400

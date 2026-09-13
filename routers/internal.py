@@ -65,7 +65,6 @@ async def internal_create_client(body: dict, request: Request):
     Body: { org_id: int, name: str, metadata?: dict }
     """
     _check_token(request)
-    cache_clear(org_id)
 
     org_id: Optional[int] = body.get("org_id")
     name: str = (body.get("name") or "").strip()
@@ -75,6 +74,7 @@ async def internal_create_client(body: dict, request: Request):
         raise HTTPException(status_code=400, detail="org_id is required")
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
+    cache_clear(org_id)
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
@@ -166,7 +166,6 @@ async def internal_create_contact(body: dict, request: Request):
     Body: { org_id: int, name: str, client?: str, role?: str, email?: str, metadata?: dict }
     """
     _check_token(request)
-    cache_clear(org_id)
 
     org_id: Optional[int] = body.get("org_id")
     name: str = (body.get("name") or "").strip()
@@ -184,6 +183,7 @@ async def internal_create_contact(body: dict, request: Request):
         raise HTTPException(status_code=400, detail="org_id is required")
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
+    cache_clear(org_id)
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
