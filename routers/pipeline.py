@@ -2076,7 +2076,14 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                                 report_tier: Optional[str] = None) -> None:
         if playbook is None or not domain:
             return
-        careers_patch = {"url": url, "tier": report_tier if report_tier is not None else tier}
+        # Omit "url" entirely when there's nothing to report (e.g. the "no
+        # careers page found" path) — an empty string here is inert today
+        # (playbook.record has no writer yet) but would clobber a good
+        # previously-recorded playbook URL once WP4 lands. last_failure_at /
+        # error below still get recorded either way.
+        careers_patch: dict = {"tier": report_tier if report_tier is not None else tier}
+        if url:
+            careers_patch["url"] = url
         if success:
             careers_patch["last_success_at"] = now_iso
             careers_patch["error"] = None
