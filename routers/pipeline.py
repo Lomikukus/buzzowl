@@ -16,10 +16,10 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -1048,16 +1048,133 @@ async def _resolve_client_website(org_id: int, client: dict) -> Optional[str]:
     return website
 
 
-async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
-    """Find newsroom/press pages for a client via SearXNG heuristics — no LLM.
+# Well-known newsroom/press paths, tried directly on the client's own site
+# before falling back to homepage-link harvesting or a SearXNG search — a
+# client whose newsroom lives at a boring, undiscoverable path (no inbound
+# links, not indexed) still gets found this way.
+_NEWSROOM_PATHS = (
+    "/news", "/newsroom", "/presse", "/press", "/pressemitteilungen", "/aktuelles",
+    "/media", "/unternehmen/presse", "/company/news", "/en/news", "/de/presse",
+    "/investor-relations", "/investors",
+)
 
-    Prefers pages on the client's own domain; requires a news-ish keyword in the
-    URL. Merges into any existing (user-added) sources, caps at
-    _MAX_MONITORED_SOURCES, and stamps sources_discovered_at.
+# Loose date-like strings (ISO, DD.MM.YYYY, "12. März 2025", "March 12, 2025")
+# — a newsroom page reliably has several of these, a generic page doesn't.
+_NEWS_DATE_PATTERN_RE = re.compile(
+    r"\b(?:20\d\d[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]20\d\d|"
+    r"\d{1,2}\.\s*(?:Januar|Februar|März|April|Mai|Juni|Juli|August|September|"
+    r"Oktober|November|Dezember)\s*20\d\d|"
+    r"(?:January|February|March|April|May|June|July|August|September|October|"
+    r"November|December)\s+\d{1,2},?\s+20\d\d)\b",
+    re.IGNORECASE,
+)
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_HTML_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
+_HTML_HREF_RE = re.compile(r'<a\b[^>]*href=["\']([^"\'#]+)["\'][^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
+
+
+async def _probe_newsroom_paths(website: str) -> list[dict]:
+    """GET each well-known newsroom path directly off the client's own site
+    (no LLM). A hit needs: HTTP 200, ≥500 chars of visible text, and either
+    ≥3 date-like strings in the text or a news keyword in the title/h1 —
+    plain heuristics, same spirit as _fetch_source_fp's readability floor."""
+    if not website:
+        return []
+    base = website if website.startswith("http") else f"https://{website}"
+    base = base.rstrip("/")
+    hits: list[dict] = []
+    async with httpx.AsyncClient(
+        timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+    ) as http:
+        for path in _NEWSROOM_PATHS:
+            url = f"{base}{path}"
+            try:
+                resp = await http.get(url)
+            except Exception:
+                continue
+            if resp.status_code != 200:
+                continue
+            html = resp.text or ""
+            text = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()
+            if len(text) < 500:
+                continue
+            title_m = _HTML_TITLE_RE.search(html)
+            h1_m = _HTML_H1_RE.search(html)
+            heading = " ".join(
+                _HTML_TAG_RE.sub(" ", m.group(1)) for m in (title_m, h1_m) if m
+            ).lower()
+            has_keyword = any(k in heading for k in _SOURCE_KEYWORDS)
+            has_dates = len(_NEWS_DATE_PATTERN_RE.findall(text)) >= 3
+            if not (has_keyword or has_dates):
+                continue
+            label = (
+                (_HTML_TAG_RE.sub(" ", title_m.group(1)).strip() if title_m else "")
+                or path.strip("/").replace("/", " ").title()
+            )
+            hits.append({"url": url, "label": label[:60]})
+    return hits
+
+
+async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> list[dict]:
+    """Homepage link harvest for newsroom/press pages: GET the homepage and
+    pull out <a href> links whose href or visible text mentions one of `keys`,
+    restricted to `own_domain` (or a subdomain of it).
+
+    A private, minimal stand-in for the general `_harvest_links(html, base_url,
+    keys, own_domain)` helper WP2 is adding to the jobs block (a
+    generalization of `_career_listing_links`) — duplicated here, doing its
+    own fetch, only until that lands so this stays a single mockable unit for
+    tests instead of pulling in a second real HTTP call. Reconcile/dedupe the
+    two at merge time.
+    """
+    if not website:
+        return []
+    html = ""
+    try:
+        async with httpx.AsyncClient(
+            timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+        ) as http:
+            resp = await http.get(website)
+            if resp.status_code == 200:
+                html = resp.text or ""
+    except Exception:
+        return []
+    if not html:
+        return []
+    hits: list[dict] = []
+    seen: set[str] = set()
+    for m in _HTML_HREF_RE.finditer(html):
+        href = m.group(1)
+        text = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", m.group(2))).strip()
+        haystack = f"{href} {text}".lower()
+        if not any(k in haystack for k in keys):
+            continue
+        url = urljoin(website, href)
+        host = _result_domain(url)
+        if not own_domain or not (host == own_domain or host.endswith("." + own_domain)):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        hits.append({"url": url, "label": text[:60] or urlparse(url).path})
+    return hits
+
+
+async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
+    """Find newsroom/press pages for a client — no LLM, own domain only.
+
+    Order: existing (user-added) sources are kept as-is; then well-known
+    newsroom paths are probed directly; then the homepage is harvested for
+    matching links; then a SearXNG site: search fills any remainder. Merges
+    into existing sources, caps at _MAX_MONITORED_SOURCES, and stamps
+    sources_discovered_at (also when there's no website at all, so the sweep
+    doesn't retry every cycle — see _discovery_marker_stale).
     """
     meta = client.get("metadata") or {}
     existing = list(meta.get("monitored_sources") or [])
     seen = {_normalize_source_url(s.get("url", "")) for s in existing}
+    name = client["name"]
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     # No website on record → resolve it first (heuristic, LLM fallback) so the
     # precise own-domain discovery query can run
@@ -1067,33 +1184,50 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
             meta["website"] = website
             client["metadata"] = meta
 
-    domain = _client_domain(client)
-    name = client["name"]
+    website = (meta.get("website") or "").strip()
+    if not website:
+        try:
+            await db_module.update_client_metadata(
+                org_id, name, {"sources_discovered_at": now_iso},
+            )
+        except Exception as exc:
+            console.print(f"[yellow]source discovery: could not save for '{name}': {exc}[/yellow]")
+        return existing
 
-    queries = [f'"{name}" newsroom press releases', f'"{name}" pressemitteilungen news']
-    if domain:
-        queries.insert(0, f"site:{domain} news press")
+    domain = _client_domain(client)
 
     candidates: list[tuple[int, str, str]] = []
-    for q in queries:
+
+    try:
+        probe_hits = await _probe_newsroom_paths(website)
+    except Exception:
+        probe_hits = []
+    for h in probe_hits:
+        candidates.append((0, h["url"], h.get("label", "")))
+
+    try:
+        harvested = await _harvest_links_news(website, _SOURCE_KEYWORDS, domain)
+    except Exception:
+        harvested = []
+    for h in harvested:
+        candidates.append((1, h["url"], h.get("label", "")))
+
+    if domain:
         try:
-            results = await _searxng_results(q)
+            results = await _searxng_results(
+                f"site:{domain} news OR presse OR newsroom", limit=10, categories="general",
+            )
         except Exception:
-            continue
+            results = []
         for r in results:
             url = (r.get("url") or "").strip()
             if not url.startswith("http"):
                 continue
-            parsed = urlparse(url)
-            host = parsed.netloc.lower()
-            host = host[4:] if host.startswith("www.") else host
-            path = (parsed.path or "").lower()
-            if not any(k in path or k in host for k in _SOURCE_KEYWORDS):
+            host = _result_domain(url)
+            if not (host == domain or host.endswith("." + domain)):
                 continue
-            own_domain = bool(domain) and (host == domain or host.endswith("." + domain))
-            candidates.append((0 if own_domain else 1, url, (r.get("title") or "")[:60]))
+            candidates.append((2, url, (r.get("title") or "")[:60]))
 
-    now_iso = datetime.now(timezone.utc).isoformat()
     added: list[dict] = []
     for _prio, url, title in sorted(candidates, key=lambda t: t[0]):
         norm = _normalize_source_url(url)
@@ -1111,6 +1245,22 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
         )
     except Exception as exc:
         console.print(f"[yellow]source discovery: could not save for '{name}': {exc}[/yellow]")
+
+    if added:
+        try:
+            import playbook  # type: ignore
+        except ImportError:
+            playbook = None
+        if playbook is not None:
+            try:
+                await playbook.record(
+                    org_id, domain,
+                    {"newsroom": {"urls": [a["url"] for a in added], "last_success_at": now_iso}},
+                    website=website,
+                )
+            except Exception as exc:
+                console.print(f"[yellow]source discovery: playbook record failed for '{name}': {exc}[/yellow]")
+
     return merged
 
 
