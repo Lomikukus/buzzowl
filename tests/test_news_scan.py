@@ -18,11 +18,13 @@ tests/test_source_monitor.py::TestDiscoverSources.
 
 import hashlib
 import json
+import sys
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import playbook
 from routers import pipeline
 from tests.test_source_monitor import _client, _patch_config, _patch_db
 
@@ -412,6 +414,67 @@ class TestClientNewsScan:
 
 
 # ---------------------------------------------------------------------------
+# WP4: approved cross-site lessons (scope='news') inlined into
+# _NEWS_SCORE_PROMPT via _news_rules_block, for both scan flavors.
+# ---------------------------------------------------------------------------
+
+def _fake_playbook_with_lessons(lessons):
+    """A fake `playbook` module for sys.modules — lessons_load returns the
+    fixture, lessons_block is the REAL function so scope/status filtering is
+    exercised end to end, not just the plumbing that calls it."""
+    fake = MagicMock()
+    fake.lessons_load = AsyncMock(return_value=lessons)
+    fake.lessons_block = playbook.lessons_block
+    return fake
+
+
+class TestLessonsInClientNewsScan:
+    @pytest.mark.asyncio
+    async def test_approved_news_lesson_appears_proposed_does_not(self, monkeypatch):
+        lessons = [
+            {"text": "Discount press-release wire copy with no named source", "scope": "news", "status": "approved"},
+            {"text": "A merely proposed news lesson", "scope": "news", "status": "proposed"},
+            {"text": "An approved but jobs-scoped lesson", "scope": "jobs", "status": "approved"},
+        ]
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons(lessons))
+        client = _client("Acme GmbH")
+        cand = [{"url": "https://acme.com/news/1", "title": "t", "content": "c",
+                 "_norm_url": "acme.com/news/1", "_published": _RECENT_ISO, "query": "q"}]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        acomplete = AsyncMock(return_value=json.dumps([]))
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates", AsyncMock(return_value=cand)), \
+             patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._client_news_scan(1, client)
+        acomplete.assert_awaited_once()
+        prompt = acomplete.await_args.args[0]
+        assert "Discount press-release wire copy with no named source" in prompt
+        assert "A merely proposed news lesson" not in prompt
+        assert "An approved but jobs-scoped lesson" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_unchanged_when_org_has_no_lessons_document(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons([]))
+        client = _client("Acme GmbH")
+        cand = [{"url": "https://acme.com/news/1", "title": "t", "content": "c",
+                 "_norm_url": "acme.com/news/1", "_published": _RECENT_ISO, "query": "q"}]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        acomplete = AsyncMock(return_value=json.dumps([]))
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates", AsyncMock(return_value=cand)), \
+             patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._client_news_scan(1, client)
+        prompt = acomplete.await_args.args[0]
+        assert "Learned rules" not in prompt
+        assert prompt == pipeline._NEWS_SCORE_PROMPT.format(
+            subject="Acme GmbH", n=1, listing=pipeline._news_listing(cand),
+            rules=pipeline._news_rules_block(""),
+        )
+
+
+# ---------------------------------------------------------------------------
 # _market_news_scan
 # ---------------------------------------------------------------------------
 
@@ -499,3 +562,43 @@ class TestMarketNewsScan:
             result = await pipeline._market_news_scan(1, "Automotive", "the Automotive sector", max_write=2)
         assert result["written"] == 2
         assert db.index_document.await_count == 2
+
+
+class TestLessonsInMarketNewsScan:
+    @pytest.mark.asyncio
+    async def test_approved_news_lesson_appears_proposed_does_not(self, monkeypatch):
+        lessons = [
+            {"text": "Discount press-release wire copy with no named source", "scope": "news", "status": "approved"},
+            {"text": "A merely proposed news lesson", "scope": "news", "status": "proposed"},
+            {"text": "An approved but jobs-scoped lesson", "scope": "jobs", "status": "approved"},
+        ]
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons(lessons))
+        results = [{"url": "https://reuters.com/industry-update", "title": "Industry update", "content": "c",
+                    "publishedDate": _RECENT_ISO}]
+        db = MagicMock()
+        db.list_signals = AsyncMock(return_value=[])
+        acomplete = AsyncMock(return_value=json.dumps([]))
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=results)), \
+             patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._market_news_scan(1, "Automotive", "the Automotive sector")
+        acomplete.assert_awaited_once()
+        prompt = acomplete.await_args.args[0]
+        assert "Discount press-release wire copy with no named source" in prompt
+        assert "A merely proposed news lesson" not in prompt
+        assert "An approved but jobs-scoped lesson" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_unchanged_when_org_has_no_lessons_document(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons([]))
+        results = [{"url": "https://reuters.com/industry-update", "title": "Industry update", "content": "c",
+                    "publishedDate": _RECENT_ISO}]
+        db = MagicMock()
+        db.list_signals = AsyncMock(return_value=[])
+        acomplete = AsyncMock(return_value=json.dumps([]))
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=results)), \
+             patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._market_news_scan(1, "Automotive", "the Automotive sector")
+        prompt = acomplete.await_args.args[0]
+        assert "Learned rules" not in prompt

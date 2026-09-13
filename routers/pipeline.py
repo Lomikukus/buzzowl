@@ -1399,6 +1399,24 @@ def _news_rules_block(rules: str) -> str:
     return f"{rules}\n" if rules else ""
 
 
+async def _news_lessons_block(org_id: int) -> str:
+    """Approved cross-site lessons (scope='news', WP4), for _news_rules_block's
+    `rules` argument. '' when playbook isn't available, org_id is falsy, or
+    there are no approved news/all-scope lessons — _news_rules_block already
+    collapses '' to no dangling text, so callers pass this straight through."""
+    if not org_id:
+        return ""
+    try:
+        import playbook  # type: ignore
+    except ImportError:
+        return ""
+    try:
+        lessons = await playbook.lessons_load(org_id)
+        return playbook.lessons_block(lessons, "news")
+    except Exception:
+        return ""
+
+
 # YYYY/MM/DD or YYYY-MM-DD embedded in a URL path/slug, e.g. .../2025/03/12/...
 _URL_DATE_RE = re.compile(r"(20\d\d)[/-](\d\d)[/-](\d\d)")
 
@@ -1606,7 +1624,8 @@ async def _client_news_scan(
         return result
 
     prompt = _NEWS_SCORE_PROMPT.format(
-        subject=name, n=len(fresh), listing=_news_listing(fresh), rules=_news_rules_block(""),
+        subject=name, n=len(fresh), listing=_news_listing(fresh),
+        rules=_news_rules_block(await _news_lessons_block(org_id)),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
@@ -1990,7 +2009,8 @@ async def _market_news_scan(
         return result
 
     prompt = _NEWS_SCORE_PROMPT.format(
-        subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh), rules=_news_rules_block(""),
+        subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh),
+        rules=_news_rules_block(await _news_lessons_block(org_id)),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
