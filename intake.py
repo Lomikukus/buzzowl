@@ -376,14 +376,40 @@ async def _maybe_finish(org_id: int, client_name: str, meta: dict, *, force: boo
             # regeneration triggered by real new information.
             await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=True)
             return
+        if all_terminal:
+            # Nothing became done since written_at (that's the branch above)
+            # but every part is now terminal anyway — so whatever got us here
+            # was a late FAILURE on the last part still pending. There's
+            # nothing new to regenerate the brief text over (see
+            # _part_done_after's docstring), but the brief still needs
+            # closing out: is_active() treats every 'partial' as active, so
+            # leaving it 'partial' forever would keep this client swept every
+            # 60s until the 90-minute absolute cap and the client page
+            # polling /intake every 5s the whole time, with `missing` stuck
+            # on stale "still running"/"queued" wording instead of the real
+            # "(failed: ...)" reason. Patch the brief in place — no LLM call —
+            # and close it out.
+            updated = await db_module.cas_client_intake_brief(org_id, client_name, ["partial"], "written")
+            if updated is not None:
+                await db_module.set_client_intake_path(
+                    org_id, client_name, ["intake", "brief"],
+                    {**brief, "status": "written", "missing": _missing_parts(parts), "closed_at": _iso(_now())},
+                )
+                # Same post-finish step a normal (non-refresh) _finish call
+                # does, so the match report still happens off this brief.
+                try:
+                    from routers.agents import _maybe_trigger_pain_point_research
+                    await _maybe_trigger_pain_point_research(org_id, client_name)
+                except Exception as exc:
+                    logger.warning("intake._maybe_finish: match trigger failed for '%s': %s", client_name, exc)
+            return
         if force:
-            # The absolute cap forced this, not a natural completion (a late
-            # FAILURE alone doesn't reach here either — see _part_done_after)
-            # — treat it as a plain finish rather than "the" refresh.
-            # sweep()'s cap path marks any still-open part 'failed' first, so
-            # _finish's own recompute (see its docstring) lands on a genuine
-            # all-terminal state and ends in one write ('written'), not
-            # 'refreshed'.
+            # Fallback for the absolute cap forcing this while all_terminal
+            # is somehow still False (e.g. sweep()'s pre-mark-as-failed write
+            # above didn't land) — not a natural completion, so treat it as a
+            # plain finish rather than "the" refresh. In the ordinary case
+            # (pre-marking succeeded) the all_terminal branch above already
+            # closed this out without reaching here.
             await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=False)
             return
         return  # nothing new since the partial brief was written
