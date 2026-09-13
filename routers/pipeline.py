@@ -1107,12 +1107,11 @@ async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> lis
     pull out <a href> links whose href or visible text mentions one of `keys`,
     restricted to `own_domain` (or a subdomain of it).
 
-    A private, minimal stand-in for the general `_harvest_links(html, base_url,
-    keys, own_domain)` helper WP2 is adding to the jobs block (a
-    generalization of `_career_listing_links`) — duplicated here, doing its
-    own fetch, only until that lands so this stays a single mockable unit for
-    tests instead of pulling in a second real HTTP call. Reconcile/dedupe the
-    two at merge time.
+    Deliberately separate from the jobs block's `_harvest_links(html,
+    base_url, keys, own_domain)`: that one parses HTML it is handed and
+    returns bare URLs, this one does its own GET and keeps the link text as
+    a label (used to name the discovered source). Kept as one mockable unit
+    so `TestDiscoverSources` never makes a real HTTP call.
     """
     if not website:
         return []
