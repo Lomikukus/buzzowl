@@ -34,7 +34,7 @@ _TERMINAL_BRIEF_STATES = ("written", "refreshed", "failed")
 # Caps concurrent LLM-bound calls made by the intake pipeline (jobs scan, news
 # scan, brief generation) so they don't pile on top of the two Pi agent slots
 # and blow through the ChatGPT-subscription bridge's rate limit.
-_LLM_SEM = asyncio.Semaphore(2)
+_INTAKE_LLM_SEM = asyncio.Semaphore(2)
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +293,7 @@ async def _run_python_part(org_id: int, client_name: str, part: str) -> None:
 
     error: Optional[str] = None
     result: dict = {}
-    async with _LLM_SEM:
+    async with _INTAKE_LLM_SEM:
         try:
             if part == "jobs":
                 from routers.pipeline import _scan_client_jobs
@@ -382,7 +382,7 @@ async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh:
 
     from routers.knowledge import _auto_generate_brief
     try:
-        async with _LLM_SEM:
+        async with _INTAKE_LLM_SEM:
             ok = await _auto_generate_brief(org_id, client_name, partial_missing=missing or None)
     except Exception as exc:
         ok = False
