@@ -6,6 +6,7 @@ _monitor_client, _maybe_escalate_match, and news_pending clearing.
 """
 
 import hashlib
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,35 +46,66 @@ def _searxng(results):
 # ---------------------------------------------------------------------------
 
 class TestDiscoverSources:
-    RESULTS = [
-        {"url": "https://acme.com/newsroom", "title": "Acme Newsroom"},
-        {"url": "https://acme.com/about", "title": "About"},             # no keyword → dropped
-        {"url": "https://techblog.example/acme-press", "title": "Acme press coverage"},
-        {"url": "https://acme.com/newsroom/", "title": "Duplicate"},     # dupe of first
-    ]
+    """_discover_client_sources is now own-domain-only and no longer does its
+    own keyword-in-path filtering over raw SearXNG results — it orders
+    existing sources → _probe_newsroom_paths hits → _harvest_links_news hits →
+    a restricted SearXNG site: search. Both helpers do their own HTTP calls,
+    so every case here patches them — otherwise this test would make real
+    network requests."""
+
+    def _no_probe_no_harvest(self):
+        """ExitStack of the two patches so callers can splice it into a `with`
+        without hitting the syntax restriction on starred with-items."""
+        stack = ExitStack()
+        stack.enter_context(patch.object(pipeline, "_probe_newsroom_paths", AsyncMock(return_value=[])))
+        stack.enter_context(patch.object(pipeline, "_harvest_links_news", AsyncMock(return_value=[])))
+        return stack
 
     @pytest.mark.asyncio
-    async def test_keyword_filter_domain_preference_dedupe(self):
+    async def test_order_is_probe_then_harvest_then_searxng_deduped(self):
         db_patch, db = _patch_db()
         client = _client(website="https://www.acme.com")
-        with db_patch, _patch_config(), _searxng(self.RESULTS):
+        probe_hits = [{"url": "https://acme.com/newsroom", "label": "Newsroom"}]
+        harvested = [
+            {"url": "https://acme.com/press", "label": "Press"},
+            {"url": "https://acme.com/newsroom", "label": "dup of probe hit"},
+        ]
+        searx_results = [{"url": "https://acme.com/media/update", "title": "Update"}]
+        with db_patch, _patch_config(), \
+             patch.object(pipeline, "_probe_newsroom_paths", AsyncMock(return_value=probe_hits)), \
+             patch.object(pipeline, "_harvest_links_news", AsyncMock(return_value=harvested)), \
+             _searxng(searx_results):
             sources = await pipeline._discover_client_sources(1, client)
         urls = [s["url"] for s in sources]
-        assert "https://acme.com/newsroom" in urls
-        assert all("about" not in u for u in urls)
-        assert len([u for u in urls if "newsroom" in u]) == 1       # deduped
-        # own-domain result sorted before third-party
-        assert urls[0] == "https://acme.com/newsroom"
+        assert urls == [
+            "https://acme.com/newsroom",       # probe hit, priority 0
+            "https://acme.com/press",          # harvested, priority 1 (dup of probe hit dropped)
+            "https://acme.com/media/update",   # searxng fallback, priority 2
+        ]
         saved = db.update_client_metadata.await_args.args[2]
         assert "sources_discovered_at" in saved
+
+    @pytest.mark.asyncio
+    async def test_third_party_searxng_result_dropped_own_domain_kept(self):
+        db_patch, _ = _patch_db()
+        client = _client(website="https://www.acme.com")
+        searx_results = [
+            {"url": "https://techblog.example/acme-press", "title": "Acme press coverage"},
+            {"url": "https://acme.com/press", "title": "Acme Press"},
+        ]
+        with db_patch, _patch_config(), self._no_probe_no_harvest(), _searxng(searx_results):
+            sources = await pipeline._discover_client_sources(1, client)
+        urls = [s["url"] for s in sources]
+        assert "https://acme.com/press" in urls
+        assert all("techblog" not in u for u in urls)
 
     @pytest.mark.asyncio
     async def test_merge_preserves_user_entries_and_caps(self):
         db_patch, _ = _patch_db()
         user_sources = [{"url": f"https://manual{i}.example/news", "label": f"m{i}"} for i in range(5)]
-        client = _client(monitored_sources=user_sources)
-        many = [{"url": f"https://x{i}.example/press", "title": f"t{i}"} for i in range(10)]
-        with db_patch, _patch_config(), _searxng(many):
+        client = _client(website="https://www.acme.com", monitored_sources=user_sources)
+        many = [{"url": f"https://acme.com/press{i}", "title": f"t{i}"} for i in range(10)]
+        with db_patch, _patch_config(), self._no_probe_no_harvest(), _searxng(many):
             sources = await pipeline._discover_client_sources(1, client)
         assert sources[:5] == user_sources                           # user entries kept first
         assert len(sources) <= pipeline._MAX_MONITORED_SOURCES
@@ -81,11 +113,32 @@ class TestDiscoverSources:
     @pytest.mark.asyncio
     async def test_searxng_down_returns_existing(self):
         db_patch, _ = _patch_db()
-        client = _client(monitored_sources=[{"url": "https://a.example/news"}])
-        with db_patch, _patch_config(), \
+        client = _client(website="https://www.acme.com",
+                         monitored_sources=[{"url": "https://a.example/news"}])
+        with db_patch, _patch_config(), self._no_probe_no_harvest(), \
              patch.object(pipeline, "_searxng_results", AsyncMock(side_effect=ConnectionError)):
             sources = await pipeline._discover_client_sources(1, client)
         assert len(sources) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_website_stamps_marker_without_probing(self):
+        """No website (and resolution fails too) → return existing sources
+        unchanged, stamp sources_discovered_at, and never touch the network."""
+        db_patch, db = _patch_db()
+        client = _client(monitored_sources=[{"url": "https://a.example/news"}])
+        probe = AsyncMock(return_value=[])
+        harvest = AsyncMock(return_value=[])
+        with db_patch, _patch_config(), \
+             patch.object(pipeline, "_resolve_client_website", AsyncMock(return_value=None)), \
+             patch.object(pipeline, "_probe_newsroom_paths", probe), \
+             patch.object(pipeline, "_harvest_links_news", harvest):
+            sources = await pipeline._discover_client_sources(1, client)
+        assert len(sources) == 1
+        probe.assert_not_awaited()
+        harvest.assert_not_awaited()
+        saved = db.update_client_metadata.await_args.args[2]
+        assert "sources_discovered_at" in saved
+        assert "monitored_sources" not in saved
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +410,9 @@ class TestResolveWebsite:
         db_patch, _ = _patch_db()
         resolver = AsyncMock(return_value="https://acme.com")
         with db_patch, _patch_config(), _searxng([]), \
-             patch.object(pipeline, "_resolve_client_website", resolver):
+             patch.object(pipeline, "_resolve_client_website", resolver), \
+             patch.object(pipeline, "_probe_newsroom_paths", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_harvest_links_news", AsyncMock(return_value=[])):
             await pipeline._discover_client_sources(1, _client("Acme"))
         resolver.assert_awaited_once()
 
