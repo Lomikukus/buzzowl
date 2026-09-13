@@ -15,6 +15,7 @@ Covers:
 """
 
 import asyncio
+import copy
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -89,6 +90,55 @@ def _intake_state(parts=None, brief=None, **overrides) -> dict:
     }
     state.update(overrides)
     return state
+
+
+class _LiveIntakeDB:
+    """Minimal in-memory stand-in for the jsonb_set/CAS primitives, modelling
+    real Postgres semantics: `self.metadata` is the one canonical, mutable
+    store (so a part_done() call made WHILE some other coroutine is
+    mid-_finish, e.g. awaiting _auto_generate_brief, really does land), but
+    every read/write returns a deep-copied SNAPSHOT — like a real query
+    result — so a reference captured before a later mutation (e.g. _finish's
+    pre-generation `updated`) does NOT retroactively pick up that mutation.
+    Only a fresh get_client() call sees it. Needed to drive real concurrency
+    in a test rather than hand-authoring every intermediate metadata
+    snapshot."""
+
+    def __init__(self, metadata: dict):
+        self.metadata = metadata
+        self._pool = None  # keeps _has_match_report() a plain "no report"
+
+    async def get_client(self, org_id, name):
+        return {"id": 1, "org_id": org_id, "metadata": copy.deepcopy(self.metadata)}
+
+    async def set_client_intake_path(self, org_id, name, path, value):
+        node = self.metadata
+        for key in path[:-1]:
+            node = node.setdefault(key, {})
+        node[path[-1]] = copy.deepcopy(value)
+        return copy.deepcopy(self.metadata)
+
+    async def cas_client_intake_brief(self, org_id, name, from_states, to_state):
+        brief = self.metadata.setdefault("intake", {}).setdefault("brief", {})
+        if brief.get("status") not in from_states:
+            return None
+        brief["status"] = to_state
+        return copy.deepcopy(self.metadata)
+
+    async def update_client_metadata(self, *args, **kwargs):
+        return None
+
+    async def create_agent_run(self, *args, **kwargs):
+        return 1
+
+    async def update_agent_run(self, *args, **kwargs):
+        return None
+
+    async def get_agent_run(self, *args, **kwargs):
+        return None
+
+    async def list_clients_with_open_intake(self):
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +300,14 @@ class TestPartDone:
                             "refreshed_at": intake._iso(intake._now()), "error": None}
         writing_meta_2 = {"intake": {**state, "parts": parts_after_news, "brief": {**partial_brief, "status": "writing"}}}
 
-        db.get_client = AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": meta_before_phase2})
+        # get_client is called twice during this phase: once by part_done()
+        # itself (sees news still 'running' — the pre-completion snapshot),
+        # once by _finish's own post-generation recompute (sees news 'done' —
+        # the state part_done()'s own set_client_intake_path call just wrote).
+        db.get_client = AsyncMock(side_effect=[
+            {"id": 1, "org_id": 1, "metadata": meta_before_phase2},
+            {"id": 1, "org_id": 1, "metadata": meta_partial_news_done},
+        ])
         db.set_client_intake_path = AsyncMock(return_value=meta_partial_news_done)
         db.cas_client_intake_brief = AsyncMock(return_value=writing_meta_2)
 
@@ -267,6 +324,11 @@ class TestPartDone:
         # must be flagged as a refresh (not a fresh 'partial'/'written' finish).
         mock_finish.assert_awaited_once()
         assert mock_finish.call_args.kwargs.get("refresh") is True
+        # And the brief actually written must reflect news's completion — not
+        # the stale 'missing: news' from the original partial write (nit 4).
+        brief_calls = [c for c in db.set_client_intake_path.call_args_list if c.args[2] == ["intake", "brief"]]
+        assert brief_calls[-1].args[3]["status"] == "refreshed"
+        assert brief_calls[-1].args[3]["missing"] == []
 
         # Phase 3: the brief is now terminal ("refreshed") — further events are no-ops.
         meta_refreshed = {"intake": {**state, "parts": parts_after_news, "brief": refreshed_brief}}
@@ -296,6 +358,35 @@ class TestPartDone:
             patch("intake._finish", new_callable=AsyncMock) as mock_finish,
         ):
             await intake._maybe_finish(1, "Bosch AG", meta)
+
+        mock_finish.assert_not_called()
+
+    async def test_late_failure_does_not_trigger_a_refresh(self):
+        """Nit 3: a late part that FAILED (not done) must not trigger a full
+        LLM regeneration — only a genuine 'done' completion since written_at
+        does (see _part_done_after's docstring). A failure just updates the
+        live part state (already persisted by part_done()'s own
+        set_client_intake_path call, independent of this); regenerating the
+        brief over a mere failure would waste an LLM call for no new content."""
+        parts = _parts(osint="done", research="done", jobs="done", news="running")
+        partial_brief = {
+            "status": "partial", "written_at": intake._iso(intake._now() - timedelta(minutes=5)),
+            "missing": ["news"], "refreshed_at": None, "error": None,
+        }
+        meta = {"intake": _intake_state(parts=parts, brief=partial_brief)}
+        parts_after_fail = {**parts, "news": {**parts["news"], "status": "failed", "error": "timeout",
+                                               "done_at": intake._iso(intake._now())}}
+        updated_meta = {"intake": {**meta["intake"], "parts": parts_after_fail}}
+        db = _fake_db(
+            get_client=AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": meta}),
+            set_client_intake_path=AsyncMock(return_value=updated_meta),
+        )
+
+        with (
+            patch("intake.db_module", db),
+            patch("intake._finish", new_callable=AsyncMock) as mock_finish,
+        ):
+            await intake.part_done(1, "Bosch AG", "news", "failed", run_id=4, error="timeout")
 
         mock_finish.assert_not_called()
 
@@ -342,6 +433,79 @@ class TestPartDone:
         assert osint_calls and osint_calls[0].args[3]["status"] == "done"
         assert research_calls and research_calls[0].args[3]["status"] == "done"
 
+    async def test_sweep_cap_force_fails_stuck_parts_then_finishes_written(self):
+        """Nit 1: past the absolute cap, sweep() must mark any still
+        queued/running part 'failed' ("timed out (absolute cap)") BEFORE
+        forcing a finish — otherwise _finish's recompute (still seeing those
+        parts as not-yet-terminal) writes another 'partial' with the same
+        `missing`, repeating every 60s sweep tick with a real generation each
+        time and getting mislabelled 'refreshed' whenever a stray became_done
+        check happens to pass. Pre-failing them makes the very next
+        recompute genuinely all_terminal, ending it in one write ('written')."""
+        started_at = intake._now() - timedelta(minutes=100)  # past the 90-min cap
+        parts = _parts(osint="done", research="done", jobs="running", news="queued")
+        partial_brief = {
+            "status": "partial", "written_at": intake._iso(intake._now() - timedelta(minutes=70)),
+            "missing": ["jobs", "news"], "refreshed_at": None, "error": None,
+        }
+        state = _intake_state(parts=parts, brief=partial_brief, started_at=intake._iso(started_at),
+                               deadline_at=intake._iso(intake._now() - timedelta(minutes=75)))
+        db = _LiveIntakeDB({"intake": dict(state)})
+        db.list_clients_with_open_intake = AsyncMock(
+            return_value=[{"id": 1, "org_id": 1, "name": "Bosch AG", "metadata": db.metadata}]
+        )
+        mock_brief = AsyncMock(return_value=True)
+        mock_match = AsyncMock()
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
+        ):
+            await intake.sweep()
+
+        final_parts = db.metadata["intake"]["parts"]
+        final_brief = db.metadata["intake"]["brief"]
+        assert final_parts["jobs"]["status"] == "failed"
+        assert final_parts["jobs"]["error"] == "timed out (absolute cap)"
+        assert final_parts["news"]["status"] == "failed"
+        assert final_brief["status"] == "written"
+        assert "jobs (failed: timed out (absolute cap))" in final_brief["missing"]
+        assert "news (failed: timed out (absolute cap))" in final_brief["missing"]
+        mock_brief.assert_awaited_once()  # one write ends it, not one per sweep tick
+        mock_match.assert_called_once()
+
+    async def test_sweep_finishes_all_terminal_brief_without_a_deadline(self):
+        """Nit 2: sweep() must also fire once every part is terminal even when
+        no deadline was ever set (e.g. right after a stale-'writing' brief
+        gets reset to 'waiting' — see the (1) rescue above — with all four
+        parts already done) — not only on a passed deadline or the absolute
+        cap, which could otherwise leave it sitting in 'waiting' for up to 90
+        minutes for no reason."""
+        parts = _parts(osint="done", research="done", jobs="done", news="done")
+        state = _intake_state(parts=parts, deadline_at=None)
+        meta = {"intake": state}
+        row = {"id": 1, "org_id": 1, "name": "Bosch AG", "metadata": meta}
+
+        db = _fake_db(
+            list_clients_with_open_intake=AsyncMock(return_value=[row]),
+            get_client=AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": meta}),
+            cas_client_intake_brief=AsyncMock(
+                return_value={"intake": {**state, "brief": {**state["brief"], "status": "writing"}}}),
+            set_client_intake_path=AsyncMock(return_value=meta),
+        )
+        mock_brief = AsyncMock(return_value=True)
+        mock_match = AsyncMock()
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
+        ):
+            await intake.sweep()
+
+        mock_brief.assert_awaited_once()
+
     async def test_all_parts_terminal_with_a_failure_finishes_written_and_inactive(self):
         """BLOCKER 1 regression: every part terminal but one FAILED must finish
         as 'written' (with the failure recorded in missing), not 'partial' —
@@ -374,6 +538,122 @@ class TestPartDone:
 
         written_meta = {"intake": {**state, "parts": parts, "brief": brief_call.args[3]}}
         assert intake.is_active(written_meta) is False
+
+    async def test_finish_recomputes_when_parts_land_during_generation(self):
+        """Re-review BLOCKER: _finish used to compute `missing`/`all_terminal`
+        from the pre-CAS snapshot and write that unconditionally AFTER the (up
+        to 180s) LLM call. Reproduced: a deadline-triggered finish starts with
+        jobs+news still running; both land while _auto_generate_brief is still
+        in flight (part_done() keeps working the whole time — is_active() is
+        True while brief.status=='writing', it's only _maybe_finish that
+        no-ops on 'writing'). The old code then wrote 'partial' with a stale
+        missing=['jobs','news'] even though every part was actually done —
+        and since 'partial' + all-parts-terminal used to read as inactive,
+        sweep() would skip this client forever: the one-time refresh never
+        ran, the client page showed a permanently-stale 'partial' brief, and
+        _maybe_trigger_pain_point_research fired against it anyway.
+
+        Fixed behavior: the first write recomputes from current state, sees
+        parts landed strictly after its own CAS-win, and stays 'partial'
+        (missing recomputed, refreshed_at untouched) instead of finalizing on
+        stale content — leaving the intake genuinely active. A follow-up
+        _maybe_finish (sweep, in production) then performs the actual
+        one-time refresh with nothing new landing mid-write, finalizing as
+        'refreshed' with missing=[]."""
+        parts = _parts(osint="done", research="done", jobs="running", news="running")
+        state = _intake_state(parts=parts, deadline_at=intake._iso(intake._now() - timedelta(minutes=1)))
+        db = _LiveIntakeDB({"intake": dict(state)})
+
+        release = asyncio.Event()
+
+        async def fake_generate(org_id, client_name, *, partial_missing=None):
+            await release.wait()
+            return True
+
+        mock_match = AsyncMock()
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", fake_generate),
+            patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
+        ):
+            finish_task = asyncio.create_task(intake._maybe_finish(1, "Bosch AG", db.metadata))
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)  # let the task run up to its own generation await
+
+            # jobs and news complete WHILE _auto_generate_brief is still "running".
+            await intake.part_done(1, "Bosch AG", "jobs", "done", run_id=3)
+            await intake.part_done(1, "Bosch AG", "news", "done", run_id=4)
+
+            release.set()
+            await finish_task
+
+        # The first write must not finalize on stale data: brief stays active,
+        # 'partial' (not 'written'), with nothing missing but no refreshed_at
+        # yet (the one-time refresh hasn't actually run over full content).
+        first_brief = db.metadata["intake"]["brief"]
+        assert intake.is_active(db.metadata) is True
+        assert first_brief["status"] == "partial"
+        assert first_brief["missing"] == []
+        assert first_brief.get("refreshed_at") is None
+        mock_match.assert_not_called()  # not final yet — don't match on stale content
+
+        # The follow-up event (sweep, in production) performs the real,
+        # uncontested refresh and finalizes it for good.
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", fake_generate),
+            patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
+        ):
+            await intake._maybe_finish(1, "Bosch AG", db.metadata)
+
+        final_brief = db.metadata["intake"]["brief"]
+        assert final_brief["status"] == "refreshed"
+        assert final_brief["missing"] == []
+        assert final_brief.get("refreshed_at") is not None
+        mock_match.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _run_python_part: TypeError narrowing (nit 7)
+# ---------------------------------------------------------------------------
+
+class TestRunPythonPart:
+    async def _run_with_jobs_scan(self, jobs_scan):
+        parts = _parts()
+        meta = {"intake": _intake_state(parts=parts)}
+        db = _fake_db(get_client=AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": meta}))
+        with (
+            patch("intake.db_module", db),
+            patch("routers.pipeline._scan_client_jobs", jobs_scan),
+        ):
+            await intake._run_python_part(1, "Bosch AG", "jobs")
+        calls = [c for c in db.set_client_intake_path.call_args_list
+                 if c.args[2] == ["intake", "parts", "jobs"] and c.args[3].get("status") == "failed"]
+        assert calls, "expected the jobs part to be recorded as failed"
+        return calls[-1].args[3]["error"]
+
+    async def test_signature_mismatch_type_error_maps_to_not_available(self):
+        """A TypeError from calling the scan with a signature it doesn't have
+        yet (WP2's run_id kwarg not merged) must map to the same short,
+        human-readable reason as a missing function — never leak the raw
+        Python message into the brief's missing-parts line."""
+        async def _boom(*args, **kwargs):
+            raise TypeError("_scan_client_jobs() got an unexpected keyword argument 'run_id'")
+
+        error = await self._run_with_jobs_scan(_boom)
+        assert error == "jobs scan not available"
+
+    async def test_genuine_type_error_surfaces_as_a_real_failure(self):
+        """Nit 7: a TypeError raised from INSIDE an otherwise-working scan
+        (a real bug) must not be mislabelled 'not available' — only a
+        signature-mismatch TypeError (unexpected keyword/positional argument)
+        gets that treatment."""
+        async def _boom(*args, **kwargs):
+            raise TypeError("'NoneType' object is not subscriptable")
+
+        error = await self._run_with_jobs_scan(_boom)
+        assert error == "'NoneType' object is not subscriptable"
 
 
 # ---------------------------------------------------------------------------
