@@ -144,6 +144,20 @@ class TestAtsHostAnchoring:
                      "company.recruitee.com", "boards.greenhouse.io"):
             assert pipeline._ats_match(host) is True, host
 
+    def test_jobs_is_a_generic_word_not_an_ats_vendor(self):
+        """Re-review BLOCKER: the second-from-last-label rule is right for the
+        19 real vendor labels but inverted the meaning of a bare "jobs."
+        entry — "jobs" is a generic subdomain word, not a vendor name, so
+        anchoring it the same way accepted jobs.<anything>.<tld> wholesale:
+        an unrelated job board (jobs.de, jobs.com) or an attacker's
+        evil.jobs.com. "jobs." was removed from _ATS_HOSTS entirely; a
+        client's own jobs.<domain> subdomain (e.g. jobs.miele.de,
+        jobs.apleona.com) is still fine, but recognised via _own_or_ats's
+        own-domain arm, not via _ats_match."""
+        for host in ("jobs.com", "www.jobs.com", "jobs.de", "jobs.ch",
+                     "x.jobs.de", "evil.jobs.com", "jobs.miele.de", "jobs.apleona.com"):
+            assert pipeline._ats_match(host) is False, host
+
 
 # ---------------------------------------------------------------------------
 # _careers_candidates / _discover_careers_url
@@ -240,6 +254,48 @@ class TestCareersDiscovery:
                                                      "title": "Acme jobs on Stepstone"}])):
             url, tier = await pipeline._discover_careers_url(1, client)
         assert (url, tier) == ("", "")
+
+    @pytest.mark.asyncio
+    async def test_own_jobs_subdomain_accepted_via_owndomain_not_ats(self):
+        """jobs.miele.de is miele.de's own subdomain — accepted through
+        _own_or_ats's own-domain arm, independent of _ats_match no longer
+        recognising the generic word "jobs" as an ATS vendor."""
+        client = _client(website="https://miele.de")
+        with patch.object(pipeline, "_careers_candidates",
+                           AsyncMock(return_value=[{"url": "https://jobs.miele.de/stellenangebote",
+                                                     "tier": "searxng", "title": ""}])):
+            url, tier = await pipeline._discover_careers_url(1, client)
+        assert url == "https://jobs.miele.de/stellenangebote"
+
+    @pytest.mark.asyncio
+    async def test_lone_jobs_de_or_evil_jobs_com_candidate_rejected(self):
+        """Re-review BLOCKER, measured regression: before "jobs." was removed
+        from _ATS_HOSTS, an unrelated jobs.de job board and an attacker's
+        evil.jobs.com subdomain both passed _own_or_ats for a miele.de
+        client and would have been persisted via the single-candidate
+        short-circuit."""
+        client = _client(website="https://miele.de")
+        for bad_url in ("https://www.jobs.de/miele-stellenangebote", "https://evil.jobs.com/miele"):
+            with patch.object(pipeline, "_careers_candidates",
+                               AsyncMock(return_value=[{"url": bad_url, "tier": "searxng", "title": ""}])):
+                url, tier = await pipeline._discover_careers_url(1, client)
+            assert (url, tier) == ("", ""), bad_url
+
+    @pytest.mark.asyncio
+    async def test_heuristic_fallback_credits_ats_host_with_no_careers_keyword(self):
+        """NIT: a bare ATS URL with no careers-ish keyword in it (e.g. just
+        "https://company.personio.de/") scored 0 in the heuristic fallback
+        and was dropped when the LLM is unavailable; _ats_match must count
+        on its own, same weight as own-domain, so it survives."""
+        client = _client(website="https://acme.com")
+        candidates = [
+            {"url": "https://company.personio.de/", "tier": "searxng", "title": "Company Personio"},
+            {"url": "https://boards.greenhouse.io/other", "tier": "searxng", "title": "Other co"},
+        ]
+        with patch.object(pipeline, "_careers_candidates", AsyncMock(return_value=candidates)), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(side_effect=RuntimeError("llm down"))):
+            url, tier = await pipeline._discover_careers_url(1, client)
+        assert url == "https://company.personio.de/"
 
 
 # ---------------------------------------------------------------------------
