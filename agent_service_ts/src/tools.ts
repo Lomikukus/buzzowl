@@ -127,16 +127,31 @@ export function buildTools(
   const webSearchTool: AgentTool = {
     name: 'web_search',
     label: 'Web Search',
-    description: 'Search the web for current information. Returns URLs, titles, and snippets.',
+    description: 'Search the web for current information. Returns URLs, titles, and snippets. '
+      + "For recent news use category='news' and time_range='month'.",
     parameters: Type.Object({
       query: Type.String({ description: 'Search query' }),
       n_results: Type.Optional(Type.Number({ description: 'Number of results (default 5)' })),
+      category: Type.Optional(Type.Union([Type.Literal('general'), Type.Literal('news')], {
+        description: "Result category (default 'general'); use 'news' for dated news coverage",
+      })),
+      time_range: Type.Optional(Type.Union(
+        [Type.Literal('day'), Type.Literal('week'), Type.Literal('month'), Type.Literal('year')],
+        { description: 'Restrict results to this recency window' },
+      )),
+      language: Type.Optional(Type.String({ description: "Result language code (default 'en')" })),
     }),
     execute: async (_id, params) => {
-      const p = params as { query: string; n_results?: number };
-      const results = await webSearch(p.query, p.n_results ?? 5);
+      const p = params as {
+        query: string; n_results?: number;
+        category?: 'general' | 'news'; time_range?: 'day' | 'week' | 'month' | 'year'; language?: string;
+      };
+      const results = await webSearch(p.query, p.n_results ?? 5, {
+        category: p.category, timeRange: p.time_range, language: p.language,
+      });
       const text = results.length
-        ? results.map(r => `${r.title}\n${r.url}\n${r.snippet}`).join('\n\n')
+        ? results.map(r => `${r.title}\n${r.url}\n${r.snippet}`
+            + (r.publishedDate ? `\n(published: ${r.publishedDate.slice(0, 10)})` : '')).join('\n\n')
         : '(no results — SearXNG and DDG both returned empty)';
       log('web_search', p, text);
       return { content: [{ type: 'text', text }], details: { count: results.length } };
