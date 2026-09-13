@@ -1972,7 +1972,8 @@ async def _map_needs_to_products(org_id: int, client_name: str, needs: list) -> 
     return [{"need": n, "products": by_need.get(n.strip().lower(), [])} for n in needs]
 
 
-async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") -> dict:
+async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
+                             run_id: Optional[int] = None) -> dict:
     """Fetch a client's careers page, extract open positions + inferred needs,
     store a singleton type='jobs' doc, and write the inferred needs as
     type='finding' docs so the match synthesis picks them up automatically.
@@ -1980,50 +1981,139 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") ->
     Sources, in order of reliability: (1) the site's sitemap of actual job
     postings — works even for JS/ATS pages that render listings client-side;
     (2) the careers-page text; (3) job-listing links followed from the landing
-    page. The LLM filters to IT/management roles and rejects category names."""
+    page. The LLM filters to IT/management roles and rejects category names;
+    _filter_positions then drops junior/apprentice noise on top.
+
+    Every attempt — success or failure — is recorded: a failure stamps the
+    existing jobs doc's last_attempt/last_error/attempts (bumping updated_at
+    so _run_jobs_monitor's LRU rotation stops retrying a never-yielding client
+    first) without ever clobbering a prior good scan's positions, and, once
+    playbook.py exists (WP4), records the careers tier so later scans and
+    other agents' tasks can skip straight to what worked."""
     name = client["name"]
     meta = client.get("metadata") or {}
+    domain = _client_domain(client)
+    jobs_doc_id = f"jobs-{client['id']}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # WP4 hasn't landed yet — the writer/reader must work fine without it.
+    try:
+        import playbook
+    except ImportError:
+        playbook = None
+    pb: Optional[dict] = None
+    if playbook is not None and domain:
+        try:
+            pb = await playbook.load(org_id, domain)
+        except Exception:
+            pb = None
+
     url = (careers_url or meta.get("careers_url") or "").strip()
+    tier = "metadata" if url else ""
     if not url:
-        url = await _discover_careers_url(org_id, client)
-    summary = {"client": name, "careers_url": url, "positions": 0, "needs": 0, "found": False}
-    if not url:
+        url, tier = await _discover_careers_url(org_id, client, pb)
+
+    summary = {"client": name, "careers_url": url, "positions": 0, "needs": 0,
+               "found": False, "tier": tier, "error": None}
+
+    async def _record_playbook(*, success: bool, reason: Optional[str], needs_js: bool) -> None:
+        if playbook is None or not domain:
+            return
+        careers_patch = {"url": url, "tier": tier}
+        if success:
+            careers_patch["last_success_at"] = now_iso
+            careers_patch["error"] = None
+        else:
+            careers_patch["last_failure_at"] = now_iso
+            careers_patch["error"] = reason
+        patch: dict = {"careers": careers_patch}
+        if needs_js:
+            patch["needs_js"] = True
+        try:
+            await playbook.record(org_id, domain, patch, run_id=run_id)
+        except Exception as exc:
+            console.print(f"[yellow]playbook record failed for {name}: {exc}[/yellow]")
+
+    async def _stamp_failure(reason: str) -> dict:
+        summary["error"] = reason
+        existing = await db_module.get_document(org_id, jobs_doc_id)
+        existing_meta = (existing or {}).get("metadata") if existing else None
+        if isinstance(existing_meta, str):
+            try:
+                existing_meta = json.loads(existing_meta)
+            except Exception:
+                existing_meta = {}
+        existing_meta = existing_meta or {}
+        attempts = int(existing_meta.get("attempts") or 0) + 1
+        patch_meta = {"tier": tier, "last_attempt": now_iso, "last_error": reason, "attempts": attempts}
+        if existing:
+            # Merge-only patch (documents.metadata is a shallow `metadata || patch`
+            # merge) — a prior good scan's positions/careers_url are untouched.
+            await db_module.update_document(org_id, jobs_doc_id, {"metadata": patch_meta})
+        else:
+            await db_module.index_document(
+                org_id=org_id, doc_id=jobs_doc_id, doc_type="jobs",
+                title=f"Open positions — {name}",
+                content=f"# Open positions — {name}\n\n(no data yet — {reason})",
+                metadata={**patch_meta, "careers_url": url, "positions": [], "inferred_needs": [],
+                          "needs_mapped": [], "subject": name, "filtered_out": 0},
+                embedding=[], source="agent", agent_run_id=run_id,
+            )
+        await _record_playbook(success=False, reason=reason, needs_js=False)
         return summary
+
+    if not url:
+        return await _stamp_failure("no careers page found")
 
     effective_url = url
     positions: list = []
     needs: list = []
+    filtered_out = 0
+    needs_js = False
 
     # (1) Sitemap of actual postings — the JS-free ground truth. A JS/ATS careers
     # page only exposes category filters to a fetch, but its sitemap lists every
-    # real opening (e.g. jobs.apleona.com → /offer/<slug>/<uuid>).
+    # real opening (e.g. jobs.apleona.com → /offer/<slug>/<uuid>). A single hit
+    # is trusted (lowered from 3): the sitemap can't lie about what's posted.
     sitemap_jobs = await _sitemap_job_urls(url)
-    if len(sitemap_jobs) >= 3:
+    if len(sitemap_jobs) >= 1:
         listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
         listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
         listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
-        positions, needs = await _extract_jobs(name, listing, org_id)
+        raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
+        positions = _filter_positions(raw_positions)
+        filtered_out = len(raw_positions) - len(positions)
 
     # (2) Careers-page text (good for sites that list roles inline).
     if not positions:
         text, html = await _fetch_page_raw(url, wait_ms=3500)
-        positions, needs = await _extract_jobs(name, text, org_id)
+        plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()) if html else 0
+        raw_positions, needs = await _extract_jobs(name, text, org_id)
+        positions = _filter_positions(raw_positions)
+        filtered_out = len(raw_positions) - len(positions)
+        if positions and plain_len < 500:
+            needs_js = True  # only the browser-rendered fallback found anything
         # (3) Landing page with no roles → follow its job-listing links.
         if not positions and html:
-            for link in _career_listing_links(html, url):
-                sub_text, _ = await _fetch_page_raw(link, wait_ms=5000)
+            for link in _harvest_links(html, url, _JOB_LINK_KEYS, domain):
+                sub_text, sub_html = await _fetch_page_raw(link, wait_ms=5000)
+                sub_plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", sub_html)).strip()) if sub_html else 0
                 p2, n2 = await _extract_jobs(name, sub_text, org_id)
-                if p2:
-                    positions, needs, effective_url = p2, n2, link
+                p2f = _filter_positions(p2)
+                if p2f:
+                    positions, needs, effective_url = p2f, n2, link
+                    filtered_out = len(p2) - len(p2f)
+                    if sub_plain_len < 500:
+                        needs_js = True
                     break
 
-    now_iso = datetime.now(timezone.utc).isoformat()
     if effective_url and effective_url != meta.get("careers_url"):
         await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
 
     # Nothing found anywhere — keep any prior good scan, just record we looked.
     if not positions and not needs:
-        return summary
+        summary["careers_url"] = effective_url
+        return await _stamp_failure("no positions found on careers page")
 
     url = effective_url
 
@@ -2062,15 +2152,17 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") ->
     if needs:
         lines.append("\n## Inferred needs")
         lines += [f"- {n}" for n in needs]
-    jobs_doc_id = await db_module.index_document(
-        org_id=org_id, doc_id=f"jobs-{client['id']}", doc_type="jobs",
+    jobs_doc_id_int = await db_module.index_document(
+        org_id=org_id, doc_id=jobs_doc_id, doc_type="jobs",
         title=f"Open positions — {name}", content="\n".join(lines),
         metadata={"careers_url": url, "positions": positions, "inferred_needs": needs,
-                  "needs_mapped": needs_mapped, "last_scanned": now_iso, "subject": name},
-        embedding=[], source="agent",
+                  "needs_mapped": needs_mapped, "last_scanned": now_iso, "subject": name,
+                  "tier": tier, "last_attempt": now_iso, "last_error": None, "attempts": 0,
+                  "filtered_out": filtered_out},
+        embedding=[], source="agent", agent_run_id=run_id,
     )
-    if jobs_doc_id and jobs_doc_id > 0:
-        await db_module.link_document(jobs_doc_id, "client", client["id"])
+    if jobs_doc_id_int and jobs_doc_id_int > 0:
+        await db_module.link_document(jobs_doc_id_int, "client", client["id"])
 
     # Inferred needs → findings (deterministic ids = idempotent; match synthesis reads findings).
     for i, need in enumerate(needs):
@@ -2080,13 +2172,15 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "") ->
             content=(f"Inferred from {name}'s open roles ({len(positions)} positions on their "
                      f"careers page): {need}."),
             metadata={"source_url": url, "from_jobs": True, "subject": name},
-            embedding=[], source="agent",
+            embedding=[], source="agent", agent_run_id=run_id,
         )
         if fid and fid > 0:
             await db_module.link_document(fid, "client", client["id"])
 
+    await _record_playbook(success=True, reason=None, needs_js=needs_js)
+
     summary.update({"positions": len(positions), "needs": len(needs),
-                    "careers_url": effective_url, "found": bool(positions or needs)})
+                    "careers_url": effective_url, "found": True, "tier": tier, "error": None})
     return summary
 
 
