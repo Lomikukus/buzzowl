@@ -66,19 +66,6 @@ _NEWS_OSINT_TASK = (
     "End with a summary signal report (type='osint'). Only include events with verifiable source URLs."
 )
 
-# Market/industry-wide news scan (not tied to one client). Pi writes scope='market'
-# signals tagged by industry; high-relevance ones get applied to clients afterwards.
-_MARKET_NEWS_TASK = (
-    "Scan for {focus}: the most important developments from roughly the last 14 days — regulation and "
-    "compliance changes, market shifts, major M&A, funding rounds, macro/sector trends, and technology "
-    "disruption. Search broadly and fetch the most credible sources (Reuters, Bloomberg, Handelsblatt, "
-    "FT, official regulators). For each significant development, write a type='signal' document with "
-    "scope='market', industry set to the sector it concerns, metadata.relevance_score (1-5; 5 = "
-    "sector-defining), and source_url set to the originating article. If a development scores 4 or "
-    "higher, research it deeper before writing. Do NOT tie these to a single company. End with a short "
-    "type='osint' summary. Only include developments with verifiable source URLs."
-)
-
 # Seeded the first time the market monitor runs with an empty config. Editable
 # per org via GET/PUT /api/market/sources. Front pages change daily, so they
 # make good change-detection anchors (browser-service fallback handles JS pages).
@@ -1368,6 +1355,331 @@ async def _maybe_escalate_match(org_id: int, client_name: str, agent_run_id: Opt
     return True
 
 
+# ---------------------------------------------------------------------------
+# Client news scan — Python/textonly pipeline replacing the old "News is just
+# a prompt instruction" approach. SearXNG gathers dated candidates, ONE
+# llm.acomplete call scores them, and relevant ones become client-linked
+# type='signal' documents — no Pi run, no tool calls, subscription-friendly.
+# ---------------------------------------------------------------------------
+
+# Aggregator/social/job-board hosts that are never a genuine news source about
+# a client — same spirit as _AGGREGATOR_DOMAINS above but for news candidates.
+_NEWS_SKIP_HOSTS = {
+    "linkedin.com", "xing.com", "facebook.com", "instagram.com", "youtube.com",
+    "twitter.com", "x.com", "wikipedia.org", "kununu.com", "glassdoor.com",
+    "glassdoor.de", "indeed.com", "stepstone.de", "pinterest.com", "tiktok.com",
+}
+
+# {rules} defaults to "" (no learned rules injected) until WP4's playbook
+# lessons land and start passing lessons_block("news") in.
+_NEWS_SCORE_PROMPT = (
+    "Below are {n} candidate news search results about \"{subject}\". Score each for how "
+    "genuinely relevant and specific it is to {subject} — score 1 = irrelevant, generic, or "
+    "about someone/something else entirely (a namesake); anything not clearly about {subject} "
+    "is 1. Use 4-5 only for a major, credible, verifiable development.\n"
+    "{rules}"
+    "Return STRICT JSON ONLY — a list, one object per candidate, in the same order, no prose, "
+    "no markdown fences:\n"
+    '[{{"i": <candidate index>, "relevance": <1-5>, '
+    '"signal_type": "opportunity|risk|pain_point|news", '
+    '"headline": "<=90 chars, a short factual headline", '
+    '"why": "<=160 chars, the concrete fact that makes this relevant"}}]\n\n'
+    "CANDIDATES:\n{listing}"
+)
+
+# YYYY/MM/DD or YYYY-MM-DD embedded in a URL path/slug, e.g. .../2025/03/12/...
+_URL_DATE_RE = re.compile(r"(20\d\d)[/-](\d\d)[/-](\d\d)")
+
+
+def _norm_news_url(url: str) -> str:
+    """Normalize a news URL for de-dup / existing-signal comparison: lowercase
+    host, strip 'www.', drop utm_*/fbclid/gclid query params, the fragment,
+    and a trailing slash."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    kept = [
+        (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if not k.lower().startswith("utm_") and k.lower() not in ("fbclid", "gclid")
+    ]
+    path = (parsed.path or "").rstrip("/")
+    normalized = f"{host}{path}"
+    if kept:
+        normalized += f"?{urlencode(kept)}"
+    return normalized.lower()
+
+
+def _parse_published(r: dict) -> Optional[str]:
+    """'YYYY-MM-DD' from a SearXNG result: publishedDate first (ISO, any
+    precision), else a YYYY[/-]MM[/-]DD date embedded in the URL, else None —
+    callers must treat None as 'undated', never guess a date."""
+    raw = (r.get("publishedDate") or "").strip()
+    if raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+        except (ValueError, TypeError):
+            pass
+    m = _URL_DATE_RE.search(r.get("url") or "")
+    if m:
+        y, mo, d = (int(g) for g in m.groups())
+        try:
+            return date(y, mo, d).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+async def _existing_signal_urls(org_id: int, client_id: int) -> set[str]:
+    """Normalized source_url of every type='signal' document already linked to
+    this client — so a news scan never re-scores (and re-writes) the same
+    article twice."""
+    try:
+        docs = await db_module.list_documents(org_id, client_id=client_id)
+    except Exception:
+        return set()
+    urls: set[str] = set()
+    for d in docs:
+        if d.get("type") != "signal":
+            continue
+        meta = d.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        url = meta.get("source_url")
+        if url:
+            urls.add(_norm_news_url(url))
+    return urls
+
+
+def _news_result_allowed(url: str) -> tuple[bool, str]:
+    """(is_allowed, host) — drops skip-hosts and non-http(s) results."""
+    if not url.startswith("http"):
+        return False, ""
+    host = _result_domain(url)
+    if not host or host in _NEWS_SKIP_HOSTS or any(
+        host.endswith("." + h) for h in _NEWS_SKIP_HOSTS
+    ):
+        return False, host
+    return True, host
+
+
+async def _news_candidates(org_id: int, client: dict) -> list[dict]:
+    """Gather candidate news articles for a client via SearXNG: exact-name
+    news search, name+industry, own-domain site search, and (only when those
+    come up thin) a generic name+news fallback. Drops skip-host results,
+    dedupes by normalized URL, and requires a resolvable published date
+    within the last 90 days — an own-domain result without a publishedDate
+    gets one more chance via a date embedded in its URL (_parse_published),
+    but is dropped like everything else if that also comes up empty. Caps
+    at 15.
+
+    Raises when every SearXNG query in this call failed (a real outage) so
+    _client_news_scan can distinguish "SearXNG is down" from "no news found";
+    a partial failure (some queries ok) is not treated as an error.
+    """
+    from routers.agents import _ascii_name
+
+    name = client["name"]
+    ascii_name = _ascii_name(name)
+    meta = client.get("metadata") or {}
+    industry = (meta.get("industry") or "").strip()
+    domain = _client_domain(client)
+    simple_name, _acronym = _simplify_company_name(name)
+
+    queries: list[tuple[str, str, str]] = [(f'"{ascii_name}"', "news", "month")]
+    if industry:
+        queries.append((f'"{ascii_name}" {industry}', "news", "month"))
+    if domain:
+        queries.append((f"site:{domain}", "general", "month"))
+
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    today = datetime.now(timezone.utc).date()
+    attempted = 0
+    failed = 0
+
+    async def _collect(query: str, categories: str, time_range: str) -> None:
+        nonlocal attempted, failed
+        attempted += 1
+        try:
+            results = await _searxng_results(
+                query, limit=15, categories=categories, time_range=time_range,
+            )
+        except Exception:
+            failed += 1
+            return
+        for r in results:
+            url = (r.get("url") or "").strip()
+            allowed, _host = _news_result_allowed(url)
+            if not allowed:
+                continue
+            norm = _norm_news_url(url)
+            if not norm or norm in seen:
+                continue
+            published = _parse_published(r)
+            if not published:
+                continue
+            try:
+                if (today - date.fromisoformat(published)).days > 90:
+                    continue
+            except ValueError:
+                continue
+            seen.add(norm)
+            candidates.append({**r, "_norm_url": norm, "_published": published, "query": query})
+
+    for q, cat, tr in queries:
+        await _collect(q, cat, tr)
+
+    if len(candidates) < 3:
+        await _collect(f'"{simple_name}" news', "general", "month")
+
+    if attempted and failed == attempted:
+        raise ConnectionError("searxng unreachable")
+
+    return candidates[:15]
+
+
+def _news_listing(candidates: list[dict]) -> str:
+    return "\n".join(
+        f"{i}. {(c.get('title') or '')[:120]} — {(c.get('content') or '')[:200]} "
+        f"(url: {c.get('url', '')})"
+        for i, c in enumerate(candidates)
+    )
+
+
+def _write_news_signal_content(why: str, published: Optional[str], url: str) -> str:
+    return f"{why}\n\nPublished: {published or 'unknown'}\nSource: {url}\n\n## Sources\n- {url}"
+
+
+async def _client_news_scan(
+    org_id: int, client: dict, *, run_id: Optional[int] = None, max_write: int = 8,
+) -> dict:
+    """Score fresh news candidates for one client with a single text LLM call
+    and write the relevant ones as client-linked type='signal' documents.
+
+    Flow: candidates minus already-known signal URLs → one llm.acomplete call
+    → keep relevance ≥2 → index_document + link_document for each (capped at
+    max_write). A SearXNG outage is retried once after 20s before giving up;
+    an LLM failure writes nothing. Returns
+    {found, scored, written, max_relevance, error}."""
+    name = client["name"]
+    client_id = client["id"]
+    result: dict = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0, "error": None}
+
+    candidates: Optional[list[dict]] = None
+    last_exc: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            candidates = await _news_candidates(org_id, client)
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 0:
+                await asyncio.sleep(20)
+    if candidates is None:
+        console.print(f"[yellow]news scan: SearXNG unreachable for '{name}': {last_exc}[/yellow]")
+        result["error"] = "searxng unreachable"
+        return result
+
+    existing = await _existing_signal_urls(org_id, client_id)
+    fresh = [c for c in candidates if c["_norm_url"] not in existing]
+    result["found"] = len(fresh)
+    if not fresh:
+        return result
+
+    prompt = _NEWS_SCORE_PROMPT.format(
+        subject=name, n=len(fresh), listing=_news_listing(fresh), rules="",
+    )
+    try:
+        reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
+    except Exception as exc:
+        console.print(f"[yellow]news scan: LLM scoring failed for '{name}': {exc}[/yellow]")
+        result["error"] = f"llm scoring failed: {exc}"
+        return result
+
+    scores = _parse_json_list(reply)
+    result["scored"] = len(scores)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    good_queries: set[str] = set()
+    written = 0
+    max_rel = 0
+    for item in scores:
+        if written >= max_write or not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("i"))
+            relevance = int(item.get("relevance"))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= idx < len(fresh)) or relevance < 2:
+            continue
+        cand = fresh[idx]
+        norm = cand["_norm_url"]
+        url = cand.get("url", "")
+        headline = str(item.get("headline") or cand.get("title") or "")[:90]
+        why = str(item.get("why") or "")[:160]
+        signal_type = str(item.get("signal_type") or "news").strip().lower()
+        if signal_type not in ("opportunity", "risk", "pain_point", "news"):
+            signal_type = "news"
+        published = cand.get("_published")
+        doc_id = f"news-{client_id}-{hashlib.sha1(norm.encode()).hexdigest()[:10]}"
+        doc_db_id = await db_module.index_document(
+            org_id=org_id,
+            doc_id=doc_id,
+            doc_type="signal",
+            title=headline,
+            content=_write_news_signal_content(why, published, url),
+            metadata={
+                "source_url": url,
+                "published_at": published,
+                "signal_type": signal_type,
+                "relevance_score": relevance,
+                "subject": name,
+                "from_news_scan": True,
+                "query": cand.get("query", ""),
+                "service": "python",
+            },
+            embedding=[],
+            source="agent",
+            agent_run_id=run_id,
+        )
+        if doc_db_id and doc_db_id > 0:
+            await db_module.link_document(doc_db_id, "client", client_id)
+            written += 1
+            max_rel = max(max_rel, relevance)
+            if cand.get("query"):
+                good_queries.add(cand["query"])
+
+    result["written"] = written
+    result["max_relevance"] = max_rel
+
+    if written:
+        try:
+            import playbook  # type: ignore
+        except ImportError:
+            playbook = None
+        if playbook is not None:
+            domain = _client_domain(client)
+            if domain:
+                try:
+                    await playbook.record(
+                        org_id, domain,
+                        {"news": {"good_queries": sorted(good_queries), "last_success_at": now_iso}},
+                        run_id=run_id,
+                    )
+                except Exception as exc:
+                    console.print(f"[yellow]news scan: playbook record failed for '{name}': {exc}[/yellow]")
+
+    return result
+
+
 def _discovery_marker_stale(meta: dict) -> bool:
     """True when source discovery should (re)run for a source-less client.
 
@@ -1393,7 +1705,7 @@ async def _monitor_client(org_id: int, client: dict, fire_research: bool = True)
     meta = client.get("metadata") or {}
     summary: dict = {
         "client": client["name"], "changed": [], "discovered": 0,
-        "researched": False, "escalated": False, "flagged": False,
+        "researched": False, "escalated": False, "flagged": False, "news_written": 0,
     }
 
     sources = list(meta.get("monitored_sources") or [])
@@ -1402,10 +1714,18 @@ async def _monitor_client(org_id: int, client: dict, fire_research: bool = True)
         summary["discovered"] = len(sources)
 
     # Virtual "news search" source — only counts as a change when a baseline
-    # fingerprint already existed (first sweep sets baselines, no storm).
+    # fingerprint already existed (first sweep sets baselines, no storm). A
+    # change here runs the (cheap, no-Pi-slot) news scan for every client —
+    # focus or not — before the focus/autonomy logic below decides whether to
+    # also fire the heavier Pi news-OSINT research.
     had_news_fp = meta.get("news_fp") is not None
     if await _client_news_changed(org_id, client, fail_open=False) and had_news_fp:
         summary["changed"].append("news search")
+        try:
+            news_scan = await _client_news_scan(org_id, client)
+            summary["news_written"] = news_scan.get("written", 0)
+        except Exception as exc:
+            console.print(f"[yellow]source monitor: news scan failed for '{client['name']}': {exc}[/yellow]")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     for src in sources:
@@ -1593,17 +1913,141 @@ async def _apply_market_signals(org_id: int) -> int:
     return written
 
 
+async def _market_news_scan(
+    org_id: int, industry: str, focus: str, *, run_id: Optional[int] = None,
+) -> dict:
+    """Score fresh market/industry news with a single text LLM call and write
+    the relevant ones as unlinked type='signal' documents (scope='market',
+    NOT client-linked — _apply_market_signals maps them onto clients
+    afterwards). Dedupes against scope='market' signals already written in
+    the last 30 days. `industry` drives the search terms when set; for a
+    source-change-triggered scan (no specific industry) `focus`'s free-text
+    description is used instead. Returns
+    {found, scored, written, max_relevance, error}."""
+    result: dict = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0, "error": None}
+    term = (industry or focus or "market").strip()
+    queries = [
+        (f"{term} regulation OR compliance OR Regulierung", "news", "week"),
+        (f"{term} market news Branche", "news", "week"),
+    ]
+
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for q, cat, tr in queries:
+        try:
+            results = await _searxng_results(q, limit=15, categories=cat, time_range=tr)
+        except Exception as exc:
+            console.print(f"[yellow]market news scan: SearXNG failed for '{term}': {exc}[/yellow]")
+            continue
+        for r in results:
+            url = (r.get("url") or "").strip()
+            allowed, _host = _news_result_allowed(url)
+            if not allowed:
+                continue
+            norm = _norm_news_url(url)
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            candidates.append({**r, "_norm_url": norm, "_published": _parse_published(r), "query": q})
+
+    if not candidates:
+        return result
+
+    try:
+        existing_rows = await db_module.list_signals(org_id, scope="market", days=30, limit=200)
+    except Exception:
+        existing_rows = []
+    existing: set[str] = set()
+    for row in existing_rows:
+        meta = row.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        url = meta.get("source_url")
+        if url:
+            existing.add(_norm_news_url(url))
+
+    fresh = [c for c in candidates if c["_norm_url"] not in existing]
+    result["found"] = len(fresh)
+    if not fresh:
+        return result
+
+    prompt = _NEWS_SCORE_PROMPT.format(
+        subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh), rules="",
+    )
+    try:
+        reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
+    except Exception as exc:
+        console.print(f"[yellow]market news scan: LLM scoring failed for '{term}': {exc}[/yellow]")
+        result["error"] = f"llm scoring failed: {exc}"
+        return result
+
+    scores = _parse_json_list(reply)
+    result["scored"] = len(scores)
+
+    written = 0
+    max_rel = 0
+    for item in scores:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("i"))
+            relevance = int(item.get("relevance"))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= idx < len(fresh)) or relevance < 2:
+            continue
+        cand = fresh[idx]
+        norm = cand["_norm_url"]
+        url = cand.get("url", "")
+        headline = str(item.get("headline") or cand.get("title") or "")[:90]
+        why = str(item.get("why") or "")[:160]
+        signal_type = str(item.get("signal_type") or "news").strip().lower()
+        if signal_type not in ("opportunity", "risk", "pain_point", "news"):
+            signal_type = "news"
+        published = cand.get("_published")
+        doc_id = f"market-news-{hashlib.sha1(norm.encode()).hexdigest()[:10]}"
+        doc_db_id = await db_module.index_document(
+            org_id=org_id,
+            doc_id=doc_id,
+            doc_type="signal",
+            title=headline,
+            content=_write_news_signal_content(why, published, url),
+            metadata={
+                "scope": "market",
+                "industry": industry,
+                "relevance_score": relevance,
+                "source_url": url,
+                "published_at": published,
+                "signal_type": signal_type,
+                "from_news_scan": True,
+                "service": "python",
+            },
+            embedding=[],
+            source="agent",
+            agent_run_id=run_id,
+        )
+        if doc_db_id and doc_db_id > 0:
+            written += 1
+            max_rel = max(max_rel, relevance)
+
+    result["written"] = written
+    result["max_relevance"] = max_rel
+    return result
+
+
 async def _run_market_monitor(org_id: int) -> dict:
     """Market/industry news monitor — the org-level analogue of source_monitor.
 
-    Fingerprints curated economics/news pages; when one changes, fires a Pi
-    market_news run on the general news. Also rotates through the distinct
-    industries of the org's clients, scanning a few per run. Pi writes
-    scope='market' signals tagged by industry; the apply-to-clients mapping
-    (industry shortlist + LLM confirm) runs afterwards via _apply_market_signals.
+    Fingerprints curated economics/news pages; when one changes, runs a
+    Python/textonly market news scan on the general news. Also rotates
+    through the distinct industries of the org's clients, scanning a few per
+    run. _market_news_scan writes scope='market' signals tagged by industry;
+    the apply-to-clients mapping (industry shortlist + LLM confirm) runs
+    afterwards via _apply_market_signals.
     """
-    from routers.agents import _fire_agent_service, _watch_agent_service_run
-
     cfg = await db_module.get_market_config(org_id)
     sources = list(cfg.get("sources") or [])
     if not sources and not cfg.get("seeded"):
@@ -1632,35 +2076,27 @@ async def _run_market_monitor(org_id: int) -> dict:
     max_ind = int(context.config.get("market_max_industries_per_run", 2))
     picked = sorted(industries, key=lambda i: scans.get(i, ""))[:max_ind]
 
-    # "" = the choke point decides (org subscription, else config default)
-    brain = ""
-    model = ""
     fired: list[dict] = []
 
-    async def _fire(focus: str, industry: str, subject: str) -> None:
-        task = _MARKET_NEWS_TASK.format(focus=focus)
+    async def _fire(focus: str, industry: str) -> None:
         child = await db_module.create_agent_run(
-            org_id=org_id, agent_type="market_news", task=task, trigger_type="heartbeat",
+            org_id=org_id, agent_type="market_news",
+            task=f"Market news scan: {focus}", trigger_type="heartbeat",
         )
         try:
-            svc_url, svc_run = await _fire_agent_service(
-                subject, org_id, brain=brain, model=model, task=task, agent_type="market_news",
-            )
-            await db_module.update_agent_run(child, "running", output={"service_run_id": svc_run})
-            await _watch_agent_service_run(child, svc_url, svc_run, subject=subject)
-            fired.append({"focus": focus, "industry": industry, "run_id": child})
+            scan = await _market_news_scan(org_id, industry, focus, run_id=child)
+            status = "failed" if scan.get("error") else "done"
+            await db_module.update_agent_run(child, status, output=scan, error=scan.get("error"))
+            fired.append({"focus": focus, "industry": industry, "run_id": child, **scan})
         except Exception as exc:
             await db_module.update_agent_run(child, "failed", error=str(exc))
             fired.append({"focus": focus, "industry": industry, "run_id": child, "error": str(exc)})
 
     for src in changed:
         label = src.get("label") or src.get("url")
-        await _fire(
-            f"general business and economics news (triggered by an update on {label})",
-            "", f"market: {label}",
-        )
+        await _fire(f"general business and economics news (triggered by an update on {label})", "")
     for industry in picked:
-        await _fire(f"the {industry} sector", industry, f"market: {industry}")
+        await _fire(f"the {industry} sector", industry)
         scans[industry] = now_iso
 
     cfg["sources"] = sources

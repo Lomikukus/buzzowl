@@ -200,12 +200,16 @@ class TestFetchSourceFp:
 # ---------------------------------------------------------------------------
 
 class TestMonitorClient:
-    def _common_patches(self, news_changed=False, fp="newfp"):
+    def _common_patches(self, news_changed=False, fp="newfp", news_scan_written=0):
         return [
             patch.object(pipeline, "_client_news_changed", AsyncMock(return_value=news_changed)),
             patch.object(pipeline, "_fetch_source_fp", AsyncMock(return_value=fp)),
             patch.object(pipeline, "_fire_news_research", AsyncMock(return_value=42)),
             patch.object(pipeline, "_maybe_escalate_match", AsyncMock(return_value=False)),
+            patch.object(pipeline, "_client_news_scan", AsyncMock(return_value={
+                "found": 0, "scored": 0, "written": news_scan_written,
+                "max_relevance": 0, "error": None,
+            })),
         ]
 
     @pytest.mark.asyncio
@@ -214,7 +218,7 @@ class TestMonitorClient:
         client = _client(monitored_sources=[{"url": "https://a/news"}], sources_discovered_at="x")
         with db_patch, _patch_config():
             ps = self._common_patches()
-            with ps[0], ps[1], ps[2] as fire, ps[3]:
+            with ps[0], ps[1], ps[2] as fire, ps[3], ps[4]:
                 summary = await pipeline._monitor_client(1, client)
         assert summary["changed"] == []
         fire.assert_not_awaited()
@@ -228,7 +232,7 @@ class TestMonitorClient:
                          monitored_sources=[{"url": "https://a/news", "label": "Newsroom", "last_fp": "old"}])
         with db_patch, _patch_config():
             ps = self._common_patches()
-            with ps[0], ps[1], ps[2] as fire, ps[3] as esc:
+            with ps[0], ps[1], ps[2] as fire, ps[3] as esc, ps[4]:
                 summary = await pipeline._monitor_client(1, client)
         assert summary["changed"] == ["Newsroom"]
         assert summary["researched"] is True
@@ -244,7 +248,7 @@ class TestMonitorClient:
                          monitored_sources=[{"url": "https://a/news", "label": "Newsroom", "last_fp": "old"}])
         with db_patch, _patch_config():
             ps = self._common_patches()
-            with ps[0], ps[1], ps[2] as fire, ps[3]:
+            with ps[0], ps[1], ps[2] as fire, ps[3], ps[4]:
                 summary = await pipeline._monitor_client(1, client)
         assert summary["flagged"] is True
         fire.assert_not_awaited()
@@ -259,17 +263,20 @@ class TestMonitorClient:
         client = _client(sources_discovered_at="x")
         with db_patch, _patch_config():
             ps = self._common_patches(news_changed=True)
-            with ps[0], ps[1], ps[2], ps[3]:
+            with ps[0], ps[1], ps[2], ps[3], ps[4] as scan:
                 summary = await pipeline._monitor_client(1, client)
         assert summary["changed"] == []
+        scan.assert_not_awaited()   # no baseline → not a change → no news scan either
 
         client2 = _client(sources_discovered_at="x", news_fp="had-one")
         db_patch2, _ = _patch_db()
         with db_patch2, _patch_config():
-            ps = self._common_patches(news_changed=True)
-            with ps[0], ps[1], ps[2], ps[3]:
+            ps = self._common_patches(news_changed=True, news_scan_written=3)
+            with ps[0], ps[1], ps[2], ps[3], ps[4] as scan2:
                 summary2 = await pipeline._monitor_client(1, client2)
         assert "news search" in summary2["changed"]
+        scan2.assert_awaited_once_with(1, client2)
+        assert summary2["news_written"] == 3
 
 
 # ---------------------------------------------------------------------------
