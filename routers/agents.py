@@ -781,7 +781,7 @@ async def agent_service_callback(body: dict, request: Request):
     # agent_runs.tool_calls gets compacted by retention after 14 days.
     if agent_type in ("research", "osint", "pain_point_research") and db_run_id and org_id:
         try:
-            asyncio.create_task(playbook.reflect_on_run(org_id, db_run_id))
+            asyncio.create_task(playbook.reflect_on_run(org_id, db_run_id, subject=subject))
         except Exception:
             logger.warning("playbook.reflect_on_run scheduling failed for run=%s", db_run_id, exc_info=True)
 

@@ -496,10 +496,12 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
 
 
 def _infer_domain(tool_calls: list) -> str:
-    """Best-effort: the most-fetched non-aggregator host across this run's
-    fetch_page calls is the site the run actually navigated. More reliable
-    than parsing the task string, whose wording varies by agent_type/template
-    and isn't guaranteed to carry the client's domain at all."""
+    """Fallback ONLY — the most-fetched non-aggregator host across this run's
+    fetch_page calls, used when the run's own subject does not resolve to an
+    exact client with a website (see reflect_on_run/_resolve_reflection_domain).
+    Never used to override a subject match: a run can spend most of its
+    fetches on a competitor, a parent company, or a news site about the
+    client without any of that making the client's own domain wrong."""
     from collections import Counter
 
     try:
@@ -562,16 +564,83 @@ async def _llm_navigation_notes(org_id: int, domain: str, tool_calls: list) -> l
     return [str(n).strip() for n in notes if str(n).strip()][:_MAX_NAV_NOTES]
 
 
-async def reflect_on_run(org_id: int, db_run_id: int) -> None:
+async def _domain_belongs_to_a_client(org_id: int, host: str) -> bool:
+    """True when `host` equals or is a subdomain of some client's website
+    domain in this org. Guards the `_infer_domain` fallback in
+    _resolve_reflection_domain: an inferred host must never land a playbook
+    patch (and, via _mirror_summary, a `site_playbook_summary`) on a domain
+    that actually belongs to a DIFFERENT client than the one the run was
+    about — the exact cross-client leak resolve_client_exact exists to
+    prevent, re-entered here on the write side."""
+    if not host or db_module is None:
+        return False
+    try:
+        clients = await db_module.list_clients(org_id)
+    except Exception:
+        logger.debug("playbook._domain_belongs_to_a_client: list_clients failed", exc_info=True)
+        return False
+    for c in clients or []:
+        d = domain_of(c)
+        if d and (host == d or host.endswith("." + d)):
+            return True
+    return False
+
+
+async def _resolve_reflection_domain(org_id: int, subject: Optional[str], tool_calls: list) -> str:
+    """Primary: resolve_client_exact(org_id, subject) -> domain_of(client).
+    This is authoritative and is NEVER overridden by what the run actually
+    fetched — a run can spend most of its fetches on a competitor, a parent
+    company's site, or a news article about the client without that making
+    the client's own domain wrong. `_infer_domain` (most-fetched
+    non-aggregator host) is used ONLY as a fallback when the subject doesn't
+    resolve to a client with a website (e.g. the monitor agent's "org"
+    placeholder subject), and even then an inferred host that collides with
+    some OTHER client's domain is rejected rather than risking misattribution.
+    Returns "" when no domain can be determined either way."""
+    if subject:
+        client = await resolve_client_exact(org_id, subject)
+        if client:
+            domain = domain_of(client)
+            if domain:
+                return domain
+
+    inferred = _infer_domain(tool_calls)
+    if not inferred:
+        return ""
+    if await _domain_belongs_to_a_client(org_id, inferred):
+        logger.info(
+            "playbook.reflect_on_run: inferred domain=%s collides with another client's "
+            "domain in org=%s — rejecting to avoid cross-client contamination",
+            inferred, org_id,
+        )
+        return ""
+    return inferred
+
+
+async def reflect_on_run(org_id: int, db_run_id: int, *, subject: Optional[str] = None) -> None:
     """Callback-time reflection for a finished research/osint/pain_point_research
     run (called on both 'done' and 'failed' — a run that got 403'd everywhere
     still teaches useful blocked_urls). Idempotent via output.reflected, since
     both the callback and the watcher backstop may schedule this for the same
     run. Runs at callback time, not later, because agent_runs.tool_calls gets
     compacted by retention after 14 days.
+
+    `subject` is the run's own subject string (agents.py's callback and
+    _fire_agent_service both carry it) and drives domain attribution — see
+    _resolve_reflection_domain for the resolution order and the anti-leak
+    guard. This whole function is one try/except at the call site below so a
+    malformed run row (bad JSON, unexpected shape) logs instead of raising
+    into an `asyncio.create_task()` whose exception nothing ever retrieves.
     """
     if db_module is None:
         return
+    try:
+        await _reflect_on_run_body(org_id, db_run_id, subject)
+    except Exception:
+        logger.exception("playbook.reflect_on_run: unhandled error for run=%s org=%s", db_run_id, org_id)
+
+
+async def _reflect_on_run_body(org_id: int, db_run_id: int, subject: Optional[str]) -> None:
     try:
         run = await db_module.get_agent_run(db_run_id, org_id)
     except Exception:
@@ -596,28 +665,47 @@ async def reflect_on_run(org_id: int, db_run_id: int) -> None:
         except Exception:
             tool_calls = []
 
-    domain = _infer_domain(tool_calls)
-    if domain:
-        classified = classify_tool_calls(tool_calls, domain)
-        patch = {
-            "blocked_urls": classified["blocked_urls"],
-            "good_queries": classified["good_queries"],
-            "failed_queries": classified["failed_queries"],
-            "needs_js": classified["needs_js"],
-        }
-        if len(tool_calls) >= _REFLECT_LLM_MIN_TOOL_CALLS:
-            try:
-                notes = await _llm_navigation_notes(org_id, domain, tool_calls)
-                if notes:
-                    patch["notes"] = notes
-            except Exception:
-                logger.debug("playbook.reflect_on_run: navigation-notes LLM call failed for run=%s",
-                             db_run_id, exc_info=True)
-        try:
-            await record(org_id, domain, patch, run_id=db_run_id)
-        except Exception:
-            logger.exception("playbook.reflect_on_run: record failed for domain=%s", domain)
+    if not tool_calls:
+        # Nothing was fetched (or the log is genuinely empty) — leave
+        # `reflected` unset rather than stamping it: a later attempt (e.g.
+        # once the watcher backstop fills in tool_calls) can still run.
+        logger.info("playbook.reflect_on_run: run=%s has no tool calls — nothing to reflect", db_run_id)
+        return
 
+    domain = await _resolve_reflection_domain(org_id, subject, tool_calls)
+    if not domain:
+        # Blocker fix: an undeterminable domain must NOT stamp `reflected`
+        # either — this run's evidence isn't lost, it just waits for a later
+        # attempt (e.g. once the client's website gets configured).
+        logger.info(
+            "playbook.reflect_on_run: no determinable domain for run=%s (subject=%r) — leaving unreflected",
+            db_run_id, subject,
+        )
+        return
+
+    classified = classify_tool_calls(tool_calls, domain)
+    patch = {
+        "blocked_urls": classified["blocked_urls"],
+        "good_queries": classified["good_queries"],
+        "failed_queries": classified["failed_queries"],
+        "needs_js": classified["needs_js"],
+    }
+    if len(tool_calls) >= _REFLECT_LLM_MIN_TOOL_CALLS:
+        try:
+            notes = await _llm_navigation_notes(org_id, domain, tool_calls)
+            if notes:
+                patch["notes"] = notes
+        except Exception:
+            logger.debug("playbook.reflect_on_run: navigation-notes LLM call failed for run=%s",
+                         db_run_id, exc_info=True)
+    try:
+        await record(org_id, domain, patch, run_id=db_run_id)
+    except Exception:
+        logger.exception("playbook.reflect_on_run: record failed for domain=%s", domain)
+
+    # Tool calls were present and a domain was resolved (with or without a
+    # successful record() above) — stamp reflected now so a retry doesn't
+    # re-run the LLM notes call for the same run.
     try:
         await db_module.update_agent_run(
             db_run_id, run.get("status") or "done",

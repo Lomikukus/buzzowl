@@ -237,6 +237,134 @@ async def test_reflect_on_run_first_pass_classifies_and_stamps_reflected():
     assert ua_kwargs["output"]["reflected"] is True
 
 
+async def test_reflect_on_run_majority_third_party_writes_to_client_domain():
+    # WP4 review blocker: a run whose fetches are mostly non-aggregator
+    # third-party sites (e.g. news coverage of the client) must still write
+    # the playbook to the CLIENT's own resolved domain — never to whichever
+    # host happened to get fetched most.
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://heise.de/a"}, "result": "content", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://heise.de/b"}, "result": "content", "ts": "t1"},
+        {"tool": "fetch_page", "args": {"url": "https://faz.net/c"}, "result": "content", "ts": "t2"},
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/careers"}, "result": "Roles: SRE", "ts": "t3"},
+    ]
+    db = MagicMock()
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 10, "org_id": 1, "status": "done", "output": {}, "tool_calls": tool_calls,
+    })
+    db.get_client = AsyncMock(return_value={
+        "id": 1, "name": "Acme GmbH", "metadata": {"website": "https://www.acme.com"},
+    })
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock(return_value={})
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock):
+        await playbook.reflect_on_run(1, 10, subject="Acme GmbH")
+
+    record_mock.assert_awaited_once()
+    call_args, _ = record_mock.await_args
+    assert call_args[1] == "acme.com"  # the CLIENT's domain, not heise.de (the majority host)
+    db.get_client.assert_awaited_once()
+
+
+async def test_reflect_on_run_inferred_domain_colliding_with_other_client_rejected():
+    # The run's subject doesn't resolve to an exact client, and the
+    # most-fetched host happens to be a DIFFERENT client's own domain (e.g. a
+    # parent/subsidiary pair). Must be rejected outright, never misattributed
+    # onto that other client's playbook (and, via _mirror_summary, its
+    # site_playbook_summary).
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://lidl.de/a"}, "result": "content", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://lidl.de/b"}, "result": "content", "ts": "t1"},
+    ]
+    db = MagicMock()
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 11, "org_id": 1, "status": "done", "output": {}, "tool_calls": tool_calls,
+    })
+    db.get_client = AsyncMock(return_value=None)  # subject does not resolve exactly
+    db.list_clients = AsyncMock(return_value=[
+        {"id": 2, "name": "Lidl Stiftung", "metadata": {"website": "https://www.lidl.de"}},
+    ])
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock(return_value={})
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock):
+        await playbook.reflect_on_run(1, 11, subject="Schwarz IT")
+
+    record_mock.assert_not_called()
+    db.update_agent_run.assert_not_called()  # no determinable domain -> `reflected` left unset
+
+
+async def test_reflect_on_run_no_fetch_run_records_nothing_and_leaves_unreflected():
+    db = MagicMock()
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 12, "org_id": 1, "status": "done", "output": {}, "tool_calls": [],
+    })
+    db.get_client = AsyncMock(return_value={
+        "id": 1, "name": "Acme GmbH", "metadata": {"website": "https://www.acme.com"},
+    })
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock()
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock):
+        await playbook.reflect_on_run(1, 12, subject="Acme GmbH")
+    record_mock.assert_not_called()
+    db.update_agent_run.assert_not_called()
+
+
+async def test_reflect_on_run_failed_status_still_records():
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/a"}, "result": "Error: HTTP 403", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/b"}, "result": "Error: HTTP 403", "ts": "t1"},
+    ]
+    db = MagicMock()
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 13, "org_id": 1, "status": "failed", "output": {}, "tool_calls": tool_calls,
+    })
+    db.get_client = AsyncMock(return_value={
+        "id": 1, "name": "Acme GmbH", "metadata": {"website": "https://www.acme.com"},
+    })
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock(return_value={})
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock):
+        await playbook.reflect_on_run(1, 13, subject="Acme GmbH")
+
+    record_mock.assert_awaited_once()
+    db.update_agent_run.assert_awaited_once()
+    ua_args, ua_kwargs = db.update_agent_run.await_args
+    assert ua_args == (13, "failed")
+    assert ua_kwargs["output"]["reflected"] is True
+
+
+async def test_reflect_on_run_llm_threshold_seven_no_call_eight_exactly_one():
+    def _fixture(n):
+        return [
+            {"tool": "fetch_page", "args": {"url": f"https://acme.com/{i}"}, "result": "content", "ts": f"t{i}"}
+            for i in range(n)
+        ]
+
+    db = MagicMock()
+    db.get_client = AsyncMock(return_value={
+        "id": 1, "name": "Acme GmbH", "metadata": {"website": "https://www.acme.com"},
+    })
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock(return_value={})
+    llm_mock = AsyncMock(return_value="[]")
+
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 20, "org_id": 1, "status": "done", "output": {}, "tool_calls": _fixture(7),
+    })
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock), \
+         patch.object(playbook.llm, "acomplete", llm_mock):
+        await playbook.reflect_on_run(1, 20, subject="Acme GmbH")
+    llm_mock.assert_not_called()
+
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 21, "org_id": 1, "status": "done", "output": {}, "tool_calls": _fixture(8),
+    })
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock), \
+         patch.object(playbook.llm, "acomplete", llm_mock):
+        await playbook.reflect_on_run(1, 21, subject="Acme GmbH")
+    llm_mock.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # resolve_client_exact / enrich_task
 # ---------------------------------------------------------------------------
