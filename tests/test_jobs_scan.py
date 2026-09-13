@@ -103,6 +103,47 @@ class TestFilterPositions:
         assert titles.count("Engineer") == 1
         assert len(out) == 20
 
+    def test_it_mgmt_overbroad_words_no_longer_override_junior_drop(self):
+        """Nit: 'system'/'digital'/'projekt' are too generic to serve as an
+        IT/management override — they kept genuinely junior titles."""
+        titles = [
+            "Ausbildung Fachkraft für Systemgastronomie",
+            "Ausbildung Mediengestalter Digital und Print",
+            "Trainee Projektmanagement",
+        ]
+        for title in titles:
+            assert pipeline._filter_positions([{"title": title}]) == [], title
+
+    def test_german_junior_inflections_dropped(self):
+        """Nit: 'Studentische'/'Bachelorand' etc. are junior inflections the
+        original _JUNIOR_TITLE_RE (bare 'student'/'bachelor') missed."""
+        titles = ["Studentische Hilfskraft Buchhaltung", "Bachelorand Maschinenbau"]
+        for title in titles:
+            assert pipeline._filter_positions([{"title": title}]) == [], title
+
+
+# ---------------------------------------------------------------------------
+# _ats_match — label-anchored, not a bare substring
+# ---------------------------------------------------------------------------
+
+class TestAtsHostAnchoring:
+    def test_jobs_evil_com_is_not_an_ats_host(self):
+        """BLOCKER 2 nit: 'jobs.' matched anywhere in the host as a bare
+        substring, so an attacker's own 'jobs.evil.com' subdomain qualified."""
+        assert pipeline._ats_match("jobs.evil.com") is False
+        assert pipeline._ats_match("personio.evil.com") is False
+
+    def test_legitimate_multi_tld_ats_hosts_still_match(self):
+        """Guard against over-correcting: most _ATS_HOSTS entries (personio,
+        workday, smartrecruiters, recruitee, ...) are bare labels with no
+        fixed TLD because those vendors operate under several (personio.de,
+        personio.com, ...); anchoring must still recognise those, not just
+        the handful of entries that already carry a full domain."""
+        for host in ("company.personio.de", "company.personio.com",
+                     "company.workday.com", "jobs.smartrecruiters.com",
+                     "company.recruitee.com", "boards.greenhouse.io"):
+            assert pipeline._ats_match(host) is True, host
+
 
 # ---------------------------------------------------------------------------
 # _careers_candidates / _discover_careers_url
@@ -165,6 +206,40 @@ class TestCareersDiscovery:
             url, tier = await pipeline._discover_careers_url(1, client)
         assert tier == "sitemap"
         assert url == "https://acme.com/jobs/"
+
+    @pytest.mark.asyncio
+    async def test_owndomain_homepage_and_sitemap_hit_never_calls_searxng(self):
+        """BLOCKER 1: a homepage careers link AND a sitemap hit must short-circuit
+        before the SearXNG loop is even entered — not merely go unused once
+        fetched. Measured regression: this exact combination still produced
+        three SearXNG calls before the fix."""
+        client = _client(website="https://acme.com")
+        html = '<html><body><a href="https://acme.com/karriere">Karriere</a></body></html>'
+        searx = AsyncMock()
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", html))), \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("Backend Engineer",
+                                                     "https://acme.com/jobs/backend-engineer-1")])), \
+             patch.object(pipeline, "_searxng_results", searx):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert candidates
+        assert all(c["tier"] != "searxng" for c in candidates)
+        searx.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_lone_offdomain_candidate_rejected_not_returned_unchecked(self):
+        """BLOCKER 2: the len(candidates) == 1 short-circuit must be
+        constrained too — an off-domain lone SearXNG hit (e.g. a job-board
+        listing, not the client's own careers page) must not be handed back
+        unchecked, since it would then persist in clients.metadata.careers_url
+        forever."""
+        client = _client(website="https://acme.com")
+        with patch.object(pipeline, "_careers_candidates",
+                           AsyncMock(return_value=[{"url": "https://www.stepstone.de/jobs/acme",
+                                                     "tier": "searxng",
+                                                     "title": "Acme jobs on Stepstone"}])):
+            url, tier = await pipeline._discover_careers_url(1, client)
+        assert (url, tier) == ("", "")
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +385,22 @@ class TestFailureStamping:
         _, kwargs = db.index_document.await_args
         assert kwargs["metadata"]["positions"] == []
         assert kwargs["metadata"]["attempts"] == 1
+
+    @pytest.mark.asyncio
+    async def test_failure_placeholder_is_linked_to_client(self):
+        """BLOCKER 3: _run_jobs_monitor's rotation query orders by
+        MAX(d.updated_at) over documents JOIN document_links (entity_type=
+        'client') — an unlinked placeholder is invisible to it, so a
+        never-successful client would keep heading the retry queue every run."""
+        db_patch, db = _patch_db()
+        db.get_document = AsyncMock(return_value=None)
+        db.index_document = AsyncMock(return_value=42)
+        client = _client(website="https://acme.com")
+        with db_patch, \
+             patch.object(pipeline, "_discover_careers_url", AsyncMock(return_value=("", ""))):
+            summary = await pipeline._scan_client_jobs(1, client)
+        assert summary["found"] is False
+        db.link_document.assert_awaited_once_with(42, "client", client["id"])
 
     @pytest.mark.asyncio
     async def test_no_positions_after_fetch_also_stamps_not_overwrites(self):
