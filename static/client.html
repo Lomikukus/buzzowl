@@ -37,6 +37,17 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 .badge-prospect { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); }
 .badge-inactive { background: var(--c-line, #2a2a2a); color: var(--c-muted2, #666); }
 
+/* Intake collection strip (WP5) — per-part chips + a brief-gate chip, shown
+   while a client's osint/research/jobs/news collection is in flight. */
+.intake-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.intake-chip { font-size: 0.68rem; padding: 0.15rem 0.55rem; border-radius: 10px; background: var(--c-line, #2a2a2a); color: var(--c-muted, #888); border: 1px solid var(--c-line3, #3a3a3a); white-space: nowrap; }
+.intake-chip.running { background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); border-color: var(--c-blue, #569cd6); }
+.intake-chip.done, .intake-chip.written, .intake-chip.refreshed { background: var(--c-postint, #1a3a2a); color: var(--c-accent, #4ec9b0); border-color: var(--c-accent, #4ec9b0); }
+.intake-chip.failed { background: var(--c-orangetint, #2e2a1a); color: var(--c-red, #f14c4c); border-color: var(--c-red, #f14c4c); }
+.intake-chip.partial, .intake-chip.writing, .intake-chip.waiting { background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); border-color: var(--c-orange, #ce9178); }
+.intake-chip-brief { font-weight: 600; }
+.brief-partial-badge { display: inline-block; margin-top: 0.3rem; font-size: 0.66rem; padding: 0.1rem 0.5rem; border-radius: 8px; background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); border: 1px solid var(--c-orange, #ce9178); }
+
 .contact-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--c-line, #2a2a2a); }
 .contact-row:last-child { border-bottom: none; }
 .contact-avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--c-bluetint, #1a2e4a); color: var(--c-blue, #569cd6); font-size: 0.65rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -385,6 +396,20 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 
       <!-- Overview -->
       <div class="tab-panel active" id="tab-overview">
+        <!-- Live intake-collection status (WP5): osint/research/jobs/news chips
+             + the brief gate. Deliberately OUTSIDE the sections
+             updateOverviewEmptyState() hides — a brand-new client shows the
+             "Nothing researched yet" welcome AND this strip at the same time,
+             since intake is exactly what's running in the background then. -->
+        <div id="intakeStrip" style="display:none;margin-bottom:1rem">
+          <div class="intake-chips">
+            <span class="intake-chip" id="intakeChip-osint">○ OSINT</span>
+            <span class="intake-chip" id="intakeChip-research">○ Research</span>
+            <span class="intake-chip" id="intakeChip-jobs">○ Jobs</span>
+            <span class="intake-chip" id="intakeChip-news">○ News</span>
+            <span class="intake-chip intake-chip-brief" id="intakeChip-brief">Brief: waiting</span>
+          </div>
+        </div>
         <!-- Shown only while this client has nothing at all — see
              updateOverviewEmptyState(). Replaces the jobs + brief sections
              (and the sidebar's "no sources" line) with a single welcome. -->
@@ -433,6 +458,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
             <div>
               <h2 style="font-size:0.9rem;color:var(--c-text, #d4d4d4);margin-bottom:0.15rem">Account Intelligence Brief</h2>
               <div class="brief-meta" id="briefMeta">No brief generated yet</div>
+              <div class="brief-partial-badge" id="briefPartialBadge" style="display:none"></div>
             </div>
             <div style="display:flex;gap:0.5rem">
               <button class="btn" id="briefPdfBtn" style="display:none" onclick="downloadBriefPdf()"
@@ -860,7 +886,12 @@ async function runResearchNow(btn) {
     const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/trigger-research`, {
         method: 'POST', headers: authHeaders(),
     });
-    if (r.ok) { btn.textContent = 'Research queued ✓'; setTimeout(loadClient, 1500); }
+    if (r.ok) {
+        btn.textContent = 'Research queued ✓';
+        setTimeout(loadClient, 1500);
+        loadIntake();
+        startIntakePolling();
+    }
     else { btn.disabled = false; btn.textContent = 'Run research'; }
 }
 
@@ -1108,6 +1139,95 @@ async function loadSignals() {
     }).join('');
 }
 
+// ── Intake collection strip (WP5) ────────────────────────────────────────
+// Waits for osint+research+jobs+news before the brief is written; polls
+// while active and refreshes the sections a finished part feeds.
+let _intakePollTimer = null;
+let _intakePartStatus = {};
+let _intakeActive = false;
+const INTAKE_PARTS = ['osint', 'research', 'jobs', 'news'];
+const INTAKE_LABELS = { osint: 'OSINT', research: 'Research', jobs: 'Jobs', news: 'News' };
+const INTAKE_SYMBOLS = { queued: '○', running: '⟳', done: '✓', failed: '✗' };
+
+function renderIntake(data) {
+    _intakeActive = !!(data && data.active);
+    const strip = document.getElementById('intakeStrip');
+    if (!strip) return;
+    if (!data || !data.trigger) { strip.style.display = 'none'; return; }
+    strip.style.display = '';
+
+    const parts = data.parts || {};
+    for (const p of INTAKE_PARTS) {
+        const el = document.getElementById(`intakeChip-${p}`);
+        if (!el) continue;
+        const st = parts[p] || { status: 'queued' };
+        el.className = `intake-chip ${st.status || 'queued'}`;
+        el.textContent = `${INTAKE_SYMBOLS[st.status] || '○'} ${INTAKE_LABELS[p]}`;
+        el.title = st.error ? `${INTAKE_LABELS[p]}: ${st.error}` : INTAKE_LABELS[p];
+    }
+
+    const briefEl = document.getElementById('intakeChip-brief');
+    if (briefEl) {
+        const b = data.brief || {};
+        let text = 'Brief: waiting';
+        if (b.status === 'waiting' && data.deadline_at) {
+            const d = new Date(data.deadline_at);
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            text = `Brief: waiting · deadline ${hh}:${mm}`;
+        } else if (b.status === 'partial') {
+            text = `Brief: partial — missing: ${(b.missing || []).join(', ')}`;
+        } else if (b.status === 'writing') {
+            text = 'Brief: writing…';
+        } else if (b.status === 'written') {
+            text = 'Brief: written';
+        } else if (b.status === 'refreshed') {
+            text = 'Brief: refreshed';
+        } else if (b.status === 'failed') {
+            text = 'Brief: failed';
+        }
+        briefEl.className = `intake-chip intake-chip-brief ${b.status || 'waiting'}`;
+        briefEl.textContent = text;
+    }
+}
+
+async function loadIntake() {
+    try {
+        const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/intake`, { headers: authHeaders() });
+        if (!r.ok) return null;
+        const data = await r.json();
+        renderIntake(data);
+        return data;
+    } catch (e) { return null; }
+}
+
+function startIntakePolling() {
+    if (_intakePollTimer) return;
+    _intakePollTimer = setInterval(async () => {
+        const data = await loadIntake();
+        if (!data) return;
+        const parts = data.parts || {};
+        let partChanged = false;
+        for (const p of INTAKE_PARTS) {
+            const status = (parts[p] || {}).status;
+            if (status && status !== _intakePartStatus[p]) {
+                _intakePartStatus[p] = status;
+                if (status === 'done' || status === 'failed') partChanged = true;
+            }
+        }
+        const briefStatus = (data.brief || {}).status;
+        if (partChanged || ['written', 'refreshed'].includes(briefStatus)) {
+            loadJobs(); loadSignals(); loadBrief(); loadMatchSummary();
+        }
+        const stillRunning = Object.values(parts).some(p => p.status === 'queued' || p.status === 'running');
+        const briefTerminal = ['written', 'refreshed', 'failed'].includes(briefStatus);
+        if (briefTerminal && !stillRunning) {
+            clearInterval(_intakePollTimer);
+            _intakePollTimer = null;
+        }
+    }, 5000);
+}
+
 // ── Brief ─────────────────────────────────────────────────────────────────
 async function loadBrief() {
     const r = await fetch(`/api/clients/${encodeURIComponent(clientName)}/brief`, { headers: authHeaders() });
@@ -1117,7 +1237,15 @@ async function loadBrief() {
         showBrief(data.brief, data.generated_at);
         document.getElementById('generateBtn').textContent = 'Regenerate Brief';
     } else {
-        document.getElementById('briefMeta').textContent = 'Brief will be generated automatically after research completes';
+        document.getElementById('briefMeta').textContent = _intakeActive
+            ? 'Brief will be generated when research, jobs and news are in'
+            : 'Brief will be generated automatically after research completes';
+    }
+    const badge = document.getElementById('briefPartialBadge');
+    if (badge) {
+        const missing = data.partial || [];
+        badge.style.display = missing.length ? '' : 'none';
+        badge.textContent = missing.length ? `Partial — missing: ${missing.join(', ')}` : '';
     }
 }
 
@@ -1827,6 +1955,8 @@ function updateOverviewEmptyState() {
 async function init() {
     const ok = await checkAuth();
     if (!ok) return;
+    const intakeData = await loadIntake();
+    if (intakeData && intakeData.active) startIntakePolling();
     await Promise.all([loadClient(), loadContacts(), loadSignals(), loadBrief(), loadLatestResearch(), loadMatchSummary(), loadJobs()]);
     _overviewReady = true;
     updateOverviewEmptyState();
