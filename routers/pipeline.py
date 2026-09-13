@@ -2193,6 +2193,26 @@ _JOBS_EXTRACT_PROMPT = (
 )
 
 
+async def _jobs_lessons_block(org_id: int) -> str:
+    """Approved cross-site lessons (scope='jobs', WP4) formatted for inline
+    injection into a jobs prompt — appended verbatim after the prompt is
+    otherwise fully formatted, never as a new format() placeholder. '' when
+    playbook isn't available, org_id is falsy, or there are no approved
+    jobs/all-scope lessons; callers append/format this and never rely on it
+    being non-empty."""
+    if not org_id:
+        return ""
+    try:
+        import playbook  # type: ignore
+    except ImportError:
+        return ""
+    try:
+        lessons = await playbook.lessons_load(org_id)
+        return playbook.lessons_block(lessons, "jobs")
+    except Exception:
+        return ""
+
+
 # Job-LISTING link terms only (the landing page is already "career/karriere" — we
 # want the link through to the actual openings). Deliberately excludes bare
 # "position" (matches "politische-positionen"), "career"/"karriere" and "search".
@@ -2413,6 +2433,9 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
         f"(e.g. Personio, Greenhouse, SuccessFactors, Workday). Reply with ONLY the single best URL, "
         f"or 'none' if none qualify.\n\n{listing}"
     )
+    lessons_block = await _jobs_lessons_block(org_id)
+    if lessons_block:
+        prompt = f"{prompt}\n\n{lessons_block}"
     try:
         reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
         m = re.search(r"https?://\S+", reply)
@@ -2453,6 +2476,9 @@ async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None,
     if len(text) < min_len:
         return [], []
     prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000])
+    lessons_block = await _jobs_lessons_block(org_id)
+    if lessons_block:
+        prompt = f"{prompt}\n\n{lessons_block}"
     try:
         # Subscription bridge is text-only: acomplete (never a tool-using
         # chat/agent loop) — it warms the org overlay itself.
