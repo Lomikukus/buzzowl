@@ -401,7 +401,24 @@ All agent types run on Pi (TypeScript, port 8001). `_get_service_url()` in `rout
 
 Hermes was retired in Phase 29 after benchmarks showed Pi producing 12,506–22,544 chars vs Hermes 869 chars across all task types (research, osint, monitor, product_research, product_deep_research, pain_point_research, match_monitor). See `data/benchmarks/phase28-osint-benchmark-findings.md`.
 
-When adding a new agent type: add a prompt to `PROMPTS` in `agent_service_ts/src/agent.ts`, add the type to `AGENT_TOOL_ALLOWLIST`, and add any needed tools. No routing config changes required.
+When adding a new agent type: add a prompt to `PROMPTS` in `agent_service_ts/src/agent.ts`, add the type to `AGENT_TOOL_ALLOWLIST`, and add any needed tools. No routing config changes required. Exception: `jobs_scan`, `news_scan` and `market_news` run entirely inside the FastAPI process (one `llm.acomplete` call each) and never reach Pi at all, precisely because they don't need a tool-calling loop.
+
+### Client intake
+
+Pi runs at most `AGENT_MAX_CONCURRENT` (default 2) agent loops at once; everything past that sits FIFO-queued in `agent-pi`'s own process, not in the database. That queue is why a brand-new client's four research parts (`osint`, `research` on Pi; `jobs`, `news` in Python) are treated as one collection point instead of four independent writers: `intake.py` holds their combined state at `clients.metadata.intake` and generates the account brief exactly once, when the collection closes, rather than once per part finishing. One brief per client keeps the synthesis prompt reading a stable, complete set of findings instead of firing (and re-firing, and confusing the reader) on every part's own callback.
+
+The 25-minute collection deadline does not start at client creation; it starts the first time a Pi-backed part is reported `running`, i.e. once it has actually cleared the 2-slot FIFO. Starting the clock earlier would let a burst of new clients queue behind each other and then all get a bogus partial brief before their research had even begun. A 90-minute absolute cap (from creation) forces a finish regardless, so a part that never leaves `queued` cannot hold a client open forever. Because callbacks over HTTP can be lost (a container restart, a dropped connection), an APScheduler job (`intake_sweeper`, every 60s) is the rescue: it reconciles any part whose `agent_runs` row already finished without an incoming callback, and enforces the deadline/cap/one-time-refresh rules on its own.
+
+| `intake.brief.status` | Meaning |
+|---|---|
+| `waiting` | collecting, brief not yet started |
+| `writing` | one caller (CAS-selected) is generating it now |
+| `partial` | deadline or cap passed with parts still open; refreshes once |
+| `written` | every part reached `done`/`failed` |
+| `refreshed` | a partial brief was regenerated after more parts finished |
+| `failed` | 3 generation attempts failed |
+
+See `docs/agents.md` for the field-level state shape and the API surface.
 
 ---
 
