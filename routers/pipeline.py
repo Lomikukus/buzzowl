@@ -1116,12 +1116,13 @@ async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> lis
     """
     if not website:
         return []
+    base = website if website.startswith("http") else f"https://{website}"
     html = ""
     try:
         async with httpx.AsyncClient(
             timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
         ) as http:
-            resp = await http.get(website)
+            resp = await http.get(base)
             if resp.status_code == 200:
                 html = resp.text or ""
     except Exception:
@@ -1136,7 +1137,7 @@ async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> lis
         haystack = f"{href} {text}".lower()
         if not any(k in haystack for k in keys):
             continue
-        url = urljoin(website, href)
+        url = urljoin(base, href)
         host = _result_domain(url)
         if not own_domain or not (host == own_domain or host.endswith("." + own_domain)):
             continue
