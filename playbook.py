@@ -564,14 +564,20 @@ async def _llm_navigation_notes(org_id: int, domain: str, tool_calls: list) -> l
     return [str(n).strip() for n in notes if str(n).strip()][:_MAX_NAV_NOTES]
 
 
-async def _domain_belongs_to_a_client(org_id: int, host: str) -> bool:
-    """True when `host` equals or is a subdomain of some client's website
-    domain in this org. Guards the `_infer_domain` fallback in
+async def _domain_belongs_to_a_client(org_id: int, host: str, *, exclude_name: Optional[str] = None) -> bool:
+    """True when `host` equals or is a subdomain of some OTHER client's
+    website domain in this org. Guards the `_infer_domain` fallback in
     _resolve_reflection_domain: an inferred host must never land a playbook
     patch (and, via _mirror_summary, a `site_playbook_summary`) on a domain
     that actually belongs to a DIFFERENT client than the one the run was
     about — the exact cross-client leak resolve_client_exact exists to
-    prevent, re-entered here on the write side."""
+    prevent, re-entered here on the write side.
+
+    `exclude_name` is the run's own subject: the client whose stored `name`
+    equals it (case-insensitively) is skipped, so a run whose subject only
+    fuzzy-matches (resolve_client_exact returned None, e.g. "Schwarz IT GmbH"
+    vs. the stored "Schwarz IT") doesn't get its OWN domain rejected as
+    belonging to "another" client."""
     if not host or db_module is None:
         return False
     try:
@@ -579,7 +585,10 @@ async def _domain_belongs_to_a_client(org_id: int, host: str) -> bool:
     except Exception:
         logger.debug("playbook._domain_belongs_to_a_client: list_clients failed", exc_info=True)
         return False
+    exclude = (exclude_name or "").strip().lower()
     for c in clients or []:
+        if exclude and (c.get("name") or "").strip().lower() == exclude:
+            continue
         d = domain_of(c)
         if d and (host == d or host.endswith("." + d)):
             return True
@@ -607,7 +616,7 @@ async def _resolve_reflection_domain(org_id: int, subject: Optional[str], tool_c
     inferred = _infer_domain(tool_calls)
     if not inferred:
         return ""
-    if await _domain_belongs_to_a_client(org_id, inferred):
+    if await _domain_belongs_to_a_client(org_id, inferred, exclude_name=subject):
         logger.info(
             "playbook.reflect_on_run: inferred domain=%s collides with another client's "
             "domain in org=%s — rejecting to avoid cross-client contamination",

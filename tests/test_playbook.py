@@ -293,6 +293,35 @@ async def test_reflect_on_run_inferred_domain_colliding_with_other_client_reject
     db.update_agent_run.assert_not_called()  # no determinable domain -> `reflected` left unset
 
 
+async def test_reflect_on_run_self_domain_not_rejected_as_another_clients():
+    # WP4 re-review nit 1: subject "Schwarz IT" doesn't resolve via
+    # resolve_client_exact (here: the fuzzy DB lookup itself finds nothing),
+    # so the fallback infers the domain from the run's own fetches — which
+    # happens to be exactly the SAME client's own domain (matched by name in
+    # list_clients). It must not be rejected as "belonging to another
+    # client" just because resolve_client_exact's DB round-trip failed.
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://it.schwarz/a"}, "result": "content", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://it.schwarz/b"}, "result": "content", "ts": "t1"},
+    ]
+    db = MagicMock()
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 31, "org_id": 1, "status": "done", "output": {}, "tool_calls": tool_calls,
+    })
+    db.get_client = AsyncMock(return_value=None)  # fuzzy lookup found nothing
+    db.list_clients = AsyncMock(return_value=[
+        {"id": 3, "name": "Schwarz IT", "metadata": {"website": "https://www.it.schwarz"}},
+    ])
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock(return_value={})
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock):
+        await playbook.reflect_on_run(1, 31, subject="Schwarz IT")
+
+    record_mock.assert_awaited_once()
+    call_args, _ = record_mock.await_args
+    assert call_args[1] == "it.schwarz"
+
+
 async def test_reflect_on_run_no_fetch_run_records_nothing_and_leaves_unreflected():
     db = MagicMock()
     db.get_agent_run = AsyncMock(return_value={
