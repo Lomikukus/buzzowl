@@ -1411,7 +1411,7 @@ def _norm_news_url(url: str) -> str:
     normalized = f"{host}{path}"
     if kept:
         normalized += f"?{urlencode(kept)}"
-    return normalized.lower()
+    return normalized
 
 
 def _parse_published(r: dict) -> Optional[str]:
