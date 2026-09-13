@@ -599,13 +599,6 @@ class TestIntakeAPI:
         assert mock_start.called
         assert mock_start.call_args.kwargs.get("trigger") == "create"
 
-    @pytest.mark.xfail(
-        reason="Pre-existing bug on main (routers/internal.py:68): cache_clear(org_id) runs "
-               "before org_id is assigned, so this handler always 500s today. WP0 fixes the "
-               "ordering on its own branch; WP5's ownership explicitly excludes those lines "
-               "('leave those lines alone'). Once WP0 merges this test should pass unmodified.",
-        strict=False,
-    )
     def test_internal_create_client_starts_intake_and_discovers_sources(self, app_client):
         with (
             patch("routers.internal.DB_AVAILABLE", True),
