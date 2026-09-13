@@ -8,6 +8,8 @@ Note on patch targets:
     to control routing behaviour without touching the real config file.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -178,3 +180,78 @@ class TestMatchProductCatalog:
         out = _format_match_product_catalog(focus_products)
         assert "watsonx" not in out.lower()
         assert "NorthStar CRM" in out and "Insight Analytics" in out
+
+
+# ---------------------------------------------------------------------------
+# TestPainPointCallbackMatchContext — WP3: news signals + jobs needs feed the
+# match_synthesis task alongside the existing pain-point findings.
+# ---------------------------------------------------------------------------
+
+class TestPainPointCallbackMatchContext:
+    def _pool_mock(self, findings, signal_rows, jobs_findings, jrow=None):
+        conn = MagicMock()
+        conn.fetch = AsyncMock(side_effect=[findings, signal_rows, jobs_findings])
+        conn.fetchrow = AsyncMock(return_value=jrow)
+        acquire_cm = MagicMock()
+        acquire_cm.__aenter__ = AsyncMock(return_value=conn)
+        acquire_cm.__aexit__ = AsyncMock(return_value=False)
+        pool = MagicMock()
+        pool.acquire = MagicMock(return_value=acquire_cm)
+        return pool
+
+    def _patch_httpx_post(self, run_id=555):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"run_id": run_id}
+        client = MagicMock()
+        client.post = AsyncMock(return_value=resp)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return patch("routers.agents.httpx.AsyncClient", return_value=ctx), client
+
+    @pytest.mark.asyncio
+    async def test_match_context_includes_signals_and_jobs_needs(self):
+        from routers import agents as agents_mod
+
+        findings = [{"content": "Acme announced a cloud expansion.",
+                     "source_url": "https://example.com/acme-expansion"}]
+        signal_rows = [{
+            "content": "Acme signed a new data-protection regulation deal.",
+            "metadata": {
+                "signal_type": "opportunity", "published_at": "2026-08-01",
+                "relevance_score": 4, "source_url": "https://news.example/acme-deal",
+            },
+            "created_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+        }]
+        jobs_findings: list = []
+        jrow = {"metadata": {
+            "inferred_needs": ["cloud migration"],
+            "positions": [{"title": "Cloud Engineer", "team": "IT"}],
+            "careers_url": "https://acme.com/careers",
+        }}
+
+        pool = self._pool_mock(findings, signal_rows, jobs_findings, jrow=jrow)
+        httpx_patch, client = self._patch_httpx_post()
+
+        with patch.object(agents_mod, "db_module") as db, \
+             patch.object(agents_mod, "config", {}), \
+             patch.object(agents_mod, "_fetch_match_products",
+                          AsyncMock(return_value=[{"name": "Test Product"}])), \
+             patch.object(agents_mod, "resolve_run_target",
+                          AsyncMock(return_value=("openrouter", "openrouter", "test-model"))), \
+             patch.object(agents_mod, "_watch_agent_service_run", AsyncMock()), \
+             httpx_patch:
+            db._pool = pool
+            db.create_agent_run = AsyncMock(return_value=999)
+            db.update_agent_run = AsyncMock()
+
+            await agents_mod._handle_pain_point_callback(
+                org_id=1, svc_run_id=1, client_name="Acme", pi_brain="", pi_model="",
+            )
+
+        client.post.assert_awaited_once()
+        task_text = client.post.await_args.kwargs["json"]["task"]
+        assert "RECENT NEWS SIGNALS" in task_text
+        assert "acme-deal" in task_text
+        assert "Likely needs: cloud migration" in task_text
