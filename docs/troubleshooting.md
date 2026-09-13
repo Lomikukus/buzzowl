@@ -65,6 +65,40 @@ Common ones:
 5. Autonomy level 0 means agents observe but never act on their own — Settings →
    Agent Autonomy.
 
+## Brief shows "partial", with missing parts listed
+
+The account brief was written before every intake part (osint, research,
+jobs, news) finished: the 25-minute collection deadline (`intake_deadline_min`)
+or the 90-minute absolute cap (`intake_absolute_cap_min`) passed first. This
+is not an error. It refreshes automatically, once, the next time the missing
+part(s) actually land. `GET /api/clients/{name}/intake` shows which part is
+still open and why.
+
+To skip the wait, regenerate now:
+
+```bash
+curl -s -X POST http://localhost:8000/api/clients/Acme/brief \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+This manual endpoint is unaffected by intake state and always runs immediately.
+
+## No careers page found
+
+The jobs scan tried, in order, the client's site playbook, `metadata.careers_url`,
+a homepage link crawl, a sitemap probe, and SearXNG as a last resort, and none
+of those returned a page on the client's own domain or a known ATS host. Set
+the URL by hand and re-scan:
+
+```bash
+curl -s -X PATCH http://localhost:8000/api/internal/clients/Acme \
+  -H "Authorization: Bearer $AGENT_SERVICE_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"org_id": 1, "patch": {"careers_url": "https://acme.example/careers"}}'
+
+curl -s -X POST http://localhost:8000/api/clients/Acme/jobs/scan \
+  -H "Authorization: Bearer $TOKEN"
+```
+
 ## LLM problems
 
 ```bash
