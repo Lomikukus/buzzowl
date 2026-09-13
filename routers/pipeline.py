@@ -1612,7 +1612,9 @@ async def _client_news_scan(
     written = 0
     max_rel = 0
     for item in scores:
-        if written >= max_write or not isinstance(item, dict):
+        if written >= max_write:
+            break
+        if not isinstance(item, dict):
             continue
         try:
             idx = int(item.get("i"))
