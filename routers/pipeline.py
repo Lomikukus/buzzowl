@@ -1579,30 +1579,36 @@ _JOB_LINK_KEYS = ("/jobs", "jobs/", "=jobs", "stellenangebote", "stellenanzeigen
                   "all-jobs", "/stellen", "/job/", "joblisting")
 
 # Applicant-tracking-system hosts — a link to one is almost always the real listing.
+# Deliberately excludes a bare "jobs." entry: see _ats_match's docstring.
 _ATS_HOSTS = ("personio.", "greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.",
               "successfactors.", "smartrecruiters.", "softgarden.", "join.com", "recruitee.",
               "jobvite.", "icims.com", "taleo.net", "concludis.", "prescreen.", "d-vinci.",
-              "rexx-systems.", "guidecom.", "umantis.", "jobs.")
+              "rexx-systems.", "guidecom.", "umantis.")
 
 
 def _ats_match(host: str) -> bool:
     """True when `host` IS one of _ATS_HOSTS (label-anchored) or a subdomain of
-    one — never merely a substring. A bare `a in host` check (the previous
-    implementation) accepted "jobs.evil.com" for the "jobs." entry, since that
-    string appears literally in the attacker's own host.
+    one — never merely a substring.
 
     _ATS_HOSTS has two shapes: a full domain ("greenhouse.io", "lever.co",
     "myworkdayjobs.com", "join.com", "icims.com", "taleo.net") — anchored the
     obvious way, host == a or host.endswith("." + a); and a bare label with a
-    trailing dot ("personio.", "workday.", "smartrecruiters.", "jobs.", ...)
-    for vendors that operate under several TLDs (personio.de, personio.com, ...),
+    trailing dot ("personio.", "workday.", "smartrecruiters.", ...) for
+    vendors that operate under several TLDs (personio.de, personio.com, ...),
     where stripping the dot and applying the same suffix check would require
     the label to be the WHOLE remaining host (never true once a TLD follows)
-    and silently stop matching every one of these 14 entries. Anchor those on
+    and silently stop matching every one of these 13 entries. Anchor those on
     the label instead: it must be the second-from-last DNS label — i.e. the
     one immediately before the TLD — so "xyz.personio.de" matches (personio is
-    second-to-last) but "jobs.evil.com" and "personio.evil.com" do not (evil
-    is second-to-last, not the vendor label)."""
+    second-to-last) but "personio.evil.com" does not (evil is second-to-last,
+    not the vendor label).
+
+    There is deliberately no "jobs." entry: "jobs" is a generic subdomain
+    word, not a vendor name, so anchoring it the same way would accept
+    jobs.<anything>.<tld> wholesale — a client's own jobs.<domain> (already
+    covered by _own_or_ats's own-domain arm, e.g. jobs.apleona.com is
+    own-domain for apleona.com) as well as an attacker's jobs.evil.com or an
+    unrelated jobs.de/jobs.com."""
     labels = host.split(".") if host else []
     for a in _ATS_HOSTS:
         if a.endswith("."):
@@ -2125,10 +2131,11 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     filtered_out = 0
     needs_js = False
 
-    # (1) Sitemap of actual postings — the JS-free ground truth. A JS/ATS careers
-    # page only exposes category filters to a fetch, but its sitemap lists every
-    # real opening (e.g. jobs.apleona.com → /offer/<slug>/<uuid>). A single hit
-    # is trusted (lowered from 3): the sitemap can't lie about what's posted.
+    # (1) Sitemap of actual postings — the JS-free ground truth. A JS-heavy careers
+    # page (own-domain or ATS-hosted) only exposes category filters to a fetch, but
+    # its sitemap lists every real opening (e.g. jobs.apleona.com — apleona's own
+    # domain, not an ATS host — → /offer/<slug>/<uuid>). A single hit is trusted
+    # (lowered from 3): the sitemap can't lie about what's posted.
     # Reuse the crawl _careers_candidates already did during discovery instead
     # of hitting the same sitemap a second time when the host matches.
     sitemap_cache = client.pop("_sitemap_cache", None)
