@@ -450,17 +450,12 @@ async def test_no_llm_call_drops_the_org_context():
 async def test_no_bare_brain_call_outside_knowledge():
     """_call_brain_sync is a synchronous, cache-only read — it skips the
     ensure_org_overlay warm-up that llm.acomplete does itself, which is how
-    routers/internal.py's create_client and the pipeline's careers/needs/
-    market-signal/jobs-extract calls used to fire on a cold overlay (WP0 bug
-    sweep). routers/knowledge.py owns the helper (its definition plus its own
-    in-file uses); everywhere new must go through llm.acomplete(...,
-    org_id=...) instead.
-
-    A few older call sites outside this sweep's pipeline (routers/
-    evaluation.py, routers/today.py, routers/products.py) still use the bare
-    helper — same bug class, but out of scope for WP0. Allowlisted by exact
-    line so this test still catches every new bare call and shrinks as each
-    one is migrated."""
+    routers/internal.py's create_client, the pipeline's careers/needs/
+    market-signal/jobs-extract calls, and mail/broadcast/NBA-reason calls in
+    evaluation.py/today.py/products.py used to fire on a cold overlay.
+    routers/knowledge.py owns the helper (its definition plus its own
+    in-file uses); everywhere else must go through
+    llm.acomplete(..., org_id=...) instead."""
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parent.parent
@@ -469,15 +464,14 @@ async def test_no_bare_brain_call_outside_knowledge():
         p = root / extra
         if p.exists():
             paths.append(p)
-    pre_existing = {
-        "evaluation.py:627", "today.py:637", "products.py:892", "products.py:1063",
-    }
     offenders = []
     for path in paths:
         if path.name == "knowledge.py":
             continue
         for i, line in enumerate(path.read_text().splitlines(), 1):
-            if "_call_brain_sync(" in line and f"{path.name}:{i}" not in pre_existing:
+            if line.lstrip().startswith("#"):
+                continue
+            if "_call_brain_sync(" in line:
                 offenders.append(f"{path.name}:{i}")
     assert not offenders, (
         "these call _call_brain_sync directly instead of llm.acomplete, "

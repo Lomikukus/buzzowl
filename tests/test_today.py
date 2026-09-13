@@ -291,7 +291,7 @@ class TestComputeQueue:
         reasons = json.dumps([{"client": "ACME", "reason": "R1"},
                               {"client": "Beta", "reason": "R2"}])
         with (patch.object(today, "db_module", db),
-              patch("routers.knowledge._call_brain_sync", return_value=reasons) as llm):
+              patch.object(today.llm, "acomplete", new_callable=AsyncMock, return_value=reasons) as llm):
             snapshot = await today.compute_nba_queue(1)
         assert llm.call_count == 1
         assert snapshot["llm_used"] is True
@@ -302,7 +302,7 @@ class TestComputeQueue:
     async def test_llm_failure_falls_back_to_templates(self):
         db = _mock_db([_client("ACME", None)])
         with (patch.object(today, "db_module", db),
-              patch("routers.knowledge._call_brain_sync", side_effect=RuntimeError("down"))):
+              patch.object(today.llm, "acomplete", new_callable=AsyncMock, side_effect=RuntimeError("down"))):
             snapshot = await today.compute_nba_queue(1)
         assert snapshot["llm_used"] is False
         assert snapshot["queue"][0]["reason_source"] == "template"
@@ -312,7 +312,7 @@ class TestComputeQueue:
     async def test_snapshot_persisted_as_nba_queue_doc(self):
         db = _mock_db([_client("ACME", None)])
         with (patch.object(today, "db_module", db),
-              patch("routers.knowledge._call_brain_sync", return_value="[]")):
+              patch.object(today.llm, "acomplete", new_callable=AsyncMock, return_value="[]")):
             await today.compute_nba_queue(1)
         kwargs = db.index_document.await_args.kwargs
         assert kwargs["doc_type"] == "nba_queue"
@@ -325,7 +325,7 @@ class TestComputeQueue:
         db = _mock_db([_client("ACME", None), _client("Beta", None)])
         reasons = json.dumps([{"client": "ACME", "reason": "Only one"}])
         with (patch.object(today, "db_module", db),
-              patch("routers.knowledge._call_brain_sync", return_value=reasons)):
+              patch.object(today.llm, "acomplete", new_callable=AsyncMock, return_value=reasons)):
             snapshot = await today.compute_nba_queue(1)
         by_name = {e["client"]: e for e in snapshot["queue"]}
         assert by_name["ACME"]["reason_source"] == "llm"
