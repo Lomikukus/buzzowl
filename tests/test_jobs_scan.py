@@ -694,6 +694,117 @@ class TestPathProbeBrowserFallbackContentChecks:
             assert call.kwargs.get("prefer_camofox") is True
 
 
+class TestPathProbeInPassShellDetection:
+    """WP8 re-check nit 1: _is_spa_shell is a no-op with no homepage
+    baseline (home_title_h1 is None) — exactly the Trumpf/DATEV 403/503
+    case the path-probe tier exists for. An SPA serving the identical shell
+    at every path must still be caught by comparing hits to EACH OTHER."""
+
+    @pytest.mark.asyncio
+    async def test_shell_with_no_homepage_baseline_yields_zero_candidates(self):
+        client = _client(website="https://acme.com")
+        shell_html = ("<html><head><title>Karriere</title></head><body>"
+                      + ("Portal wird geladen. " * 40) + "</body></html>")
+
+        def _resolver(url):
+            return _fake_response(200, shell_html, url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert candidates == []
+
+    @pytest.mark.asyncio
+    async def test_shell_plus_one_distinct_real_page_keeps_only_the_distinct_one(self):
+        client = _client(website="https://acme.com")
+        shell_html = ("<html><head><title>Karriere</title></head><body>"
+                      + ("Portal wird geladen. " * 40) + "</body></html>")
+        real_html = ("<html><head><title>Offene Stellen bei Acme</title></head><body>"
+                     + ("Aktuelle Stellenangebote im Ueberblick. " * 40) + "</body></html>")
+        # The first 4 probe URLs (1 path + 3 interleaved subdomains, WP8
+        # review nit 2) all fire concurrently (semaphore=4) — put the shell
+        # on two of them and the distinct real page on a third so all three
+        # are evaluated before any early-stop can suppress a later one.
+        shell_urls = {"https://acme.com/karriere", "https://karriere.acme.com/"}
+        real_url = "https://jobs.acme.com/"
+
+        def _resolver(url):
+            if url in shell_urls:
+                return _fake_response(200, shell_html, url=url)
+            if url == real_url:
+                return _fake_response(200, real_html, url=url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert candidates == [{"url": real_url, "tier": "path-probe", "title": "Offene Stellen bei Acme"}]
+
+
+class TestBrowserFallbackConsentBanner:
+    """WP8 re-check nit 2: a cookie/consent banner rendered before the real
+    heading pushed the careers keyword past the (old) 300-char window."""
+
+    @pytest.mark.asyncio
+    async def test_cookie_banner_no_longer_hides_the_careers_heading(self):
+        client = _client(website="https://acme.com")
+
+        def _resolver(url):
+            return _fake_response(403, "", url=url)  # every plain GET is blocked
+
+        banner = ("Diese Website verwendet Cookies, um Ihnen die bestmoegliche Erfahrung zu "
+                  "bieten. Weitere Informationen finden Sie in unserer Datenschutzerklaerung "
+                  "und den Nutzungsbedingungen dieser Seite. Bitte treffen Sie eine Auswahl, um "
+                  "fortzufahren und die Inhalte dieser Webseite vollstaendig nutzen zu koennen. "
+                  "Alle akzeptieren")[:400]
+        rendered_text = banner + " Karriere bei Acme. " + ("Wir suchen Verstaerkung. " * 20)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_fetch_rendered_tier",
+                           AsyncMock(return_value=(rendered_text, "browser", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert len(candidates) >= 1
+
+    @pytest.mark.asyncio
+    async def test_long_banner_needs_stripping_not_just_a_wider_window(self):
+        """A banner whose own dismiss phrase lands within the first 600
+        chars (so stripping fires) but whose total length still pushes the
+        real heading past char 800 — a wider window alone would not be
+        enough; only stripping actually reaches "Karriere"."""
+        client = _client(website="https://acme.com")
+
+        def _resolver(url):
+            return _fake_response(403, "", url=url)
+
+        filler_before = ("Diese Website verwendet Technologien zur Analyse und Personalisierung. " * 20)[:500]
+        button = "Bitte waehlen Sie: Alle akzeptieren. "
+        filler_after = ("Weitere rechtliche Hinweise finden Sie unten auf dieser Seite. " * 20)[:320]
+        banner = filler_before + button + filler_after
+
+        # Sanity-check the fixture actually exercises "stripping is
+        # necessary", not just "the window is wide enough regardless".
+        assert len(banner) > pipeline._BROWSER_FALLBACK_HEADING_CHARS
+        match = pipeline._CONSENT_BANNER_RE.search(banner[:pipeline._CONSENT_BANNER_SEARCH_CHARS])
+        assert match is not None
+
+        rendered_text = banner + "Karriere bei Acme. " + ("Wir suchen Verstaerkung. " * 20)
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_fetch_rendered_tier",
+                           AsyncMock(return_value=(rendered_text, "browser", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert len(candidates) >= 1
+
+
 class TestPathProbeConcurrencyCap:
     @pytest.mark.asyncio
     async def test_never_accepts_more_than_two_hits_under_concurrency(self):

@@ -2626,6 +2626,25 @@ def _page_title_h1(html: str) -> tuple[str, str]:
     return title, h1
 
 
+_CONSENT_BANNER_RE = re.compile(r"akzeptieren|accept all|alle akzeptieren|cookie", re.IGNORECASE)
+_BROWSER_FALLBACK_HEADING_CHARS = 800
+_CONSENT_BANNER_SEARCH_CHARS = 600
+
+
+def _strip_leading_consent_banner(text: str) -> str:
+    """WP8 re-check nit 2: a cookie/consent banner rendered before the real
+    page content pushes the actual heading (and its careers keyword) out of
+    the browser-fallback keyword window. If akzeptieren|accept all|alle
+    akzeptieren|cookie appears within the first _CONSENT_BANNER_SEARCH_CHARS
+    chars, drop everything up to and including that match; otherwise return
+    `text` unchanged. Deliberately simple (first match only, no attempt to
+    detect the banner's actual end) — good enough for the common case of a
+    single leading banner naming its own dismiss action."""
+    window = text[:_CONSENT_BANNER_SEARCH_CHARS]
+    m = _CONSENT_BANNER_RE.search(window)
+    return text[m.end():] if m else text
+
+
 def _probe_hit_keyword(html: str) -> bool:
     """A careers keyword in the page's <title>/<h1> — NEVER the URL. Every
     probed path already contains a careers word by construction (/karriere,
@@ -2656,18 +2675,25 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list, http: ht
     """One GET at a candidate careers path/subdomain (D1), via the shared
     `http` client for this whole discovery pass (WP8 review nit: one
     AsyncClient reused across probes instead of one per probe). Returns
-    {"url", "status", "accepted", "blocked"} — `accepted` is a candidate dict
-    ({"url", "tier", "title"}) or None; `blocked` is a {"url","kind","at"}
-    dict when the own-domain probe came back 403/4xx/errored (D7
-    bookkeeping), else None. `hits` is a list shared across every concurrent
-    probe in this discovery pass — checked BEFORE the request (so a probe
-    already at the cap never starts) AND again right before appending (WP8
-    review nit 3: with 4-way concurrency, up to 4 requests can pass the
-    first check before any of them has appended, so the pre-request check
-    alone let 4 hits land instead of 2 — a still-in-flight request is left
-    to finish, but its result is discarded if the cap was reached first)."""
+    {"url", "status", "accepted", "blocked", "title_h1"} — `accepted` is a
+    candidate dict ({"url", "tier", "title"}) or None; `blocked` is a
+    {"url","kind","at"} dict when the own-domain probe came back
+    403/4xx/errored (D7 bookkeeping), else None; `title_h1` is the accepted
+    page's (title, h1) pair (or None) — used by _probe_careers_paths for
+    in-pass SPA-shell detection across every probe in this call, since a
+    single probe has no way to compare itself to its siblings.
+
+    `hits` is a list shared across every concurrent probe in this discovery
+    pass, checked only BEFORE the request starts (so a probe already at the
+    cap never fires one) — an already-in-flight request's result is always
+    kept (never discarded after the fact just because a sibling landed
+    first): _probe_careers_paths' shell-detection needs to see every
+    completed probe's (title, h1), not just the first _PATH_PROBE_
+    STOP_AFTER_HITS of them, or a genuinely distinct real page dispatched in
+    the same concurrent wave as two shell-page hits would be thrown away
+    before shell-detection ever got a chance to disqualify those two."""
     if len(hits) >= _PATH_PROBE_STOP_AFTER_HITS:
-        return {"url": url, "status": None, "accepted": None, "blocked": None}
+        return {"url": url, "status": None, "accepted": None, "blocked": None, "title_h1": None}
     status = None
     html = ""
     final_url = url
@@ -2682,19 +2708,17 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list, http: ht
         # D7 — a fetch that raised (timeout, connection refused, ...) is as
         # much an own-domain failure as an explicit 403/4xx.
         return {"url": url, "status": None, "accepted": None,
-                "blocked": {"url": url, "kind": "fetch_error", "at": now_iso}}
+                "blocked": {"url": url, "kind": "fetch_error", "at": now_iso}, "title_h1": None}
 
     final_host = urlparse(final_url).netloc.lower().replace("www.", "")
     if final_url != url and _ats_match(final_host):
         # A redirect to a known ATS host is a real careers link on its own —
         # no content/keyword check needed (the ATS page itself is the proof).
-        if len(hits) >= _PATH_PROBE_STOP_AFTER_HITS:
-            return {"url": url, "status": status, "accepted": None, "blocked": None}
         accepted = {"url": final_url, "tier": "path-probe", "title": ""}
         hits.append(accepted)
         console.print(f"[dim]jobs discovery: path-probe {url} redirected to ATS host {final_host} "
                        f"(tier=path-probe)[/dim]")
-        return {"url": url, "status": status, "accepted": accepted, "blocked": None}
+        return {"url": url, "status": status, "accepted": accepted, "blocked": None, "title_h1": None}
 
     blocked = None
     if status == 403:
@@ -2703,19 +2727,19 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list, http: ht
         blocked = {"url": url, "kind": "4xx", "at": now_iso}
 
     accepted = None
+    title_h1 = None
     if status == 200:
         text = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()
         if len(text) >= 500 and not _is_spa_shell(html, home_title_h1):
             job_links = _harvest_links(html, final_url, _JOB_LINK_KEYS, own_domain)
             if _probe_hit_keyword(html) or len(job_links) >= 3:
                 accepted = {"url": final_url, "tier": "path-probe", "title": _probe_title(html)}
-    if accepted and len(hits) < _PATH_PROBE_STOP_AFTER_HITS:
+                title_h1 = _page_title_h1(html)
+    if accepted:
         hits.append(accepted)
         console.print(f"[dim]jobs discovery: path-probe found a careers page at {final_url} "
                        f"(tier=path-probe)[/dim]")
-    elif accepted:
-        accepted = None  # cap reached while this request was in flight — drop it
-    return {"url": url, "status": status, "accepted": accepted, "blocked": blocked}
+    return {"url": url, "status": status, "accepted": accepted, "blocked": blocked, "title_h1": title_h1}
 
 
 _PATH_PROBE_BLOCKED_CAP = 5
@@ -2754,8 +2778,28 @@ async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional
 
         results = await asyncio.gather(*[_bounded(u) for u in urls])
 
-    accepted = [r["accepted"] for r in results if r["accepted"]]
+    accepted_results = [r for r in results if r["accepted"]]
     blocked = [r["blocked"] for r in results if r["blocked"]][:_PATH_PROBE_BLOCKED_CAP]
+
+    # WP8 re-check nit 1 — in-pass SPA-shell detection for when there's no
+    # homepage baseline to compare against (home_title_h1 is None/empty,
+    # e.g. Trumpf/DATEV's homepage 403/503s): _is_spa_shell inside
+    # _probe_careers_path is then a no-op, so an SPA serving an IDENTICAL
+    # shell at every path would otherwise sail through as up to
+    # _PATH_PROBE_STOP_AFTER_HITS "distinct" hits. Any (title, h1) pair
+    # shared by >=2 accepted hits IS the shell — drop every hit carrying it;
+    # a hit with a distinct pair (or no title/h1 at all, e.g. an ATS
+    # redirect) survives untouched.
+    pair_counts: dict = {}
+    for r in accepted_results:
+        pair = r.get("title_h1")
+        if pair and any(pair):
+            pair_counts[pair] = pair_counts.get(pair, 0) + 1
+    shell_pairs = {p for p, n in pair_counts.items() if n >= 2}
+    if shell_pairs:
+        accepted_results = [r for r in accepted_results if r.get("title_h1") not in shell_pairs]
+
+    accepted = [r["accepted"] for r in accepted_results][:_PATH_PROBE_STOP_AFTER_HITS]
 
     if len(accepted) < _PATH_PROBE_STOP_AFTER_HITS:
         retryable = [r for r in results if r["status"] in (403, 503) and not r["accepted"]]
@@ -2782,8 +2826,12 @@ async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional
             # the URL), and links_html, when Camofox produced it, replaces
             # the plain word-count heuristic for the >=3-job-links check.
             job_links = _harvest_links(links_html, r["url"], _JOB_LINK_KEYS, domain) if links_html else []
-            low = text.lower()
-            heading = low[:300]
+            # WP8 re-check nit 2: strip a leading cookie/consent banner
+            # before windowing — a banner rendered ahead of the real content
+            # otherwise pushes the actual heading (and its careers keyword)
+            # past a narrow window. Widened 300 -> 800 chars on top of that.
+            low = _strip_leading_consent_banner(text.lower())
+            heading = low[:_BROWSER_FALLBACK_HEADING_CHARS]
             job_word_hits = sum(1 for k in _JOB_LINK_KEYS if k in low)
             # An "Impressum und rechtliche Hinweise..." page has none of
             # these (WP8 review BLOCKER 2, measured: all probes 403, browser
