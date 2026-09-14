@@ -1005,6 +1005,36 @@ class TestRewriteBriefCloseOut:
         assert patch_arg["metadata"]["partial"] == []
         assert patch_arg["metadata"]["partial_at"] is None
 
+    async def test_preserves_generated_at_when_only_patching_the_banner(self):
+        """D23 — _rewrite_brief_close_out patches the banner/metadata only
+        (no LLM call, no new content); the brief's original
+        metadata.generated_at (stamped when the content itself was actually
+        generated) must survive untouched, not be dropped or reset to now."""
+        old_content = (
+            "> **Partial brief — missing: jobs (failed: no careers page found)**. "
+            "It refreshes automatically when the missing parts arrive.\n\n"
+            "## Executive Summary\nTRUMPF is a manufacturing-tech company."
+        )
+        row = {
+            "doc_id": "brief-abc123-2026-09-14",
+            "content": old_content,
+            "metadata": {"subject": "Trumpf", "partial": ["jobs (failed: no careers page found)"],
+                         "generated_at": "2026-09-14T01:56:16.123456+00:00"},
+        }
+        pool = _mock_pool(fetchrow_return=row)
+        update_mock = AsyncMock(return_value=None)
+
+        with (
+            patch("routers.knowledge.db_module._pool", pool),
+            patch("routers.knowledge.db_module.update_document", update_mock),
+        ):
+            await knowledge._rewrite_brief_close_out(
+                1, "Trumpf", failed_parts=["jobs (failed: no careers page found)"],
+            )
+
+        _, _, patch_arg = update_mock.call_args.args
+        assert patch_arg["metadata"]["generated_at"] == "2026-09-14T01:56:16.123456+00:00"
+
     async def test_uses_exact_case_insensitive_trimmed_match_not_like_wildcards(self):
         """WP10 D9 nit 2: this runs on a WRITE path — an ILIKE match would
         treat '_'/'%' in a client name as LIKE wildcards, risking a patch
@@ -1394,6 +1424,43 @@ class TestBriefThenMatch:
         mock_match.assert_awaited_once_with(1, "Bosch AG")
 
 
+class TestGetClientBriefGeneratedAt:
+    """D23 — GET /api/clients/{name}/brief must prefer metadata.generated_at
+    (stamped when the content was actually generated) over documents.
+    created_at, which index_document's upsert never updates on a same-day
+    doc_id reuse and would otherwise report a stale timestamp on a
+    freshly-regenerated brief."""
+
+    async def _get(self, row):
+        from routers.knowledge import get_client_brief
+
+        pool = _mock_pool(fetchrow_return=row)
+        client = {"id": 10, "name": "Vorwerk"}
+        with (
+            patch("routers.knowledge.DB_AVAILABLE", True),
+            patch("routers.knowledge.db_module.get_client", AsyncMock(return_value=client)),
+            patch("routers.knowledge.db_module._pool", pool),
+        ):
+            return await get_client_brief("Vorwerk", user=FAKE_USER)
+
+    async def test_prefers_metadata_generated_at_over_stale_created_at(self):
+        row = {
+            "id": 262, "content": "brief text",
+            "metadata": {"generated_at": "2026-09-14T08:31:45.123456+00:00"},
+            "created_at": "2026-09-14 01:56:16.000000+00:00",
+        }
+        data = await self._get(row)
+        assert data["generated_at"] == "2026-09-14 08:31:45"
+
+    async def test_falls_back_to_created_at_when_generated_at_absent(self):
+        """A document written before this fix shipped has no
+        metadata.generated_at — created_at is the only timestamp on file."""
+        row = {"id": 1, "content": "old brief", "metadata": {},
+               "created_at": "2026-09-01 10:00:00.000000+00:00"}
+        data = await self._get(row)
+        assert data["generated_at"] == "2026-09-01 10:00:00"
+
+
 # ---------------------------------------------------------------------------
 # Manual brief generation (POST /api/clients/{name}/brief) closes the intake
 # ---------------------------------------------------------------------------
@@ -1483,6 +1550,82 @@ class TestManualBriefClosesIntake:
         assert result["doc_id"] == 99
         intake_writes = [c for c in db.set_client_intake_path.call_args_list if c.args[2] == ["intake", "brief"]]
         assert intake_writes == []
+
+    async def test_manual_brief_with_failed_part_renders_not_collected_note(self):
+        """D23 — routers/knowledge.py's manual close-out path dropped the
+        "Not collected: …" note (WP10 D4) and metadata.generated_at just
+        because it's the manual endpoint, not intake._maybe_finish's
+        automatic all_terminal close-out. A permanently-FAILED part (jobs:
+        no careers page found) will never "arrive" on its own — the manual
+        regen must render the same note _auto_generate_brief would, and
+        stamp generated_at = now since this content is freshly generated."""
+        from routers.knowledge import generate_client_brief
+
+        parts = _parts(osint="done", research="done", jobs="failed", news="done")
+        parts["jobs"]["error"] = "no careers page found"
+        partial_brief = {
+            "status": "partial", "written_at": intake._iso(intake._now() - timedelta(minutes=5)),
+            "missing": ["jobs (failed: no careers page found)"], "refreshed_at": None, "error": None,
+        }
+        meta = {"intake": _intake_state(parts=parts, brief=partial_brief)}
+        client = {"id": 10, "name": "Vorwerk", "metadata": meta}
+        cas_return = {"intake": {**meta["intake"], "brief": {**partial_brief, "status": "written"}}}
+
+        db = _fake_db(
+            get_client=AsyncMock(return_value=client),
+            embed_text=AsyncMock(return_value=[0.1]),
+            index_document=AsyncMock(return_value=99),
+            link_document=AsyncMock(return_value=None),
+            cas_client_intake_brief=AsyncMock(return_value=cas_return),
+        )
+
+        with (
+            patch("routers.knowledge.DB_AVAILABLE", True),
+            patch("routers.knowledge.db_module", db),
+            patch("playbook.db_module", db),
+            patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
+            patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
+        ):
+            result = await generate_client_brief("Vorwerk", user=FAKE_USER)
+
+        assert result["doc_id"] == 99
+        kwargs = db.index_document.await_args.kwargs
+        assert "Not collected" in kwargs["content"]
+        assert "jobs (no careers page found)" in kwargs["content"]
+        assert "manual brief text" in kwargs["content"]
+        assert kwargs["metadata"]["failed_parts"] == ["jobs (failed: no careers page found)"]
+        assert kwargs["metadata"]["partial"] == []
+        assert kwargs["metadata"]["generated_at"]  # freshly stamped, not left unset
+
+    async def test_manual_brief_without_failed_parts_has_no_banner(self):
+        """No failed parts (everything done, or still open) -> no "Not
+        collected" note is added, same as before this fix."""
+        from routers.knowledge import generate_client_brief
+
+        parts = _parts(osint="done", research="done", jobs="done", news="done")
+        client = {"id": 10, "name": "Bosch AG", "metadata": {"intake": _intake_state(parts=parts)}}
+
+        db = _fake_db(
+            get_client=AsyncMock(return_value=client),
+            embed_text=AsyncMock(return_value=[0.1]),
+            index_document=AsyncMock(return_value=99),
+            link_document=AsyncMock(return_value=None),
+            cas_client_intake_brief=AsyncMock(return_value=None),
+        )
+
+        with (
+            patch("routers.knowledge.DB_AVAILABLE", True),
+            patch("routers.knowledge.db_module", db),
+            patch("playbook.db_module", db),
+            patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
+            patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
+        ):
+            await generate_client_brief("Bosch AG", user=FAKE_USER)
+
+        kwargs = db.index_document.await_args.kwargs
+        assert kwargs["content"] == "manual brief text"
+        assert kwargs["metadata"]["failed_parts"] == []
+        assert kwargs["metadata"]["generated_at"]
 
 
 # ---------------------------------------------------------------------------
