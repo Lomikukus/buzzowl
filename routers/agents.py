@@ -21,6 +21,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 import llm
+import playbook
 from routers.auth import _limit
 
 from context import DB_AVAILABLE, config, console, db_module, cache_get, cache_set
@@ -268,12 +269,23 @@ async def _fire_agent_service(
     if callback_url is None:
         server_url = config.get("server_url", "http://host.docker.internal:8000")
         callback_url = f"{server_url}/api/agents/callback"
+    # Use ASCII form in the task string so agents find English-language sources
+    # (Bloomberg, Reuters, LinkedIn omit umlauts). subject= keeps the canonical
+    # name for DB client lookup and document linking.
+    task = task or _RESEARCH_TASK_TEMPLATE.format(subject=_ascii_name(subject))
+    # Self-improving playbook (WP4): append what we've learned about this
+    # client's website + any org-approved cross-site lessons, and tell the
+    # agent service whether this site needs a JS-rendering fetch. A playbook
+    # failure must never block the run itself.
+    use_browser_fetch = False
+    if agent_type in ("research", "osint", "pain_point_research"):
+        try:
+            task, use_browser_fetch = await playbook.enrich_task(org_id, subject, task, agent_type)
+        except Exception:
+            logger.warning("playbook.enrich_task failed for subject=%r agent_type=%s", subject, agent_type, exc_info=True)
     payload = {
         "agent_type": agent_type,
-        # Use ASCII form in the task string so agents find English-language sources
-        # (Bloomberg, Reuters, LinkedIn omit umlauts). subject= keeps the canonical
-        # name for DB client lookup and document linking.
-        "task": task or _RESEARCH_TASK_TEMPLATE.format(subject=_ascii_name(subject)),
+        "task": task,
         "org_id": org_id,
         "subject": subject,
         # provider is the canonical field; brain stays one release for
@@ -282,6 +294,7 @@ async def _fire_agent_service(
         "brain": brain,
         "model": model,
         "callback_url": callback_url,
+        "use_browser_fetch": use_browser_fetch,
     }
     headers = {}
     token = config.get("agent_service_token", "")
@@ -302,7 +315,7 @@ def _clean_tool_call(t: dict) -> dict:
     return {
         "tool": t.get("tool", ""),
         "args": args if isinstance(args, dict) else {},
-        "result": str(t.get("result", ""))[:200],
+        "result": str(t.get("result", ""))[:600],
         "ts": t.get("ts", ""),
     }
 
@@ -469,6 +482,20 @@ async def _watch_agent_service_run(
                         )
                     except Exception as ix_err:
                         logger.warning("intake.part_done from watcher failed: %s", ix_err)
+                # Self-improving playbook (WP4): second, idempotent scheduler —
+                # both the callback (routers/agents.py's agent_service_callback)
+                # and this watcher terminal branch may schedule reflect_on_run
+                # for the same run; output.reflected makes that safe, whichever
+                # lands first wins. Safe to run here specifically because
+                # tool_calls was already persisted via update_agent_run above.
+                if run_info and run_info.get("agent_type") in ("research", "osint", "pain_point_research") and subject:
+                    try:
+                        asyncio.create_task(
+                            playbook.reflect_on_run(run_info["org_id"], db_run_id, subject=subject)
+                        )
+                    except Exception as pb_err:
+                        logger.warning("playbook.reflect_on_run scheduling failed (watcher) for run=%s: %s",
+                                        db_run_id, pb_err)
                 break
             else:
                 # agent-pi reports 'queued' while a run waits for one of its two
@@ -749,18 +776,30 @@ async def agent_service_callback(body: dict, request: Request):
             output={**prior_output, "service_run_id": svc_run_id, **output},
             error=error,
         )
-        # Backstop for a watcher that did not survive (server restart, or a
-        # caller whose asyncio task outlived its process): without this the row
-        # keeps counters with an empty tool-call list and the run detail is
-        # lost for good.
-        if not (body.get("tool_calls") or prior_output.get("tool_calls")):
-            existing_run = await db_module.get_agent_run(db_run_id)
-            if not (existing_run or {}).get("tool_calls"):
-                await _persist_tool_calls(
-                    db_run_id,
-                    prior_output.get("service_url") or _get_service_url(agent_type),
-                    svc_run_id, final_status,
-                )
+        # Always re-fetch the FULL tool_calls list from agent-pi here, not only
+        # when nothing is stored yet: Pi's callback body carries no tool_calls
+        # of its own (runner.ts), so whatever's already on the row is at best
+        # whatever the watcher's last 5s "running" poll captured — a PARTIAL
+        # list. Skipping this whenever something was already present used to
+        # let reflect_on_run below classify that truncated log and stamp
+        # `reflected`, so the watcher's later, complete write was never
+        # reflected on. _persist_tool_calls is a no-op write when agent-pi's
+        # list is empty/unreachable, so calling it unconditionally is safe.
+        await _persist_tool_calls(
+            db_run_id,
+            prior_output.get("service_url") or _get_service_url(agent_type),
+            svc_run_id, final_status,
+        )
+
+    # Self-improving playbook (WP4): reflect on research/osint/pain_point_research
+    # runs — done AND failed, since a run that got blocked everywhere still
+    # teaches useful blocked_urls/needs_js. Runs now (not later) because
+    # agent_runs.tool_calls gets compacted by retention after 14 days.
+    if agent_type in ("research", "osint", "pain_point_research") and db_run_id and org_id:
+        try:
+            asyncio.create_task(playbook.reflect_on_run(org_id, db_run_id, subject=subject))
+        except Exception:
+            logger.warning("playbook.reflect_on_run scheduling failed for run=%s", db_run_id, exc_info=True)
 
     # After enrichment or people_search: fire contact_extraction via Pi
     if final_status == "done" and db_run_id and org_id:
@@ -1673,6 +1712,11 @@ async def _maybe_trigger_pain_point_research(org_id: int, client_name: str) -> N
         pi_url = config.get("agent_service_url_pi", "http://localhost:8001")
 
         task = _PAIN_POINT_RESEARCH_TEMPLATE.format(client_name=client_name)
+        use_browser_fetch = False
+        try:
+            task, use_browser_fetch = await playbook.enrich_task(org_id, client_name, task, "pain_point_research")
+        except Exception:
+            logger.warning("playbook.enrich_task failed for client=%r", client_name, exc_info=True)
 
         run_id = await db_module.create_agent_run(
             org_id=org_id,
@@ -1693,6 +1737,7 @@ async def _maybe_trigger_pain_point_research(org_id: int, client_name: str) -> N
             "model": hermes_model,
             "subject": client_name,
             "callback_url": f"{config.get('server_url', 'http://host.docker.internal:8000')}/api/agents/callback",
+            "use_browser_fetch": use_browser_fetch,
         }
 
         svc_token = config.get("agent_service_token", "")

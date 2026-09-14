@@ -101,6 +101,7 @@ _HB_NAMES: dict[str, str] = {
     "rep_digest": "Rep Client Digest",
     "task_reminder": "Task Reminder (email)",
     "research_qa": "Research QA Reviewer",
+    "lessons_review": "Cross-Site Lessons Review",
 }
 
 
@@ -1388,14 +1389,37 @@ _NEWS_SCORE_PROMPT = (
 )
 
 
-def _news_rules_block(rules: str) -> str:
-    """Normalize a learned-rules block for _NEWS_SCORE_PROMPT's {rules} slot:
-    '' stays '' (no dangling blank line before "Return STRICT JSON..."), and
-    any other text always gets exactly one trailing newline — whether or not
-    the caller's text already ends in one — so "Return STRICT JSON..." always
-    starts on its own line."""
+def _rules_block(rules: str) -> str:
+    """Normalize a learned-rules block for a prompt's {rules} slot — shared by
+    _NEWS_SCORE_PROMPT, _JOBS_EXTRACT_PROMPT, and the careers-selection
+    prompt. '' stays '' (no dangling blank line before the following
+    instruction), and any other text always gets exactly one trailing
+    newline — whether or not the caller's text already ends in one — so the
+    next instruction always starts on its own line. The slot this feeds must
+    always sit BEFORE the prompt's final instruction / JSON-output contract
+    and never after untrusted content (page text, search-result titles) —
+    landing after would both bury it in a region a malicious page could spoof
+    and push the real instruction out of the position models weight most."""
     rules = (rules or "").rstrip("\n")
     return f"{rules}\n" if rules else ""
+
+
+async def _news_lessons_block(org_id: int) -> str:
+    """Approved cross-site lessons (scope='news', WP4), for _rules_block's
+    `rules` argument. '' when playbook isn't available, org_id is falsy, or
+    there are no approved news/all-scope lessons — _rules_block already
+    collapses '' to no dangling text, so callers pass this straight through."""
+    if not org_id:
+        return ""
+    try:
+        import playbook  # type: ignore
+    except ImportError:
+        return ""
+    try:
+        lessons = await playbook.lessons_load(org_id)
+        return playbook.lessons_block(lessons, "news")
+    except Exception:
+        return ""
 
 
 # YYYY/MM/DD or YYYY-MM-DD embedded in a URL path/slug, e.g. .../2025/03/12/...
@@ -1605,7 +1629,8 @@ async def _client_news_scan(
         return result
 
     prompt = _NEWS_SCORE_PROMPT.format(
-        subject=name, n=len(fresh), listing=_news_listing(fresh), rules=_news_rules_block(""),
+        subject=name, n=len(fresh), listing=_news_listing(fresh),
+        rules=_rules_block(await _news_lessons_block(org_id)),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
@@ -1989,7 +2014,8 @@ async def _market_news_scan(
         return result
 
     prompt = _NEWS_SCORE_PROMPT.format(
-        subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh), rules=_news_rules_block(""),
+        subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh),
+        rules=_rules_block(await _news_lessons_block(org_id)),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
@@ -2154,6 +2180,7 @@ _JOBS_EXTRACT_PROMPT = (
     "Cloud Engineer (m/f/d)', 'Head of IT'). Do NOT return department / category / business-area "
     "names (e.g. 'IT & Digitalisation', 'Facility Management', 'Finance, Legal & Administration', "
     "'Strategy & Consulting') — those are navigation categories, not positions; skip them.\n\n"
+    "{rules}"
     "Return STRICT JSON ONLY:\n"
     '{{"positions": [{{"title": "...", "location": "...", "team": "...", "summary": "..."}}], '
     '"inferred_needs": ["short need statement"]}}\n'
@@ -2170,6 +2197,26 @@ _JOBS_EXTRACT_PROMPT = (
     "& compliance', 'Driving a digital-transformation program'). If the page shows no concrete "
     'individual job listings, return {{"positions": [], "inferred_needs": []}}.\n\nPAGE TEXT:\n{page}'
 )
+
+
+async def _jobs_lessons_block(org_id: int) -> str:
+    """Approved cross-site lessons (scope='jobs', WP4) formatted for inline
+    injection into a jobs prompt — appended verbatim after the prompt is
+    otherwise fully formatted, never as a new format() placeholder. '' when
+    playbook isn't available, org_id is falsy, or there are no approved
+    jobs/all-scope lessons; callers append/format this and never rely on it
+    being non-empty."""
+    if not org_id:
+        return ""
+    try:
+        import playbook  # type: ignore
+    except ImportError:
+        return ""
+    try:
+        lessons = await playbook.lessons_load(org_id)
+        return playbook.lessons_block(lessons, "jobs")
+    except Exception:
+        return ""
 
 
 # Job-LISTING link terms only (the landing page is already "career/karriere" — we
@@ -2385,12 +2432,17 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     listing = "\n".join(
         f"{i+1}. {c['title'] or c['url']} — {c['url']}" for i, c in enumerate(candidates[:15])
     )
+    # rules= is filled BEFORE the "Reply with ONLY..." final instruction and,
+    # critically, before {listing} — candidate titles come from search
+    # results (untrusted) — never appended after (see _extract_jobs above).
+    rules = _rules_block(await _jobs_lessons_block(org_id))
     prompt = (
         f"Which of these URLs is {name}'s official careers / open-positions listing page "
         f"(where you can browse their current job openings)? Prefer a page on the company's own "
         f"domain{(' (' + domain + ')') if domain else ''} or its official applicant-tracking system "
-        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday). Reply with ONLY the single best URL, "
-        f"or 'none' if none qualify.\n\n{listing}"
+        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday).\n"
+        f"{rules}"
+        f"Reply with ONLY the single best URL, or 'none' if none qualify.\n\n{listing}"
     )
     try:
         reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
@@ -2431,7 +2483,13 @@ async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None,
     means an empty/JS-only page not worth an LLM call)."""
     if len(text) < min_len:
         return [], []
-    prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000])
+    # rules= is filled BEFORE "Return STRICT JSON ONLY:" and, critically,
+    # before {page} — the untrusted page text is the last thing in the
+    # prompt, so any learned rules must land ahead of it, never appended
+    # after (a prior version appended post-format, landing the rules inside
+    # the untrusted-page region and pushing the JSON contract out of place).
+    rules = _rules_block(await _jobs_lessons_block(org_id))
+    prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000], rules=rules)
     try:
         # Subscription bridge is text-only: acomplete (never a tool-using
         # chat/agent loop) — it warms the org overlay itself.
@@ -3546,6 +3604,17 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                 },
             )
 
+        elif agent_type == "lessons_review":
+            # Self-improving agent (WP4): propose cross-site navigation lessons
+            # from this week's site playbooks + failed runs. Never auto-approves —
+            # a human decides via POST /api/agents/lessons/{id}/decision.
+            import playbook
+            summary = await playbook.lessons_propose(org_id, run_id=run_id)
+            await db_module.update_agent_run(
+                run_id, "done",
+                output={"proposed": len(summary.get("proposed") or [])},
+            )
+
         else:
             from agents.runner import run_agent
             await run_agent(run_id, org_id, agent_type, task)
@@ -3598,6 +3667,9 @@ async def _start_heartbeat_scheduler() -> None:
                     "Sample recent agent-written research and flag quality problems (no LLM): "
                     "stale synthesis that lags newer findings, cross-client contamination, and "
                     "claims with no sources. Write flags into each doc + a QA summary report."),
+                "lessons_review": ("0 7 * * 1",
+                    "Propose cross-site navigation lessons from this week's playbooks and "
+                    "failed runs (human approval required)."),
             }
             # every org (multi-tenant): each existing org gets the types it lacks
             for org_row in await db_module.list_orgs():

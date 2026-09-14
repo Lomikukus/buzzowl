@@ -417,6 +417,54 @@ class TestCallbackChain:
                       if c.kwargs.get("agent_type") == "pain_point_research"]
         assert len(pain_calls) == 0
 
+    def test_callback_persists_full_tool_calls_before_scheduling_reflection(self, app_client):
+        """WP4 review nit: Pi's callback body never carries tool_calls
+        (runner.ts) — whatever's already stored is at best a PARTIAL list
+        from the watcher's last 5s "running" poll. _persist_tool_calls (which
+        fetches the FULL list from agent-pi) must be awaited before
+        playbook.reflect_on_run is scheduled, even when the callback body
+        already carries a (partial) tool_calls list — the old code skipped
+        the fetch in exactly that case, so reflection classified the
+        truncated log and stamped `reflected` before the watcher's later,
+        complete write ever landed."""
+        db_row = {"id": 46, "org_id": 1}
+        pool = _mock_pool(fetchrow_return=db_row)
+        order = []
+
+        with (
+            patch("routers.agents.DB_AVAILABLE", True),
+            patch("server.db_module._pool", pool),
+            patch("server.db_module.update_agent_run", new_callable=AsyncMock),
+            patch("routers.agents._persist_tool_calls", new_callable=AsyncMock,
+                  side_effect=lambda *a, **k: order.append("persist")) as mock_persist,
+            patch("routers.agents.playbook.reflect_on_run", new_callable=AsyncMock,
+                  side_effect=lambda *a, **k: order.append("reflect")) as mock_reflect,
+            patch("routers.agents.config") as mock_cfg,
+        ):
+            mock_cfg.get = lambda key, default=None: {"agent_service_token": ""}.get(key, default)
+
+            resp = app_client.post(
+                "/api/agents/callback",
+                json={
+                    "run_id": "46",
+                    "status": "done",
+                    "agent_type": "research",
+                    "subject": "Bosch AG",
+                    "org_id": 1,
+                    # a PARTIAL tool_calls list already on the body — the old
+                    # code's `if not (body.get("tool_calls") or ...)` guard
+                    # skipped _persist_tool_calls whenever this was truthy.
+                    "tool_calls": [{"tool": "web_search", "args": {}, "result": "...", "ts": "t0"}],
+                    "output": {},
+                },
+            )
+
+        assert resp.status_code == 200
+        mock_persist.assert_awaited_once()
+        mock_reflect.assert_called_once()
+        assert mock_reflect.call_args.kwargs.get("subject") == "Bosch AG"
+        assert order == ["persist", "reflect"]
+
 
 # ---------------------------------------------------------------------------
 # TestAsciiNameConversion

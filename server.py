@@ -41,7 +41,7 @@ from context import (
     limiter,
     pwd_context,
 )
-from routers import auth, pipeline, knowledge, agents, llm_config, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
+from routers import auth, pipeline, knowledge, agents, llm_config, chat, notifications, internal, products, match, users, feedback, benchmark, evaluation, today, tasks, org_settings, lessons as lessons_router, outreach as outreach_router, deals as deals_router, sharing as sharing_router, federation as federation_router, operator as operator_router
 from routers.pipeline import (
     ensure_dirs,
     _migrate_legacy_dirs,
@@ -577,6 +577,7 @@ app.include_router(operator_router.router)
 app.include_router(pipeline.router)
 app.include_router(knowledge.router)
 app.include_router(agents.router)
+app.include_router(lessons_router.router)
 app.include_router(llm_config.router)
 app.include_router(chat.router)
 app.include_router(notifications.router)

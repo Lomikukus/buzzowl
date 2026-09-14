@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import playbook
 from routers import knowledge, pipeline
 
 
@@ -296,6 +297,100 @@ class TestCareersDiscovery:
              patch.object(pipeline.llm, "acomplete", AsyncMock(side_effect=RuntimeError("llm down"))):
             url, tier = await pipeline._discover_careers_url(1, client)
         assert url == "https://company.personio.de/"
+
+
+# ---------------------------------------------------------------------------
+# WP4: approved cross-site lessons (scope='jobs') inlined into jobs prompts
+# ---------------------------------------------------------------------------
+
+def _fake_playbook_with_lessons(lessons):
+    """A fake `playbook` module for sys.modules — lessons_load returns the
+    fixture, lessons_block is the REAL function so scope/status filtering is
+    exercised end to end, not just the plumbing that calls it."""
+    fake = MagicMock()
+    fake.lessons_load = AsyncMock(return_value=lessons)
+    fake.lessons_block = playbook.lessons_block
+    return fake
+
+
+_MULTI_CANDIDATES = [
+    {"url": "https://acme.com/karriere", "tier": "searxng", "title": "Acme Karriere"},
+    {"url": "https://boards.greenhouse.io/acme", "tier": "searxng", "title": "Acme on Greenhouse"},
+]
+
+
+class TestLessonsInCareersSelectionPrompt:
+    @pytest.mark.asyncio
+    async def test_approved_jobs_lesson_appears_proposed_does_not(self, monkeypatch):
+        lessons = [
+            {"text": "Prefer the ATS link over a homepage careers page", "scope": "jobs", "status": "approved"},
+            {"text": "A merely proposed jobs lesson", "scope": "jobs", "status": "proposed"},
+            {"text": "An approved but news-scoped lesson", "scope": "news", "status": "approved"},
+        ]
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons(lessons))
+        client = _client(website="https://acme.com")
+        acomplete = AsyncMock(return_value="none")
+        with patch.object(pipeline, "_careers_candidates", AsyncMock(return_value=_MULTI_CANDIDATES)), \
+             patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._discover_careers_url(1, client)
+        acomplete.assert_awaited_once()
+        prompt = acomplete.await_args.args[0]
+        assert "Prefer the ATS link over a homepage careers page" in prompt
+        assert "A merely proposed jobs lesson" not in prompt
+        assert "An approved but news-scoped lesson" not in prompt
+        # WP4 re-review nit: rules must land before the final instruction and
+        # before the (untrusted, search-result-derived) candidate listing —
+        # never after, where a prior version appended them post-format.
+        assert prompt.index("Prefer the ATS link over a homepage careers page") \
+            < prompt.index("Reply with ONLY the single best URL") \
+            < prompt.index("Acme on Greenhouse")
+
+    @pytest.mark.asyncio
+    async def test_unchanged_when_org_has_no_lessons_document(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons([]))
+        client = _client(website="https://acme.com")
+        acomplete = AsyncMock(return_value="none")
+        with patch.object(pipeline, "_careers_candidates", AsyncMock(return_value=_MULTI_CANDIDATES)), \
+             patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._discover_careers_url(1, client)
+        prompt = acomplete.await_args.args[0]
+        assert "Learned rules" not in prompt
+        # no dangling text appended: the prompt ends exactly on the candidate listing
+        assert prompt.endswith("2. Acme on Greenhouse — https://boards.greenhouse.io/acme")
+
+
+class TestLessonsInJobsExtractPrompt:
+    @pytest.mark.asyncio
+    async def test_approved_jobs_lesson_appears_proposed_does_not(self, monkeypatch):
+        lessons = [
+            {"text": "Skip listings with no location field", "scope": "jobs", "status": "approved"},
+            {"text": "A merely proposed jobs lesson", "scope": "jobs", "status": "proposed"},
+        ]
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons(lessons))
+        acomplete = AsyncMock(return_value=json.dumps({"positions": [], "inferred_needs": []}))
+        with patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._extract_jobs("Acme", "x" * 250, 1)
+        prompt = acomplete.await_args.args[0]
+        assert "Skip listings with no location field" in prompt
+        assert "A merely proposed jobs lesson" not in prompt
+        # WP4 re-review nit: rules must land before "Return STRICT JSON ONLY"
+        # and before {page} (untrusted page text) — never after, where a
+        # prior version appended them post-format, landing them inside the
+        # untrusted-page region and pushing the JSON contract out of place.
+        assert prompt.index("Skip listings with no location field") < prompt.index("Return STRICT JSON")
+        assert prompt.index("Return STRICT JSON") < prompt.index("x" * 250)
+
+    @pytest.mark.asyncio
+    async def test_unchanged_when_org_has_no_lessons_document(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "playbook", _fake_playbook_with_lessons([]))
+        text = "x" * 250
+        acomplete = AsyncMock(return_value=json.dumps({"positions": [], "inferred_needs": []}))
+        with patch.object(pipeline.llm, "acomplete", acomplete):
+            await pipeline._extract_jobs("Acme", text, 1)
+        prompt = acomplete.await_args.args[0]
+        assert prompt == pipeline._JOBS_EXTRACT_PROMPT.format(
+            client="Acme", page=text[:16000], rules=pipeline._rules_block(""),
+        )
 
 
 # ---------------------------------------------------------------------------
