@@ -2181,8 +2181,13 @@ async def _market_news_scan(
     the last 30 days. `industry` drives the search terms when set; for a
     source-change-triggered scan (no specific industry) `focus`'s free-text
     description is used instead. Writes are capped at max_write, like
-    _client_news_scan. Returns
-    {found, scored, written, max_relevance, error}."""
+    _client_news_scan. Gets the same degraded-backend detection as the
+    client scan (WP9): if every one of these (categories="news") queries
+    comes back with zero raw results while ≥1 engine was unresponsive,
+    result["error"] is set and nothing is written instead of a silent
+    found=0/error=None. Returns
+    {found, scored, written, max_relevance, error}, plus unresponsive when
+    relevant."""
     result: dict = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0, "error": None}
     term = (industry or focus or "market").strip()
     queries = [
@@ -2192,12 +2197,17 @@ async def _market_news_scan(
 
     candidates: list[dict] = []
     seen: set[str] = set()
+    unresponsive_all: list = []
+    raw_result_count = 0
     for q, cat, tr in queries:
         try:
-            results = await _searxng_results(q, limit=15, categories=cat, time_range=tr)
+            data = await _searxng_query(q, limit=15, categories=cat, time_range=tr)
         except Exception as exc:
             console.print(f"[yellow]market news scan: SearXNG failed for '{term}': {exc}[/yellow]")
             continue
+        results = data.get("results") or []
+        unresponsive_all.extend(data.get("unresponsive") or [])
+        raw_result_count += len(results)
         for r in results:
             url = (r.get("url") or "").strip()
             allowed, _host = _news_result_allowed(url)
@@ -2208,6 +2218,15 @@ async def _market_news_scan(
                 continue
             seen.add(norm)
             candidates.append({**r, "_norm_url": norm, "_published": _parse_published(r), "query": q})
+
+    unresponsive = _dedupe_unresponsive(unresponsive_all)
+    if raw_result_count == 0 and unresponsive:
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        result["error"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+        result["unresponsive"] = unresponsive
+        return result
+    if unresponsive:
+        result["unresponsive"] = unresponsive
 
     if not candidates:
         return result
