@@ -801,15 +801,24 @@ async def _trigger_osint(client_name: str, org_id: int, run_id: Optional[int] = 
 # Heartbeat scheduler
 # ---------------------------------------------------------------------------
 
-async def _searxng_results(
+async def _searxng_query(
     query: str, limit: int = 10, *,
     categories: str | None = None, time_range: str | None = None, language: str | None = None,
-) -> list[dict]:
-    """Raw SearXNG JSON results — shared by news gate + source discovery. [] on failure.
+) -> dict:
+    """Raw SearXNG JSON query, degraded-backend-aware. Raises on a transport
+    failure (timeout, DNS, non-2xx) — callers decide whether that's fatal.
 
-    Each result dict keeps whatever SearXNG returns (url/title/content/engine/
-    publishedDate); categories/time_range/language are only added to the request
-    when the caller passes them, so existing callers see no behavior change."""
+    Returns {"results": [...] (capped to `limit`), "unresponsive": [[engine,
+    reason], ...], "engines_ok": n}. SearXNG's own JSON carries
+    `unresponsive_engines` as [engine, reason] pairs whenever an engine was
+    suspended/rate-limited/CAPTCHA'd/timed out for this query — the WP7 field
+    drive found brave/startpage/qwant/mojeek suspended while only bing news
+    kept answering, with `error: null` on every scan. `engines_ok` is the
+    count of distinct engines that actually contributed a result, so a caller
+    can tell "every engine that ran was suspended" from "some engines
+    worked, this particular query just had no hits". categories/time_range/
+    language are only added to the request when the caller passes them, so
+    every existing caller sees no behavior change."""
     searxng_url = context.config.get("searxng_url", "http://localhost:8080").rstrip("/")
     params = {"q": query, "format": "json", "safesearch": 0}
     if categories:
@@ -821,7 +830,50 @@ async def _searxng_results(
     async with httpx.AsyncClient(timeout=10.0) as http:
         resp = await http.get(f"{searxng_url}/search", params=params)
         resp.raise_for_status()
-        return (resp.json().get("results") or [])[:limit]
+        data = resp.json()
+    results = (data.get("results") or [])[:limit]
+    unresponsive = [
+        [str(item[0]), str(item[1])] for item in (data.get("unresponsive_engines") or [])
+        if isinstance(item, (list, tuple)) and len(item) >= 2
+    ]
+    engines_ok = len({
+        e for r in results
+        for e in ([r["engine"]] if r.get("engine") else []) + list(r.get("engines") or [])
+    })
+    return {"results": results, "unresponsive": unresponsive, "engines_ok": engines_ok}
+
+
+async def _searxng_results(
+    query: str, limit: int = 10, *,
+    categories: str | None = None, time_range: str | None = None, language: str | None = None,
+) -> list[dict]:
+    """Thin wrapper over _searxng_query for callers that only need the plain
+    results list (source discovery, careers-URL discovery, the news change
+    gate) — every existing caller/mock of this name keeps working unchanged.
+    Each result dict keeps whatever SearXNG returns (url/title/content/engine/
+    publishedDate)."""
+    data = await _searxng_query(
+        query, limit=limit, categories=categories, time_range=time_range, language=language,
+    )
+    return data["results"]
+
+
+def _dedupe_unresponsive(pairs: list) -> list:
+    """First-seen-wins dedupe of [engine, reason] pairs by engine name — the
+    same engine is typically reported unresponsive on every query in a scan
+    (brave/startpage/qwant stay suspended for the whole run), and callers
+    want one line per engine, not N repeats of the same pair."""
+    seen: set = set()
+    out: list = []
+    for pair in pairs or []:
+        if not (isinstance(pair, (list, tuple)) and len(pair) >= 2):
+            continue
+        engine = str(pair[0])
+        if engine in seen:
+            continue
+        seen.add(engine)
+        out.append([engine, str(pair[1])])
+    return out
 
 
 async def _client_news_changed(org_id: int, client: dict, fail_open: bool = True) -> bool:
