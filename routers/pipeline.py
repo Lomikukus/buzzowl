@@ -13,9 +13,12 @@ Covers:
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
+import uuid
+from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -53,6 +56,8 @@ def extract_title_from_summary(summary_text: str) -> str:
         if line and not line.startswith("**"):
             return line
     return "Untitled"
+
+logger = logging.getLogger("wk.pipeline")
 
 router = APIRouter()
 
@@ -1252,23 +1257,127 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
     return merged
 
 
-async def _fetch_page_text(url: str, max_chars: int = 9000, wait_ms: int = 1500) -> str:
-    """Fetch a page's visible text. Plain GET first; falls back to the
-    browser-service for JS-rendered pages (ATS/careers pages often need it —
-    pass a larger wait_ms so the job listings have time to load).
-    Returns normalized text (possibly '')."""
+# Camofox (Firefox + fingerprint spoofing) tab API — mirrors
+# agent_service_ts/src/search.ts's fetchPageCamofox: POST /tabs to open a
+# rendered tab, GET /tabs/{id}/snapshot for the visible-text snapshot, and
+# always DELETE /tabs/{id} to release it. Used as a last-resort tier for
+# bot-protected sites where plain GET and the Playwright browser-service
+# both come back blocked or empty.
+_CAMOFOX_USER_ID = "server"
+
+# Bounded ring of the last 50 page fetches, for diagnostics (which tier is
+# actually working on a given deployment). Not persisted; process-local.
+_FETCH_TIER_LOG: deque = deque(maxlen=50)
+
+
+def _record_fetch_tier(url: str, tier: str, chars: int) -> None:
+    _FETCH_TIER_LOG.append({
+        "url": url,
+        "tier": tier,
+        "chars": chars,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def _fetch_page_camofox(url: str, *, wait_ms: int = 2500, max_chars: int = 18000) -> str:
+    """Fetch a page's visible text via Camofox (Firefox + fingerprint
+    spoofing), for bot-protected sites where plain GET and the
+    browser-service both fail. Mirrors search.ts's fetchPageCamofox: opens a
+    tab, waits wait_ms for it to render, reads the accessibility/text
+    snapshot, then always releases the tab. Never raises — any failure
+    (missing CAMOFOX_URL, non-2xx response, timeout, bad JSON) yields ''.
+    Total time budget is kept well under 40s so callers can await it inline."""
+    camofox_url = os.environ.get("CAMOFOX_URL", "").rstrip("/")
+    if not camofox_url:
+        return ""
+
+    tab_id: Optional[str] = None
     text = ""
     try:
-        async with httpx.AsyncClient(
-            timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
-        ) as http:
-            resp = await http.get(url)
-            if resp.status_code == 200:
-                text = _HTML_TAG_RE.sub(" ", resp.text)
-    except Exception:
-        pass
+        async with httpx.AsyncClient(timeout=12.0) as http:
+            resp = await http.post(
+                f"{camofox_url}/tabs",
+                json={"userId": _CAMOFOX_USER_ID, "sessionKey": str(uuid.uuid4()), "url": url},
+            )
+        if resp.status_code not in (200, 201):
+            logger.debug("_fetch_page_camofox: /tabs returned %s for %r", resp.status_code, url)
+            return ""
+        body = resp.json()
+        tab_id = body.get("tabId") or body.get("id")
+        if not tab_id:
+            logger.debug("_fetch_page_camofox: no tabId in response for %r", url)
+            return ""
 
-    if len(text.strip()) < 500:
+        await asyncio.sleep(max(wait_ms, 0) / 1000)
+
+        async with httpx.AsyncClient(timeout=16.0) as http:
+            resp = await http.get(
+                f"{camofox_url}/tabs/{tab_id}/snapshot", params={"userId": _CAMOFOX_USER_ID},
+            )
+        if resp.status_code == 200:
+            snapshot = resp.json().get("snapshot", "")
+            # Same normalization as search.ts: collapse runs of blank lines,
+            # drop stray NULs, cap length — keep everything else the
+            # snapshot returns (it's already an accessibility/text view).
+            text = re.sub(r"\n{3,}", "\n\n", snapshot).replace("\0", "").strip()[:max_chars]
+        else:
+            logger.debug("_fetch_page_camofox: snapshot returned %s for %r", resp.status_code, url)
+    except Exception as exc:
+        logger.debug("_fetch_page_camofox: error for %r: %s", url, exc)
+        text = ""
+    finally:
+        if tab_id:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as http:
+                    await http.delete(f"{camofox_url}/tabs/{tab_id}", params={"userId": _CAMOFOX_USER_ID})
+            except Exception as exc:
+                logger.debug("_fetch_page_camofox: tab cleanup failed for %r: %s", url, exc)
+
+    return text
+
+
+async def _fetch_page_text(
+    url: str,
+    max_chars: int = 9000,
+    wait_ms: int = 1500,
+    *,
+    prefer_camofox: bool = False,
+) -> str:
+    """Fetch a page's visible text.
+
+    Default order: plain GET -> browser-service -> Camofox. Camofox (last
+    resort) is only tried when the plain GET was blocked (403/503/429) or
+    thin (<500 chars) AND the browser-service also came back thin
+    (<500 chars) or failed/timed out — this keeps the common case (a plain
+    GET or the browser-service already returning a real page) exactly as
+    fast as before.
+
+    Pass prefer_camofox=True when the caller already knows the site needs
+    anti-detection (a playbook needs_js/cookie_wall hit, or a previous 403)
+    to skip the plain GET and go browser-service -> Camofox directly.
+
+    Returns normalized text (possibly '')."""
+    text = ""
+    tier = "none"
+    plain_status: Optional[int] = None
+
+    if not prefer_camofox:
+        try:
+            async with httpx.AsyncClient(
+                timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+            ) as http:
+                resp = await http.get(url)
+                plain_status = resp.status_code
+                if resp.status_code == 200:
+                    text = _HTML_TAG_RE.sub(" ", resp.text)
+                    tier = "http"
+        except Exception:
+            pass
+
+    plain_blocked_or_thin = prefer_camofox or plain_status in (403, 503, 429) or len(text.strip()) < 500
+    browser_thin_or_failed = prefer_camofox
+
+    if plain_blocked_or_thin:
         browser_url = os.environ.get("BROWSER_SERVICE_URL", "http://localhost:3000").rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=40.0) as http:
@@ -1276,11 +1385,25 @@ async def _fetch_page_text(url: str, max_chars: int = 9000, wait_ms: int = 1500)
                     f"{browser_url}/fetch", json={"url": url, "max_chars": max_chars, "wait_ms": wait_ms},
                 )
                 if resp.status_code == 200:
-                    text = resp.json().get("text", "")
+                    browser_text = resp.json().get("text", "")
+                    browser_thin_or_failed = len(browser_text.strip()) < 500
+                    if len(browser_text.strip()) >= len(text.strip()):
+                        text = browser_text
+                        tier = "browser"
+                else:
+                    browser_thin_or_failed = True
         except Exception:
-            pass
+            browser_thin_or_failed = True
 
-    return re.sub(r"\s+", " ", text).strip()
+        if plain_blocked_or_thin and browser_thin_or_failed:
+            camofox_text = await _fetch_page_camofox(url, wait_ms=max(wait_ms, 2500), max_chars=max_chars)
+            if len(camofox_text.strip()) > len(text.strip()):
+                text = camofox_text
+                tier = "camofox"
+
+    text = re.sub(r"\s+", " ", text).strip()
+    _record_fetch_tier(url, tier if text else "none", len(text))
+    return text
 
 
 async def _fetch_source_fp(url: str) -> Optional[str]:
