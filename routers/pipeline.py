@@ -3541,27 +3541,44 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
 
     careers_pb = (pb or {}).get("careers") or {}
 
-    # D16 — a URL careers.last_tried_url + last_failure_at recorded as "found
-    # nothing" within the last _CAREERS_LAST_TRIED_SKIP_DAYS days is skipped
-    # as a candidate from EVERY tier below (not just the playbook one it came
-    # from), so a homepage/sitemap/path-probe re-discovery of the exact same
-    # dead end doesn't just hand it straight back either.
+    # D16 — a URL careers.last_tried_url recorded as "found nothing" within
+    # the last _CAREERS_LAST_TRIED_SKIP_DAYS days is skipped as a candidate
+    # from EVERY tier below (not just the playbook one it came from), so a
+    # homepage/sitemap/path-probe re-discovery of the exact same dead end
+    # doesn't just hand it straight back either.
+    #
+    # Review fix: the clock is careers.last_tried_at (stamped ONLY when
+    # THIS URL was the one just re-tried and yielded 0 positions), never
+    # careers.last_failure_at — that field is rewritten by _record_playbook
+    # on EVERY careers failure, including the "no careers page found" the
+    # skip itself causes once this URL is the only candidate. Reading
+    # last_failure_at here made the skip re-arm itself forever (site fixed,
+    # candidate offered every scan, skipped every scan, last_failure_at
+    # bumped every scan) — permanently worse than no skip at all.
+    # last_failure_at is still read as a fallback for a playbook recorded
+    # before this fix shipped (no last_tried_at yet).
     last_tried_url = (careers_pb.get("last_tried_url") or "").strip()
     last_tried_skip = False
     if last_tried_url:
-        last_failure_at = careers_pb.get("last_failure_at")
-        if last_failure_at:
+        last_tried_at = careers_pb.get("last_tried_at") or careers_pb.get("last_failure_at")
+        if last_tried_at:
             try:
-                last_tried_skip = (datetime.now(timezone.utc) - datetime.fromisoformat(last_failure_at)) \
+                last_tried_skip = (datetime.now(timezone.utc) - datetime.fromisoformat(last_tried_at)) \
                     <= timedelta(days=_CAREERS_LAST_TRIED_SKIP_DAYS)
             except (ValueError, TypeError):
                 last_tried_skip = False
-
     def _add(url: str, tier: str, title: str = "") -> None:
         url = (url or "").strip()
         if not url.startswith("http") or url in seen:
             return
         if last_tried_skip and url == last_tried_url:
+            # Smuggled onto the client dict (same pattern as _probe_blocked/
+            # _sitemap_cache below — _careers_candidates' signature is
+            # frozen) so _scan_client_jobs can tell "the skip suppressed a
+            # candidate" apart from "there is genuinely nothing here" and
+            # stamp an honest failure reason instead of the generic
+            # "no careers page found" when this turns out to be the only one.
+            client["_careers_skip_suppressed_url"] = url
             return
         seen.add(url)
         candidates.append({"url": url, "tier": tier, "title": title[:120]})
@@ -4085,9 +4102,20 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         # repeat forever. Record it separately as last_tried_url instead so
         # _careers_candidates can skip re-suggesting this one URL for a
         # while but still finds a real careers page through another tier.
+        #
+        # Review fix: last_tried_at is its OWN timestamp, stamped ONLY here
+        # (i.e. only when `url` was actually just re-tried and got 0
+        # positions) — never reuse last_failure_at for this, since that
+        # field is rewritten below on every failure, including a later "no
+        # careers page found" caused by this very skip once last_tried_url
+        # is the only candidate _careers_candidates has to offer. Bumping
+        # the skip's clock from that self-inflicted failure re-armed the
+        # skip forever even after the site was fixed and offering the URL
+        # again every scan.
         no_positions_failure = not success and reason == "no positions found on careers page"
         if no_positions_failure and url:
             careers_patch["last_tried_url"] = url
+            careers_patch["last_tried_at"] = now_iso
         elif url:
             # Omit "url" entirely when there's nothing to report (e.g. the
             # "no careers page found" path) — an empty string here would
@@ -4156,6 +4184,16 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         return summary
 
     if not url:
+        # Review fix — the D16 skip suppressing the ONLY candidate is not
+        # the same failure as "there is genuinely nothing here"; report it
+        # honestly instead of the generic reason so an operator reading
+        # last_error understands why (and that it will re-try on its own).
+        skip_suppressed_url = client.pop("_careers_skip_suppressed_url", None)
+        if skip_suppressed_url:
+            return await _stamp_failure(
+                f"careers page skipped for {_CAREERS_LAST_TRIED_SKIP_DAYS} days "
+                f"after a 0-position scan: {skip_suppressed_url}"
+            )
         return await _stamp_failure("no careers page found")
 
     original_url = url  # the URL the scan started from, for tier reporting below

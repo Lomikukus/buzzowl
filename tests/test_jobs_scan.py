@@ -1396,6 +1396,103 @@ class TestLastTriedUrlSkippedAsCandidate:
             candidates = await pipeline._careers_candidates(1, client, pb)
         assert any(c["url"] == "https://acme.com/karriere" for c in candidates)
 
+    @pytest.mark.asyncio
+    async def test_uses_last_tried_at_over_last_failure_at_when_both_present(self):
+        """The new field wins when present — a stale last_failure_at (from
+        an unrelated later failure) must not keep a URL skipped once
+        last_tried_at itself is old enough."""
+        client = _client(website="https://acme.com", careers_url="https://acme.com/karriere")
+        old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        recent = datetime.now(timezone.utc).isoformat()
+        pb = {"careers": {"last_tried_url": "https://acme.com/karriere",
+                           "last_tried_at": old, "last_failure_at": recent}}
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            candidates = await pipeline._careers_candidates(1, client, pb)
+        assert any(c["url"] == "https://acme.com/karriere" for c in candidates)
+
+
+# ---------------------------------------------------------------------------
+# BLOCKER (review) — the D16 skip window must not reset itself forever
+# ---------------------------------------------------------------------------
+
+class TestLastTriedAtDoesNotResetFromUnrelatedFailures:
+    """Review BLOCKER, measured with a frozen clock over 5 weekly runs:
+    _record_playbook rewrote careers.last_failure_at on EVERY careers
+    failure, including the "no careers page found" that the D16 skip
+    itself causes once last_tried_url is the only candidate offered. Since
+    the skip-check used to read last_failure_at, its own clock reset every
+    single scan forever — a site fixed from week 1 onward stayed
+    permanently stuck reporting "no careers page found", worse than no
+    skip at all. Fixed by giving the skip its own last_tried_at, stamped
+    ONLY when that exact URL was just re-tried and got 0 positions."""
+
+    _URL = "https://trumpf.com/de_INT/karriere/"
+    _HOME_HTML = f'<a href="{_URL}">Karriere</a>'
+
+    @pytest.mark.asyncio
+    async def test_week_within_seven_days_skips_and_does_not_bump_last_tried_at(self, monkeypatch):
+        """Week 0 already failed (0 positions); a later scan still inside
+        the 7-day window must skip the URL, fail with an HONEST reason (not
+        the generic "no careers page found"), and — the actual bug — must
+        NOT touch last_tried_at, or the skip would re-arm itself forever."""
+        fake = MagicMock()
+        two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        pb_state = {"careers": {"last_tried_url": self._URL,
+                                 "last_tried_at": two_days_ago, "last_failure_at": two_days_ago}}
+        fake.load = AsyncMock(return_value=pb_state)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://trumpf.com")  # no metadata.careers_url (D16)
+        with db_patch, \
+             patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", self._HOME_HTML))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is False
+        assert summary["error"] == f"careers page skipped for 7 days after a 0-position scan: {self._URL}"
+        db.update_client_metadata.assert_not_awaited()
+        args, _ = fake.record.await_args
+        careers_patch = args[2]["careers"]
+        assert "last_tried_at" not in careers_patch
+        assert "last_tried_url" not in careers_patch
+
+    @pytest.mark.asyncio
+    async def test_skip_expires_after_seven_days_and_rediscovers_a_now_working_site(self, monkeypatch):
+        """The other half of the loop: once last_tried_at is more than 7
+        days old, the same URL is offered again, genuinely re-tried this
+        time — and since the site is now fixed (yields positions), D16's
+        metadata.careers_url write finally fires instead of the client
+        staying stuck forever."""
+        fake = MagicMock()
+        eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        pb_state = {"careers": {"last_tried_url": self._URL,
+                                 "last_tried_at": eight_days_ago, "last_failure_at": eight_days_ago}}
+        fake.load = AsyncMock(return_value=pb_state)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://trumpf.com")
+        reply = json.dumps({"positions": [{"title": "Backend Engineer"}], "inferred_needs": []})
+        with db_patch, \
+             patch.object(pipeline, "_fetch_page_raw",
+                           AsyncMock(return_value=("x" * 600, self._HOME_HTML))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is True
+        assert summary["careers_url"] == self._URL
+        db.update_client_metadata.assert_awaited_once_with(1, "Acme", {"careers_url": self._URL})
+
 
 # ---------------------------------------------------------------------------
 # D7 — own-domain path-probe failures feed playbook.blocked_urls
