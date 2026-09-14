@@ -206,15 +206,25 @@ services:
       # Loopback only — agents reach it inside the compose network as camofox:9377.
       - "127.0.0.1:9377:9377"
     restart: unless-stopped
+    environment:
+      # Keep the pre-warmed browser alive instead of idling it out after 5 min:
+      # a browser that is *never* running is indistinguishable from an idle one
+      # in /health, and a broken image (upstream unzips with `|| true`, so a
+      # truncated Camoufox archive still "builds") ran for two weeks reporting
+      # healthy while every launch failed. With no idle shutdown, browserRunning
+      # below is a truthful signal. Costs a few hundred MB of resident memory.
+      - BROWSER_IDLE_TIMEOUT_MS=0
     # Cap the biggest memory hog so it can't take the whole box, but leave enough
     # headroom (peak ~1.0 GB) that it keeps rendering pages. OOM-kills a tab, not the DB.
     mem_limit: 1200m
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9377/health"]
-      interval: 15s
+      # Healthy only when Camoufox actually launched, not merely when the HTTP
+      # wrapper answers. First launch takes ~20 s; retries cover a slow warm-up.
+      test: ["CMD-SHELL", "curl -fs http://localhost:9377/health | grep -q '\"browserRunning\":true'"]
+      interval: 30s
       timeout: 5s
-      start_period: 30s
-      retries: 5
+      start_period: 120s
+      retries: 6
 
   browser-service:
     build: ./browser_service
