@@ -427,6 +427,21 @@ def test_classify_tool_calls_non_workday_host_unaffected_by_student_word():
     assert result["careers_candidate_url"] == "https://acme.com/karriere/students-program"
 
 
+def test_classify_tool_calls_workday_substring_not_falsely_flagged_as_junior():
+    """Review nit 6 — an unanchored "intern" substring match would have
+    wrongly treated a Workday tenant literally named "BASF_International"
+    as a junior board. Anchored on /, _, - or string edges, it must not —
+    it still scores as a plain (unadjusted) ATS candidate."""
+    domain = "basf.com"
+    tool_calls = [
+        {"tool": "fetch_page",
+         "args": {"url": "https://basf.wd3.myworkdayjobs.com/BASF_International"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == "https://basf.wd3.myworkdayjobs.com/BASF_International"
+
+
 async def test_reflect_on_run_records_pi_run_careers_candidate():
     tool_calls = [
         {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},

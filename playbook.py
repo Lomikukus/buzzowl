@@ -57,6 +57,11 @@ _MAX_LESSON_PROPOSALS_PER_PASS = 5
 _DEDUPE_JACCARD_THRESHOLD = 0.6
 _REFLECT_LLM_MIN_TOOL_CALLS = 8
 _MAX_NAV_NOTES = 4
+# D27 review B1/nit2 — a client's known redirect-target domains (usually
+# just one; bounded defensively).
+_MAX_ALIASES = 3
+# D22 review B4 — careers.junior_board_urls, {url, at} entries.
+_MAX_JUNIOR_BOARD_URLS = 5
 
 LESSONS_DOC_ID = "agent-lessons-org"
 
@@ -177,10 +182,17 @@ def _merge_blocked_urls(old, new, cap: int) -> list:
 def _merge_dict_field(old: dict, new: dict) -> dict:
     """One level deep: scalars overwrite, lists union+bound. Keys the patch
     doesn't mention (e.g. careers.url when a patch only sets last_failure_at)
-    are left untouched."""
+    are left untouched.
+
+    D22 review B4 — careers.junior_board_urls is a dated {url, at} list, same
+    shape as the top-level blocked_urls: dedupe by url (a board re-confirmed
+    as junior gets its `at` refreshed in place, not appended as a second
+    entry) rather than the generic whole-item union below."""
     merged = dict(old or {})
     for k, v in (new or {}).items():
-        if isinstance(v, list):
+        if k == "junior_board_urls" and isinstance(v, list):
+            merged[k] = _merge_blocked_urls(merged.get(k), v, _MAX_JUNIOR_BOARD_URLS)
+        elif isinstance(v, list):
             merged[k] = _merge_list(merged.get(k), v, _MAX_QUERY_LIST)
         else:
             merged[k] = v
@@ -193,6 +205,10 @@ _TOP_LIST_CAPS = {
     "good_queries": _MAX_QUERY_LIST,
     "failed_queries": _MAX_QUERY_LIST,
     "notes": _MAX_NOTES,
+    # D27 review nit 2 — aliases must UNION across writes (bounded), not
+    # scalar-overwrite: a second resolution pass finding the same (or a
+    # different) alias must not silently erase a previously-recorded one.
+    "aliases": _MAX_ALIASES,
 }
 
 
@@ -478,8 +494,19 @@ _CAREERS_CANDIDATE_MIN_CONTENT_CHARS = 200
 # safely bias every own-domain URL's ranking (an own-domain page titled
 # "careers" is the NORMAL case, not a signal).
 _WORKDAY_HOST_MARKER = "myworkdayjobs.com"
-_WORKDAY_JUNIOR_PATH_RE = re.compile(r"students?|graduates?_only|praktik|intern", re.IGNORECASE)
-_WORKDAY_PROFESSIONAL_PATH_RE = re.compile(r"professionals?|careers|jobs|external", re.IGNORECASE)
+# Review nit 6 — a Workday tenant path is underscore-joined words
+# ("TRUMPF_Students", "TRUMPF_Graduates_and_Professionals"), so a plain
+# \b...\b word boundary does nothing (`_` counts as a word character,
+# giving no boundary between "TRUMPF" and "_Students") while STILL failing
+# to reject a substring match inside a longer word ("BASF_International"
+# contains "intern"). Anchor explicitly on "/", "_", "-" or start/end of
+# string instead, on both sides.
+_WORKDAY_JUNIOR_PATH_RE = re.compile(
+    r"(?:^|[/_-])(?:students?|graduates?_only|praktik|intern)(?:[/_-]|$)", re.IGNORECASE,
+)
+_WORKDAY_PROFESSIONAL_PATH_RE = re.compile(
+    r"(?:^|[/_-])(?:professionals?|careers|jobs|external)(?:[/_-]|$)", re.IGNORECASE,
+)
 _MAX_CAREERS_CANDIDATE_URLS = 3
 
 

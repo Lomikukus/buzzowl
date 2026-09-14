@@ -2451,6 +2451,15 @@ def _write_news_signal_content(why: str, published: Optional[str], url: str) -> 
     return f"{why}\n\nPublished: {published or 'unknown'}\nSource: {url}\n\n## Sources\n- {url}"
 
 
+# D20 review B5 — "majority of the configured/attempted engines"
+# unresponsive: SearXNG's own engine count varies by deployment, and
+# _news_candidates doesn't plumb a "total configured" number through, so
+# this is the reviewer's own concrete heuristic rather than a true
+# percentage — a fixed engines-down floor that only trips once most of a
+# typical ~7-8 engine deployment is suspended, not on one or two flaky ones.
+_NEWS_MAJORITY_UNRESPONSIVE = 4
+
+
 async def _client_news_scan(
     org_id: int, client: dict, *, run_id: Optional[int] = None, max_write: int = 8,
 ) -> dict:
@@ -2459,20 +2468,23 @@ async def _client_news_scan(
 
     Flow: SearXNG candidates (_news_candidates) plus the client's own-
     newsroom tier (_newsroom_candidates, backend-independent of SearXNG)
-    minus already-known signal URLs → one llm.acomplete call → keep
-    relevance ≥2 → index_document + link_document for each (capped at
-    max_write).
+    minus already-known signal URLs → one llm.acomplete call (skipped when
+    there's nothing fresh to score) → keep relevance ≥2 → index_document +
+    link_document for each (capped at max_write).
 
-    Before scoring, a degraded SearXNG backend is detected and reported
-    instead of silently returning found=0/error=None: either every
-    news-category query came back with zero raw results while ≥1 engine was
-    unresponsive, or SearXNG results came back but 100% stayed undated even
-    after the page-header probe (step 3). Either sets result["error"] and
-    writes nothing — UNLESS the newsroom tier alone found ≥3 candidates, in
-    which case there is real news regardless of the search backend and the
-    scan proceeds with result["warning"] set instead of failing the part.
-    A total SearXNG outage (every query raised) is retried once after 20s
-    before giving up as before; an LLM failure writes nothing. Returns
+    Two independent degraded-backend signals: (1) SearXNG answered but every
+    result stayed undated even after the page-header probe, with nothing
+    from the newsroom tier either — hard-fails before scoring, nothing to
+    score. (2) D20 review B5: once scoring is done, a MAJORITY of the
+    configured search engines (_NEWS_MAJORITY_UNRESPONSIVE or more)
+    reporting unresponsive means result["written"] == 0 can no longer be
+    trusted as "genuinely no news" — regardless of how many raw candidates
+    were found — and fails the part (result["error"]); the same
+    majority-unresponsive backend with something actually written is only
+    worth a result["warning"]; fewer than that many unresponsive engines
+    sets neither, and no unresponsive engines at all guarantees error is
+    None. A total SearXNG outage (every query raised) is retried once after
+    20s before giving up as before; an LLM failure writes nothing. Returns
     {found, scored, written, max_relevance, error}, plus warning/
     unresponsive/newsroom_found when relevant."""
     name = client["name"]
@@ -2497,7 +2509,6 @@ async def _client_news_scan(
     candidates = data.get("candidates") or []
     unresponsive = data.get("unresponsive") or []
     undated_total = data.get("undated_total", 0)
-    news_zero_all = data.get("news_zero_all", False)
 
     try:
         newsroom_candidates, newsroom_blocked = await _newsroom_candidates(org_id, client)
@@ -2517,133 +2528,110 @@ async def _client_news_scan(
             except Exception as exc:
                 console.print(f"[yellow]news scan: playbook blocked_urls record failed for '{name}': {exc}[/yellow]")
 
-    degraded_reason = None
-    if not candidates and unresponsive and news_zero_all:
-        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
-        degraded_reason = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
-    elif not candidates and undated_total > 0:
-        degraded_reason = "search results undated"
-
-    newsroom_saves_it = len(newsroom_candidates) >= 3
-
-    # Hard pre-scoring fail: SearXNG returned NOTHING raw at all (either the
-    # backend itself is down, or every result came back undated) and the
-    # newsroom tier didn't find enough on its own to make up for it — no
-    # point spending an LLM call on a candidate list we already know is
-    # empty or unusable.
-    if degraded_reason and not newsroom_saves_it:
-        result["error"] = degraded_reason
-        if unresponsive:
-            result["unresponsive"] = unresponsive
-        return result
-
     if unresponsive:
         result["unresponsive"] = unresponsive
 
-    all_candidates = candidates + newsroom_candidates
+    # A distinct, non-engine-count concern: SearXNG answered but nothing
+    # ever got a usable date, even after the page-header probe, and the
+    # newsroom tier didn't turn up anything either — no point scoring an
+    # empty candidate list.
+    if not candidates and not newsroom_candidates and undated_total > 0:
+        result["error"] = "search results undated"
+        return result
 
+    all_candidates = candidates + newsroom_candidates
     existing = await _existing_signal_urls(org_id, client_id)
     fresh = [c for c in all_candidates if c["_norm_url"] not in existing]
     result["found"] = len(fresh)
-    if not fresh:
-        return result
-
-    prompt = _NEWS_SCORE_PROMPT.format(
-        subject=name, n=len(fresh), listing=_news_listing(fresh),
-        rules=_rules_block(await _news_lessons_block(org_id)),
-    )
-    try:
-        reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
-    except Exception as exc:
-        console.print(f"[yellow]news scan: LLM scoring failed for '{name}': {exc}[/yellow]")
-        result["error"] = f"llm scoring failed: {exc}"
-        return result
-
-    scores = _parse_json_list(reply)
-    result["scored"] = len(scores)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     good_queries: set[str] = set()
     written = 0
     max_rel = 0
-    for item in scores:
-        if written >= max_write:
-            break
-        if not isinstance(item, dict):
-            continue
-        try:
-            idx = int(item.get("i"))
-            relevance = int(item.get("relevance"))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= idx < len(fresh)) or relevance < 2:
-            continue
-        cand = fresh[idx]
-        norm = cand["_norm_url"]
-        url = cand.get("url", "")
-        headline = str(item.get("headline") or cand.get("title") or "")[:90]
-        why = str(item.get("why") or "")[:160]
-        signal_type = str(item.get("signal_type") or "news").strip().lower()
-        if signal_type not in ("opportunity", "risk", "pain_point", "news"):
-            signal_type = "news"
-        published = cand.get("_published")
-        doc_id = f"news-{client_id}-{hashlib.sha1(norm.encode()).hexdigest()[:10]}"
-        doc_db_id = await db_module.index_document(
-            org_id=org_id,
-            doc_id=doc_id,
-            doc_type="signal",
-            title=headline,
-            content=_write_news_signal_content(why, published, url),
-            metadata={
-                "source_url": url,
-                "published_at": published,
-                "signal_type": signal_type,
-                "relevance_score": relevance,
-                "subject": name,
-                "from_news_scan": True,
-                "query": cand.get("query", ""),
-                # D14 — which tier actually produced this signal (a SearXNG
-                # engine name like "bing news", or "newsroom" for the
-                # own-newsroom tier) — dropped before, so there was no way
-                # to audit after the fact which tier is doing the work.
-                "engine": cand.get("engine") or "",
-                "service": "python",
-            },
-            embedding=[],
-            source="agent",
-            agent_run_id=run_id,
+
+    if fresh:
+        prompt = _NEWS_SCORE_PROMPT.format(
+            subject=name, n=len(fresh), listing=_news_listing(fresh),
+            rules=_rules_block(await _news_lessons_block(org_id)),
         )
-        if doc_db_id and doc_db_id > 0:
-            await db_module.link_document(doc_db_id, "client", client_id)
-            written += 1
-            max_rel = max(max_rel, relevance)
-            if cand.get("query"):
-                good_queries.add(cand["query"])
+        try:
+            reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
+        except Exception as exc:
+            console.print(f"[yellow]news scan: LLM scoring failed for '{name}': {exc}[/yellow]")
+            result["error"] = f"llm scoring failed: {exc}"
+            return result
+
+        scores = _parse_json_list(reply)
+        result["scored"] = len(scores)
+
+        for item in scores:
+            if written >= max_write:
+                break
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("i"))
+                relevance = int(item.get("relevance"))
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= idx < len(fresh)) or relevance < 2:
+                continue
+            cand = fresh[idx]
+            norm = cand["_norm_url"]
+            url = cand.get("url", "")
+            headline = str(item.get("headline") or cand.get("title") or "")[:90]
+            why = str(item.get("why") or "")[:160]
+            signal_type = str(item.get("signal_type") or "news").strip().lower()
+            if signal_type not in ("opportunity", "risk", "pain_point", "news"):
+                signal_type = "news"
+            published = cand.get("_published")
+            doc_id = f"news-{client_id}-{hashlib.sha1(norm.encode()).hexdigest()[:10]}"
+            doc_db_id = await db_module.index_document(
+                org_id=org_id,
+                doc_id=doc_id,
+                doc_type="signal",
+                title=headline,
+                content=_write_news_signal_content(why, published, url),
+                metadata={
+                    "source_url": url,
+                    "published_at": published,
+                    "signal_type": signal_type,
+                    "relevance_score": relevance,
+                    "subject": name,
+                    "from_news_scan": True,
+                    "query": cand.get("query", ""),
+                    # D14 — which tier actually produced this signal (a SearXNG
+                    # engine name like "bing news", or "newsroom" for the
+                    # own-newsroom tier) — dropped before, so there was no way
+                    # to audit after the fact which tier is doing the work.
+                    "engine": cand.get("engine") or "",
+                    "service": "python",
+                },
+                embedding=[],
+                source="agent",
+                agent_run_id=run_id,
+            )
+            if doc_db_id and doc_db_id > 0:
+                await db_module.link_document(doc_db_id, "client", client_id)
+                written += 1
+                max_rel = max(max_rel, relevance)
+                if cand.get("query"):
+                    good_queries.add(cand["query"])
 
     result["written"] = written
     result["max_relevance"] = max_rel
 
-    # D20 (D3 residual) — decide the degraded signal from the ACTUAL outcome
-    # (written), not from raw counts alone: the WP7c symptom was a scan that
-    # found 1-5 raw candidates (so the pre-scoring `not candidates` gate
-    # above never fired), scored them, wrote nothing, and returned
-    # error:null — indistinguishable from "genuinely no news" even though
-    # 6-7 of 8 search engines were suspended. Fail the part explicitly
-    # whenever nothing got written AND the sample was too thin to trust
-    # (fewer than 3 raw+newsroom candidates) while any engine is
-    # unresponsive; keep it a warning once something was actually written,
-    # or the sample was large enough (>=3) to stand on its own despite the
-    # degraded backend.
-    if unresponsive:
+    # D20 review B5 — degraded signal from a MAJORITY of configured engines
+    # being unresponsive, independent of `found`: nothing written while
+    # most engines are down cannot be trusted as "genuinely no news" (fail
+    # the part); something written despite the same degraded backend is
+    # still worth flagging, not failing; fewer than a majority unresponsive,
+    # or none at all, sets neither.
+    if unresponsive and len(unresponsive) >= _NEWS_MAJORITY_UNRESPONSIVE:
         reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
-        if written == 0 and result["found"] < 3:
+        if written == 0:
             result["error"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
-        elif degraded_reason or news_zero_all:
-            # Search was flagged degraded on the way in (either the
-            # pre-scoring hard-fail check above, bypassed only because the
-            # newsroom tier saved it, or every news-category query came
-            # back zero) but enough landed (written, or >=3 raw candidates)
-            # to trust the outcome — still worth flagging, not failing.
+        else:
             result["warning"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
 
     if written:
