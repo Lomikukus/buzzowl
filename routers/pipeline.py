@@ -2518,8 +2518,12 @@ async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000)
         # rendered result).
         rendered, tier, links_html = await _fetch_rendered_tier(url, text, max_chars, wait_ms)
         text = re.sub(r"\s+", " ", rendered).strip()
-        if not html.strip() and links_html:
-            html = links_html
+        if links_html:
+            # Camofox rendered the page: its links are the only ones a JS shell
+            # (`<div id="root"></div>` + scripts) ever exposes, so append them
+            # to whatever the plain GET returned instead of only replacing an
+            # empty body — _harvest_links then sees both.
+            html = f"{html}\n{links_html}" if html.strip() else links_html
     _record_fetch_tier(url, tier if text else "none", len(text))
     return text, html
 
