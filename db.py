@@ -3193,6 +3193,7 @@ async def seed_default_heartbeats(org_id: int) -> None:
         ("rep_digest",      "0 8 */2 * *", "Every 2 days: build a short per-rep client digest (what's new + top next actions) for each seller; store as pending for admin review/send and Telegram-remind the admin."),
         ("task_reminder",   "0 8 * * *",   "Email each rep the tasks they have due today or overdue, so follow-ups don't slip."),
         ("research_qa",     "30 6 * * *",  "Sample recent agent-written research and flag quality problems (no LLM): stale synthesis that lags newer findings, cross-client contamination, and claims with no sources. Write flags into each doc + a QA summary report."),
+        ("lessons_review",  "0 7 * * 1",   "Propose cross-site navigation lessons from this week's playbooks and failed runs (human approval required)."),
     ]
     async with _pool.acquire() as conn:
         for agent_type, cron_expr, task in defaults:
