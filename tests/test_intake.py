@@ -1268,3 +1268,37 @@ class TestIntakeAPI:
         assert data["active"] is False
         assert data["parts"] == {}
         assert data["brief"] is None
+
+    def test_get_client_intake_requires_exact_name_match(self, app_client):
+        """WP10 D9: db_module.get_client is FUZZY (trigram similarity) — a
+        scripted /intake call for a name that only fuzzy-matches a different
+        client (e.g. "Vorwerk Test" matching "Vorwerk") must 404, not
+        silently return that other client's intake."""
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.get("/api/clients/Vorwerk%20Test/intake", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404
+
+        exact_hit = {"id": 3, "name": "Vorwerk Test", "metadata": {}}
+        pool = _mock_pool(fetchrow_return=None)
+        with (
+            patch("server.db_module.get_client", new_callable=AsyncMock, return_value=exact_hit),
+            patch("server.db_module._pool", pool),
+        ):
+            resp = app_client.get("/api/clients/Vorwerk%20Test/intake", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200
+        assert resp.json()["present"] is False
+
+    def test_post_news_scan_requires_exact_name_match(self, app_client):
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.post("/api/clients/Vorwerk%20Test/news/scan",
+                                    headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404
+
+    def test_post_jobs_scan_requires_exact_name_match(self, app_client):
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.post("/api/clients/Vorwerk%20Test/jobs/scan",
+                                    headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404

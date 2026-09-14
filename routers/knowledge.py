@@ -771,13 +771,17 @@ async def check_client_sources_endpoint(name: str, user: dict = Depends(current_
 @router.post("/api/clients/{name}/news/scan")
 async def scan_client_news_endpoint(name: str, user: dict = Depends(current_user)):
     """Run the news pipeline scan for this client right now (one text LLM
-    call, no Pi slot) and write any relevant fresh articles as signals."""
+    call, no Pi slot) and write any relevant fresh articles as signals.
+
+    WP10 D9: requires an EXACT (case-insensitive, trimmed) name match — see
+    get_client_intake's docstring above."""
     cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
-    client = await db_module.get_client(user["org_id"], name)
+    import playbook  # lazy: avoid an import cycle at module load
+    client = await playbook.resolve_client_exact(user["org_id"], name)
     if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+        raise HTTPException(status_code=404, detail="client not found (exact name required)")
     result = await _client_news_scan(user["org_id"], client)
     return {"ok": not result.get("error"), **result}
 
@@ -1515,12 +1519,18 @@ async def get_client_brief(name: str, user: dict = Depends(current_user)):
 async def get_client_intake(name: str, user: dict = Depends(current_user)):
     """Live intake-collection status for static/client.html's #intakeStrip.
     Always reads straight from the DB (no caching) so polling reflects the
-    true current state of the four parts + the brief gate."""
+    true current state of the four parts + the brief gate.
+
+    WP10 D9: an EXACT (case-insensitive, trimmed) name match is required here
+    — db_module.get_client's trigram-fuzzy fallback is for human
+    search-as-you-type, not a scripted status check, and would otherwise
+    silently hand e.g. "Vorwerk Test" back Vorwerk's own intake."""
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
-    client = await db_module.get_client(user["org_id"], name)
+    import playbook  # lazy: avoid an import cycle at module load
+    client = await playbook.resolve_client_exact(user["org_id"], name)
     if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+        raise HTTPException(status_code=404, detail="client not found (exact name required)")
 
     data = intake.summary(client.get("metadata") or {})
     brief_generated_at = None
