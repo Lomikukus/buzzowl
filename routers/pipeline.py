@@ -3834,7 +3834,7 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     it came from so the caller never has to re-derive it.
 
     `exclude` (D22): URLs already confirmed to be junior/student boards (this
-    scan's own retry loop, or a prior scan via careers.junior_board_url) —
+    scan's own retry loop, or a prior scan via careers.junior_board_urls) —
     never offered as a candidate at any tier, same treatment as the
     last_tried_url skip below."""
     name = client["name"]
@@ -4017,7 +4017,8 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
 
 
 async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = None, *,
-                                 exclude: Optional[set] = None) -> tuple[str, str]:
+                                 exclude: Optional[set] = None,
+                                 candidates_out: Optional[list] = None) -> tuple[str, str]:
     """Find a client's careers/jobs page. Cheap candidates (playbook, known
     metadata, homepage harvest, sitemap probe) come first and, if only one
     surfaces, it is used directly with no LLM call at all. Once SearXNG
@@ -4028,7 +4029,14 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     unavailable, unsure, or picks something off-domain.
 
     `exclude` (D22): passed straight through to _careers_candidates — URLs
-    already ruled out as junior/student boards this scan."""
+    already ruled out as junior/student boards this scan.
+
+    `candidates_out` (review budget): when given a list, the full filtered
+    candidate set — ranked highest-first by the same heuristic used as the
+    LLM-unavailable fallback below — is appended to it. Lets a caller
+    (_scan_client_jobs' D22 retry loop) reuse THIS ONE discovery pass's
+    results on a later retry instead of calling _discover_careers_url (and
+    therefore re-running SearXNG/probe/homepage rounds) a second time."""
     candidates = await _careers_candidates(org_id, client, pb, exclude=exclude)
     domain = _client_domain(client)
     # D27 — _careers_candidates already resolved (and cached in-memory on
@@ -4043,6 +4051,30 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     # through untouched, and that URL then persists in clients.metadata
     # forever once a scan writes it back.
     candidates = [c for c in candidates if _own_or_ats(c["url"], domain, alias)]
+
+    def _heuristic_rank(cands: list) -> list:
+        """own-domain / ATS-host + careers-ish keyword wins. An ATS host
+        counts on its own (score 2, same as own-domain) — a bare
+        "https://company.personio.de/" with no careers keyword in the URL
+        is still a real candidate worth ranking, not a 0-score drop. Every
+        candidate here already passed _own_or_ats above, so every one of
+        them scores at least 2 — nothing is ever dropped by this ranking,
+        only ordered."""
+        ranked: list[tuple[int, dict]] = []
+        for c in cands:
+            host = urlparse(c["url"]).netloc.lower().replace("www.", "")
+            is_own = (domain and (host == domain or host.endswith("." + domain))) \
+                  or (alias and (host == alias or host.endswith("." + alias)))
+            score = (2 if is_own else 0) \
+                  + (2 if _ats_match(host) else 0) \
+                  + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
+            ranked.append((score, c))
+        ranked.sort(key=lambda t: t[0], reverse=True)
+        return [c for _, c in ranked]
+
+    if candidates_out is not None:
+        candidates_out.extend(_heuristic_rank(candidates))
+
     if not candidates:
         return "", ""
     if len(candidates) == 1:
@@ -4076,24 +4108,11 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     except Exception as exc:
         console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
 
-    # Heuristic fallback: own-domain / ATS-host + careers-ish keyword wins, tier
-    # preserved. An ATS host counts on its own (score 2, same as own-domain) —
-    # a bare "https://company.personio.de/" with no careers keyword in the URL
-    # is still a real candidate worth returning, not a 0-score drop, when the
-    # LLM pick is unavailable.
-    ranked: list[tuple[int, dict]] = []
-    for c in candidates:
-        host = urlparse(c["url"]).netloc.lower().replace("www.", "")
-        is_own = (domain and (host == domain or host.endswith("." + domain))) \
-              or (alias and (host == alias or host.endswith("." + alias)))
-        score = (2 if is_own else 0) \
-              + (2 if _ats_match(host) else 0) \
-              + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
-        if score:
-            ranked.append((score, c))
+    # Heuristic fallback when the LLM pick is unavailable/unsure/off-domain:
+    # same ranking already computed for candidates_out above.
+    ranked = _heuristic_rank(candidates)
     if ranked:
-        ranked.sort(key=lambda t: t[0], reverse=True)
-        return ranked[0][1]["url"], ranked[0][1]["tier"]
+        return ranked[0]["url"], ranked[0]["tier"]
     return "", ""
 
 
@@ -4394,6 +4413,21 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     page. The LLM filters to IT/management roles and rejects category names;
     _filter_positions then drops junior/apprentice noise on top.
 
+    D22/review budget — a candidate that extracts positions but turns out to
+    be a junior/student board (B3: judged from RAW LLM-output titles, not
+    _filter_positions' post-dedup/cap count) is retried, up to
+    _MAX_CAREERS_ATTEMPTS total attempts (the first "real" pick plus at most
+    2 extra). The retries cost is bounded and does NOT scale with the full
+    per-attempt ladder: discovery itself (_discover_careers_url, so also its
+    own SearXNG/probe/homepage rounds) runs AT MOST ONCE per scan — a retry
+    just walks the SAME already-fetched candidate list — and each retry
+    replays only the ONE ladder stage (sitemap OR page-text) that won the
+    first attempt, never re-trying the other stage or the listing-link
+    follow-through. Worst case: main's own ladder (up to 1 sitemap + 1
+    page-text + up to 3 listing-link _extract_jobs calls) plus at most 2
+    more _extract_jobs calls (one per extra attempt) — not a multiple of
+    main's full cost.
+
     Every attempt — success or failure — is recorded: a failure stamps the
     existing jobs doc's last_attempt/last_error/attempts (bumping updated_at
     so _run_jobs_monitor's LRU rotation stops retrying a never-yielding client
@@ -4453,30 +4487,73 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     # D22 — a URL already confirmed (this scan, or a prior one) to be a
     # junior/student board is excluded at every tier below, not just
     # discovery's candidate list — this scan's own retry loop adds more of
-    # them as it rules candidates out.
-    junior_board_url = (careers_pb.get("junior_board_url") or "").strip()
-    excluded_urls: set = {junior_board_url} if junior_board_url else set()
+    # them as it rules candidates out. Review B3/B4 — the dated
+    # junior_board_urls list, not the old scalar junior_board_url.
+    excluded_urls: set = set(_active_junior_board_urls(careers_pb))
     junior_boards_found: list = []
+    # Review nit 4 — cheap (no live HTTP resolve) alias lookup for the
+    # listing-link harvest inside _extract_from below; _pick_url's own
+    # discovery call resolves (and caches) it properly when needed.
+    alias = _known_alias_domain(client, pb)
+
+    # Review budget — discovery (and therefore its own SearXNG/probe/
+    # homepage rounds) runs AT MOST ONCE per scan: the first time _pick_url
+    # falls through to it, the resulting (filtered, ranked) candidate list
+    # is cached here so a retry after a junior board just walks it instead
+    # of re-discovering from scratch.
+    discovery_done = False
+    discovered_candidates: list = []
 
     async def _pick_url() -> tuple[str, str]:
+        nonlocal discovery_done
         if pb_url and pb_url not in excluded_urls and _playbook_careers_fresh(careers_pb):
             return pb_url, "playbook"
         if arg_url and arg_url not in excluded_urls and not _recently_tried(arg_url):
             return arg_url, "argument"
         if meta_url and meta_url not in excluded_urls and not _recently_tried(meta_url):
             return meta_url, "metadata"
-        return await _discover_careers_url(org_id, client, pb, exclude=excluded_urls)
+        if not discovery_done:
+            discovery_done = True
+            return await _discover_careers_url(
+                org_id, client, pb, exclude=excluded_urls, candidates_out=discovered_candidates,
+            )
+        for c in discovered_candidates:
+            if c["url"] not in excluded_urls:
+                return c["url"], c["tier"]
+        return "", ""
 
-    async def _extract_from(start_url: str) -> tuple[list, list, int, str, bool, list]:
+    async def _extract_from(start_url: str, *, stage_only: str = "") -> tuple[list, list, int, int, int, str, bool, list]:
         """The sitemap -> page-text -> listing-link extraction ladder (D22
         split out of the main body so it can run once per candidate in the
-        retry loop below). Returns (positions, needs, filtered_out,
-        effective_url, needs_js, sitemap_jobs)."""
+        retry loop below).
+
+        `stage_only` (review budget): "" runs the full ladder (the first,
+        "real" attempt); "sitemap" or "page" — whichever stage produced the
+        FIRST attempt's (junior-board) result — restricts a retry attempt
+        to just that one stage, with NO listing-link follow-through, so
+        each extra attempt costs exactly one _extract_jobs call rather than
+        replaying the whole ladder.
+
+        Returns (positions, needs, filtered_out, raw_count, junior_raw_count,
+        effective_url, needs_js, sitemap_jobs). Review B3 — raw_count/
+        junior_raw_count are computed straight from whichever raw LLM
+        output tier ultimately won, counting _JUNIOR_TITLE_RE matches
+        directly — never derived from _filter_positions' filtered_out,
+        which also drops duplicates and caps at 20 (conflating "mostly
+        junior" with "mostly the same title repeated")."""
         positions: list = []
         needs: list = []
-        filtered_out = 0
+        raw_count = 0
+        junior_raw_count = 0
         needs_js_local = False
         effective = start_url
+        sitemap_jobs: list = []
+
+        def _count_junior(raw: list) -> int:
+            return sum(
+                1 for p in raw or []
+                if isinstance(p, dict) and _JUNIOR_TITLE_RE.search(str(p.get("title") or ""))
+            )
 
         # (1) Sitemap of actual postings — the JS-free ground truth. A JS-heavy
         # careers page (own-domain or ATS-hosted) only exposes category filters
@@ -4487,40 +4564,45 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         # Reuse the crawl _careers_candidates already did during discovery
         # instead of hitting the same sitemap a second time when the host
         # matches.
-        sitemap_cache = client.pop("_sitemap_cache", None)
-        url_host = urlparse(start_url).netloc.lower().replace("www.", "")
-        if sitemap_cache and sitemap_cache.get("host") == url_host:
-            sitemap_jobs = sitemap_cache.get("jobs") or []
-        else:
-            sitemap_jobs = await _sitemap_job_urls(start_url)
-        if len(sitemap_jobs) >= 1:
-            listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
-            listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
-            listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
-            raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
-            positions = _filter_positions(raw_positions)
-            filtered_out = len(raw_positions) - len(positions)
-            # D10 — a title here is only ever as good as the sitemap URL's
-            # slug (e.g. "IT Solution Architect Customer Serv", cut mid-word);
-            # the per-job-URL match below tries to replace it with the real
-            # posting page's <title>/<h1>.
-            for p in positions:
-                p["title_source"] = "slug"
+        if stage_only in ("", "sitemap"):
+            sitemap_cache = client.pop("_sitemap_cache", None)
+            url_host = urlparse(start_url).netloc.lower().replace("www.", "")
+            if sitemap_cache and sitemap_cache.get("host") == url_host:
+                sitemap_jobs = sitemap_cache.get("jobs") or []
+            else:
+                sitemap_jobs = await _sitemap_job_urls(start_url)
+            if len(sitemap_jobs) >= 1:
+                listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
+                listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
+                listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
+                raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
+                positions = _filter_positions(raw_positions)
+                raw_count = len(raw_positions)
+                junior_raw_count = _count_junior(raw_positions)
+                # D10 — a title here is only ever as good as the sitemap URL's
+                # slug (e.g. "IT Solution Architect Customer Serv", cut
+                # mid-word); the per-job-URL match below tries to replace it
+                # with the real posting page's <title>/<h1>.
+                for p in positions:
+                    p["title_source"] = "slug"
 
         # (2) Careers-page text (good for sites that list roles inline).
-        if not positions:
+        if not positions and stage_only in ("", "page"):
             text, html = await _fetch_page_raw(start_url, wait_ms=3500)
             plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()) if html else 0
             raw_positions, needs = await _extract_jobs(name, text, org_id)
             positions = _filter_positions(raw_positions)
-            filtered_out = len(raw_positions) - len(positions)
+            raw_count = len(raw_positions)
+            junior_raw_count = _count_junior(raw_positions)
             for p in positions:
                 p["title_source"] = "page"  # from the actual page text, never a slug
             if positions and plain_len < 500:
                 needs_js_local = True  # only the browser-rendered fallback found anything
             # (3) Landing page with no roles → follow its job-listing links.
-            if not positions and html:
-                for link in _harvest_links(html, start_url, _JOB_LINK_KEYS, domain):
+            # Only on the FIRST attempt (stage_only=="") — a retry replays
+            # exactly one stage, no further fan-out (review budget).
+            if not positions and html and not stage_only:
+                for link in _harvest_links(html, start_url, _JOB_LINK_KEYS, domain, alias=alias):
                     sub_text, sub_html = await _fetch_page_raw(link, wait_ms=5000)
                     sub_plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", sub_html)).strip()) \
                         if sub_html else 0
@@ -4528,25 +4610,29 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                     p2f = _filter_positions(p2)
                     if p2f:
                         positions, needs, effective = p2f, n2, link
-                        filtered_out = len(p2) - len(p2f)
+                        raw_count = len(p2)
+                        junior_raw_count = _count_junior(p2)
                         if sub_plain_len < 500:
                             needs_js_local = True
                         for p in positions:
                             p["title_source"] = "page"
                         break
 
-        return positions, needs, filtered_out, effective, needs_js_local, sitemap_jobs
+        filtered_out = raw_count - len(positions)
+        return positions, needs, filtered_out, raw_count, junior_raw_count, effective, needs_js_local, sitemap_jobs
 
     # D22 — try candidates in tier-precedence order; a page that extracts
     # positions but turns out to be a junior/student board (Trumpf's
     # Workday "TRUMPF_Students") is never accepted — it's remembered
-    # (careers.junior_board_url) and excluded, and the NEXT candidate is
+    # (careers.junior_board_urls) and excluded, and the NEXT candidate is
     # tried instead, bounded so a pathological run of junior boards can't
-    # spend unlimited LLM calls.
+    # spend unlimited LLM calls (see this function's own docstring for the
+    # exact worst-case budget).
     url, tier = "", ""
     original_url = ""
     effective_url = ""
     positions, needs, filtered_out, needs_js, sitemap_jobs = [], [], 0, False, []
+    winning_stage = ""  # "" == first attempt (full ladder); "sitemap"/"page" once locked in for retries
 
     for _attempt in range(_MAX_CAREERS_ATTEMPTS):
         cand_url, cand_tier = await _pick_url()
@@ -4555,18 +4641,30 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
             break
         url, tier = cand_url, cand_tier
         original_url = url
-        positions, needs, filtered_out, effective_url, needs_js, sitemap_jobs = await _extract_from(url)
+        positions, needs, filtered_out, raw_count, junior_raw_count, effective_url, needs_js, sitemap_jobs = \
+            await _extract_from(url, stage_only=winning_stage)
 
-        raw_count = filtered_out + len(positions)
-        if positions and raw_count > 0 and (filtered_out / raw_count) >= _JUNIOR_BOARD_MIN_RATIO \
-                and len(positions) < _JUNIOR_BOARD_MAX_REMAINING:
+        is_junior_board = (
+            raw_count >= _JUNIOR_BOARD_MIN_RAW_TITLES
+            and (junior_raw_count / raw_count) >= _JUNIOR_BOARD_MIN_RATIO
+            and len(positions) < _JUNIOR_BOARD_MAX_REMAINING
+        )
+        if is_junior_board:
+            if not winning_stage:
+                # Lock in which single stage keeps getting tried on
+                # retries — whichever one actually produced this (junior)
+                # result — inferred from title_source (review budget).
+                winning_stage = "sitemap" if (positions and positions[0].get("title_source") == "slug") else "page"
             junior_boards_found.append(effective_url)
             excluded_urls.add(url)
             excluded_urls.add(effective_url)
             if playbook is not None and domain:
                 try:
+                    now_iso_junior = datetime.now(timezone.utc).isoformat()
                     await playbook.record(
-                        org_id, domain, {"careers": {"junior_board_url": effective_url}}, run_id=run_id,
+                        org_id, domain,
+                        {"careers": {"junior_board_urls": [{"url": effective_url, "at": now_iso_junior}]}},
+                        run_id=run_id,
                     )
                 except Exception as exc:
                     console.print(f"[yellow]playbook junior-board record failed for {name}: {exc}[/yellow]")

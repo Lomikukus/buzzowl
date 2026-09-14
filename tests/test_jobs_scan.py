@@ -1548,10 +1548,14 @@ class TestJuniorBoardRetryScan:
         # only the professional board is, once.
         db.update_client_metadata.assert_awaited_once_with(1, "Acme", {"careers_url": self._PRO_URL})
 
-        # Playbook: a junior_board_url patch for the student board, AND the
-        # final success patch recording the professional board as careers.url.
-        junior_calls = [c for c in fake.record.await_args_list
-                        if (c.args[2].get("careers") or {}).get("junior_board_url") == self._STUDENT_URL]
+        # Playbook: a junior_board_urls patch for the student board (B4: a
+        # dated {url, at} list, not a scalar), AND the final success patch
+        # recording the professional board as careers.url.
+        junior_calls = [
+            c for c in fake.record.await_args_list
+            if any(e.get("url") == self._STUDENT_URL
+                   for e in (c.args[2].get("careers") or {}).get("junior_board_urls") or [])
+        ]
         assert len(junior_calls) == 1
         success_calls = [c for c in fake.record.await_args_list
                           if (c.args[2].get("careers") or {}).get("url") == self._PRO_URL]
@@ -1582,6 +1586,154 @@ class TestJuniorBoardRetryScan:
         assert "junior/student boards found" in summary["error"]
         assert self._STUDENT_URL in summary["error"]
         db.update_client_metadata.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_discovery_runs_at_most_once_across_retries(self, monkeypatch):
+        """Review budget — even when the first TWO candidates both turn out
+        to be junior boards (forcing 2 extra attempts, the max), discovery
+        itself (_discover_careers_url, and therefore its own SearXNG/probe/
+        homepage rounds) runs at most ONCE per scan; a retry just walks the
+        candidate list that one call already produced."""
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        student_url_2 = "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students_EU"
+        captured: dict = {}
+
+        async def fake_discover(_org_id, _client, _pb=None, *, exclude=None, candidates_out=None):
+            captured["exclude"] = set(exclude or set())
+            if candidates_out is not None:
+                candidates_out.extend([
+                    {"url": self._STUDENT_URL, "tier": "sitemap"},
+                    {"url": student_url_2, "tier": "sitemap"},
+                    {"url": self._PRO_URL, "tier": "sitemap"},
+                ])
+            return self._STUDENT_URL, "sitemap"
+
+        discover_mock = AsyncMock(side_effect=fake_discover)
+
+        def fake_fetch_page_raw(url, wait_ms=3500, **_kw):
+            if url in (self._STUDENT_URL, student_url_2):
+                return ("student board page text " * 60, "<html>student board</html>")
+            return ("professional board page text " * 60, "<html>professional board</html>")
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://trumpf.com")
+
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw", side_effect=fake_fetch_page_raw), \
+             patch.object(pipeline, "_extract_jobs", side_effect=self._fake_extract_jobs), \
+             patch.object(pipeline, "_discover_careers_url", discover_mock):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is True
+        assert summary["careers_url"] == self._PRO_URL
+        discover_mock.assert_awaited_once()  # not called again for the 2nd/3rd attempt
+
+    @pytest.mark.asyncio
+    async def test_retry_does_not_replay_sitemap_stage_when_page_won(self, monkeypatch):
+        """Review budget — a retry after a junior board replays ONLY the
+        stage that won the first attempt (here: page-text, since the
+        sitemap tier came up empty). _sitemap_job_urls must be called
+        exactly once total (attempt 1's full ladder), never again on the
+        retry for the professional-board candidate."""
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://trumpf.com", careers_url=self._STUDENT_URL)
+        sitemap_mock = AsyncMock(return_value=[])  # empty -> page-text tier wins on attempt 1
+        extract_jobs_mock = AsyncMock(side_effect=self._fake_extract_jobs)
+
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", sitemap_mock), \
+             patch.object(pipeline, "_fetch_page_raw", side_effect=self._fake_fetch_page_raw), \
+             patch.object(pipeline, "_extract_jobs", extract_jobs_mock), \
+             patch.object(pipeline, "_discover_careers_url",
+                           AsyncMock(return_value=(self._PRO_URL, "sitemap"))):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is True
+        # Attempt 1 (stage_only=""): one _sitemap_job_urls call (empty ->
+        # falls to page-text). Attempt 2 (stage_only="page", locked in from
+        # attempt 1's winning stage): the sitemap block is skipped
+        # entirely, so the count stays at 1 — not 2 — across both
+        # candidates tried.
+        assert sitemap_mock.await_count == 1
+        # Exactly one _extract_jobs call per attempt (no listing-link
+        # fan-out on the retry): student board (attempt 1) + professional
+        # board (attempt 2) = 2 total.
+        assert extract_jobs_mock.await_count == 2
+
+
+class TestJuniorBoardRatioIgnoresDuplicatesAndCap:
+    """Review B3, the reviewer's own measured false positive:
+    _filter_positions drops duplicates AND caps at 20, on top of dropping
+    junior titles — filtered_out therefore conflates "mostly junior" with
+    "mostly the same non-junior title repeated". The ratio must come from
+    counting _JUNIOR_TITLE_RE matches on the RAW titles directly."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_non_junior_titles_not_mistaken_for_junior_board(self, monkeypatch):
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        # 11 raw titles, ZERO junior — but dedup shrinks them to 3, which
+        # under the OLD filtered_out-based ratio (8/11 = 0.73) would have
+        # wrongly read as "mostly junior".
+        raw = [{"title": "Senior Engineer A"}] * 5 + [{"title": "Senior Engineer B"}] * 5 + [{"title": "Lead X"}]
+        reply = json.dumps({"positions": raw, "inferred_needs": []})
+
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("x" * 600, "<html></html>"))), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is True
+        assert summary["positions"] == 3
+        assert "error" not in summary or summary["error"] is None
+        fake.record.assert_awaited_once()  # a single SUCCESS patch, no junior-board patch
+        args, _ = fake.record.await_args
+        assert "junior_board_urls" not in (args[2].get("careers") or {})
+
+    @pytest.mark.asyncio
+    async def test_ratio_never_fires_below_the_minimum_raw_sample(self, monkeypatch):
+        """A raw sample smaller than _JUNIOR_BOARD_MIN_RAW_TITLES (8) never
+        triggers the junior-board rule, even at a 100% junior ratio — too
+        little data to call it "a board", not just a small landing-page
+        snippet."""
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        raw = [{"title": f"Werkstudent Team {i}"} for i in range(3)]  # all junior, but only 3 raw
+        reply = json.dumps({"positions": raw, "inferred_needs": []})
+
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("x" * 600, "<html></html>"))), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        # All 3 are junior and get filtered by _filter_positions itself —
+        # genuinely "no positions found", not a junior-board classification.
+        assert summary["found"] is False
+        assert summary["error"] == "no positions found on careers page"
+        args, _ = fake.record.await_args
+        assert "junior_board_urls" not in (args[2].get("careers") or {})
 
 
 class TestPlaybookIntegration:
@@ -1850,8 +2002,8 @@ class TestLastTriedUrlSkippedAsCandidate:
 
 # ---------------------------------------------------------------------------
 # D22 — a confirmed junior/student board is excluded from every candidate
-# tier, both via careers.junior_board_url (persisted) and the `exclude` kwarg
-# (this scan's own retry loop)
+# tier, both via careers.junior_board_urls (persisted) and the `exclude`
+# kwarg (this scan's own retry loop)
 # ---------------------------------------------------------------------------
 
 class TestJuniorBoardCandidateExclusion:
