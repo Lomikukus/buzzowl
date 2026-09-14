@@ -2253,3 +2253,15 @@ async def get_research_log(
     from agents.research_log import get_recent
     entries = get_recent(n=min(n, 500), subject=subject)
     return {"entries": entries, "count": len(entries)}
+
+
+@router.get("/api/agents/fetch-log")
+async def get_fetch_log(user: dict = Depends(current_user)):
+    """Which tier (plain http / browser-service / camofox) served each of
+    the last 50 page fetches — admin only. Lets an operator confirm which
+    tier is actually working on a given deployment (WP11)."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    from routers.pipeline import _FETCH_TIER_LOG  # lazy import — avoid circular at module load
+    entries = list(_FETCH_TIER_LOG)
+    return {"entries": entries, "count": len(entries)}
