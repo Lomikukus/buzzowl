@@ -23,6 +23,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import intake
+import routers.knowledge as knowledge
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -445,10 +446,12 @@ class TestPartDone:
 
         mock_brief = AsyncMock(return_value=True)
         mock_match = AsyncMock()
+        mock_rewrite = AsyncMock(return_value=True)
 
         with (
             patch("intake.db_module", db),
             patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.knowledge._rewrite_brief_close_out", mock_rewrite),
             patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
         ):
             # Phase 1: the deadline fires with news still running -> 'partial'.
@@ -467,6 +470,10 @@ class TestPartDone:
         assert intake.is_active(db.metadata) is False
         mock_brief.assert_awaited_once()  # unchanged since phase 1 — no regeneration
         mock_match.assert_called_once()  # the close-out still runs the match gate
+        # WP10 D4: the close-out must also patch the stored document's own
+        # banner/metadata (still saying "Partial ... refreshes automatically"
+        # from phase 1's write) — without a second LLM call.
+        mock_rewrite.assert_awaited_once_with(1, "Bosch AG", failed_parts=["news (failed: boom)"])
 
     async def test_finish_failure_resets_status_and_increments_attempt(self):
         state = _intake_state(parts=_parts(osint="done", research="done", jobs="done", news="done"))
@@ -782,6 +789,167 @@ class TestPartDone:
         brief_writes = [c for c in db.set_client_intake_path.call_args_list if c.args[2] == ["intake", "brief"]]
         assert brief_writes == []  # never overwrote the manual result
         mock_match.assert_not_called()  # no second, redundant match trigger
+
+
+# ---------------------------------------------------------------------------
+# WP10 D4 — a brief whose only missing part FAILED must not be stamped
+# "Partial" (that promises an automatic refresh that will never come).
+# ---------------------------------------------------------------------------
+
+class TestFinishSplitsPartialFromFailed:
+    async def test_all_terminal_one_failed_calls_auto_generate_brief_as_failed_only(self):
+        """_finish must not pass a terminal failure through `partial_missing`
+        (the old bug: intake._finish forwarded the same `missing` list — open
+        AND failed parts together — as `partial_missing` regardless of
+        outcome). When every part is terminal and the only "missing" one
+        FAILED, _auto_generate_brief must be called with `failed_parts` only,
+        `partial_missing` falsy."""
+        state = _intake_state(parts=_parts(osint="done", research="done", jobs="failed", news="done"))
+        db = _fake_db(cas_client_intake_brief=AsyncMock(return_value={"intake": state}),
+                       get_client=AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": {"intake": state}}))
+        mock_brief = AsyncMock(return_value=True)
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.agents._maybe_trigger_pain_point_research", new_callable=AsyncMock),
+        ):
+            await intake._finish(1, "Bosch AG", missing=["jobs (failed: no careers page found)"], refresh=False)
+
+        assert mock_brief.await_count == 1
+        kwargs = mock_brief.call_args.kwargs
+        assert not kwargs.get("partial_missing")
+        assert kwargs.get("failed_parts") == ["jobs (failed: no careers page found)"]
+
+    async def test_open_part_still_uses_partial_missing_only(self):
+        """The ordinary 'still open' case is unchanged: a bare part name (no
+        '(failed: ' tag) goes to `partial_missing`, and `failed_parts` is
+        never passed at all (mirrors today's call shape exactly, so a caller
+        with a narrow `partial_missing=None`-only signature — see
+        test_finish_recomputes_when_parts_land_during_generation — still
+        works)."""
+        state = _intake_state(parts=_parts(osint="done", research="done", jobs="done", news="running"))
+        db = _fake_db(cas_client_intake_brief=AsyncMock(return_value={"intake": state}),
+                       get_client=AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": {"intake": state}}))
+
+        async def fake_generate(org_id, client_name, *, partial_missing=None):
+            fake_generate.kwargs = {"partial_missing": partial_missing}
+            return True
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", fake_generate),
+            patch("routers.agents._maybe_trigger_pain_point_research", new_callable=AsyncMock),
+        ):
+            await intake._finish(1, "Bosch AG", missing=["news"], refresh=False)
+
+        assert fake_generate.kwargs == {"partial_missing": ["news"]}
+
+
+class TestAutoGenerateBriefBanners:
+    """routers.knowledge._auto_generate_brief renders (and records) the two
+    outcomes distinctly (WP10 D4): a still-open part keeps the "Partial
+    brief ... refreshes automatically" promise, a permanently failed one
+    gets a "Not collected" note that makes no such promise."""
+
+    async def _generate(self, **kwargs):
+        fake_client = {"id": 5, "org_id": 1, "metadata": {}}
+        captured = {}
+
+        async def fake_index_document(**call_kwargs):
+            captured.update(call_kwargs)
+            return 42
+
+        with (
+            patch("routers.knowledge.db_module.get_client", AsyncMock(return_value=fake_client)),
+            patch("routers.knowledge._build_brief_context", AsyncMock(return_value="context")),
+            patch("routers.knowledge.llm.acomplete", AsyncMock(return_value="## Executive Summary\nBody text")),
+            patch("routers.knowledge.db_module.embed_text", AsyncMock(return_value=[0.1])),
+            patch("routers.knowledge.db_module.index_document", AsyncMock(side_effect=fake_index_document)),
+            patch("routers.knowledge.db_module.link_document", AsyncMock(return_value=None)),
+        ):
+            ok = await knowledge._auto_generate_brief(1, "Trumpf", **kwargs)
+        return ok, captured
+
+    async def test_failed_parts_only_renders_not_collected_no_refresh_promise(self):
+        ok, doc = await self._generate(failed_parts=["jobs (failed: no careers page found)"])
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == []
+        assert doc["metadata"]["failed_parts"] == ["jobs (failed: no careers page found)"]
+        assert "Not collected" in doc["content"]
+        assert "jobs (no careers page found)" in doc["content"]
+        assert "refreshes automatically" not in doc["content"]
+        assert "## Executive Summary" in doc["content"]  # generated body preserved
+
+    async def test_partial_missing_only_keeps_todays_banner(self):
+        ok, doc = await self._generate(partial_missing=["news"])
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == ["news"]
+        assert doc["metadata"]["failed_parts"] == []
+        assert "Partial brief — missing: news" in doc["content"]
+        assert "refreshes automatically" in doc["content"]
+        assert "Not collected" not in doc["content"]
+
+    async def test_neither_missing_nor_failed_has_no_banner(self):
+        ok, doc = await self._generate()
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == []
+        assert doc["metadata"]["failed_parts"] == []
+        assert "Partial brief" not in doc["content"]
+        assert "Not collected" not in doc["content"]
+
+
+class TestRewriteBriefCloseOut:
+    """routers.knowledge._rewrite_brief_close_out — the no-LLM-call document
+    patch used by intake._maybe_finish's 'partial' -> all_terminal close-out
+    (WP10 D4)."""
+
+    async def test_rewrites_partial_banner_in_place_without_llm(self):
+        old_content = (
+            "> **Partial brief — missing: jobs (failed: no careers page found)**. "
+            "It refreshes automatically when the missing parts arrive.\n\n"
+            "## Executive Summary\nTRUMPF is a manufacturing-tech company."
+        )
+        row = {
+            "doc_id": "brief-abc123-2026-09-14",
+            "content": old_content,
+            "metadata": {"subject": "Trumpf", "partial": ["jobs (failed: no careers page found)"]},
+        }
+        pool = _mock_pool(fetchrow_return=row)
+        update_mock = AsyncMock(return_value=None)
+        llm_mock = AsyncMock()
+
+        with (
+            patch("routers.knowledge.db_module._pool", pool),
+            patch("routers.knowledge.db_module.update_document", update_mock),
+            patch("llm.acomplete", llm_mock),
+        ):
+            result = await knowledge._rewrite_brief_close_out(
+                1, "Trumpf", failed_parts=["jobs (failed: no careers page found)"],
+            )
+
+        assert result is True
+        llm_mock.assert_not_called()
+        update_mock.assert_awaited_once()
+        org_id, doc_id, patch_arg = update_mock.call_args.args
+        assert org_id == 1
+        assert doc_id == "brief-abc123-2026-09-14"
+        assert "Not collected" in patch_arg["content"]
+        assert "jobs (no careers page found)" in patch_arg["content"]
+        assert "refreshes automatically" not in patch_arg["content"]
+        assert "## Executive Summary" in patch_arg["content"]  # body untouched
+        assert patch_arg["metadata"]["partial"] == []
+        assert patch_arg["metadata"]["failed_parts"] == ["jobs (failed: no careers page found)"]
+        assert patch_arg["metadata"]["subject"] == "Trumpf"  # other metadata preserved
+
+    async def test_no_document_is_a_no_op(self):
+        pool = _mock_pool(fetchrow_return=None)
+        with patch("routers.knowledge.db_module._pool", pool):
+            result = await knowledge._rewrite_brief_close_out(1, "Nobody", failed_parts=[])
+        assert result is False
 
 
 # ---------------------------------------------------------------------------

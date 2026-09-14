@@ -126,6 +126,13 @@ regeneration: the brief is closed out as `written` with the failed part named
 in `intake.brief.missing`. After the refresh (`brief.refreshed_at` set),
 nothing reopens it automatically again.
 
+The brief document itself keeps `metadata.partial`/`metadata.failed_parts`
+separate (WP10 D4): `partial` (and the "Partial brief — missing: …" banner
+that promises an automatic refresh) is only ever set while parts are
+genuinely still open, while `failed_parts` names parts that reached a
+terminal failure — rendered as a muted "Not collected: …" note with no
+refresh promise, since none is coming.
+
 **Absolute cap.** `intake_absolute_cap_min` (`config.yaml`, default 90)
 counts from `intake.started_at` and force-finishes the intake regardless of
 the deadline, e.g. when a part never leaves `queued` at all.

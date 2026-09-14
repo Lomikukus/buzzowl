@@ -1505,13 +1505,14 @@ async def get_client_brief(name: str, user: dict = Depends(current_user)):
             user["org_id"], client["id"],
         )
     if not row:
-        return {"brief": None, "generated_at": None, "partial": []}
+        return {"brief": None, "generated_at": None, "partial": [], "failed_parts": []}
     row_meta = row["metadata"] or {}
     return {
         "brief": row["content"],
         "generated_at": str(row["created_at"])[:19],
         "doc_id": row["id"],
         "partial": row_meta.get("partial") or [],
+        "failed_parts": row_meta.get("failed_parts") or [],
     }
 
 
@@ -1551,7 +1552,30 @@ async def get_client_intake(name: str, user: dict = Depends(current_user)):
     return data
 
 
-async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing: Optional[list] = None) -> bool:
+# One-click rescan hint per Python-driven intake part, used by
+# _failed_parts_banner() below — osint/research are Pi-agent runs with no
+# equivalent one-off "scan now" control, so they fall back to a generic hint.
+_RESCAN_HINT = {"jobs": "Jobs → Scan now", "news": "News → Scan now"}
+
+
+def _failed_parts_banner(failed_parts: list) -> str:
+    """Render the `> **Not collected:** …` blockquote line for one or more
+    permanently-FAILED intake parts (WP10 D4). `failed_parts` entries look
+    like `"jobs (failed: no careers page found)"` (intake._missing_parts's
+    format for a failed part) — this strips the `(failed: …)` tag down to a
+    plain `(…)` reason for the human-facing note and appends a re-run hint
+    (the client page's "Jobs → Scan now" / "News → Scan now" button for a
+    single jobs/news failure; a generic pointer otherwise)."""
+    notes = [fp.replace(" (failed: ", " (", 1) for fp in failed_parts]
+    names = [fp.split(" (", 1)[0] for fp in failed_parts]
+    if len(names) == 1 and names[0] in _RESCAN_HINT:
+        return (f"> **Not collected:** {notes[0]}. Re-run from the client page "
+                f"({_RESCAN_HINT[names[0]]}) to add it.")
+    return f"> **Not collected:** {', '.join(notes)}. Re-run from the client page to add it."
+
+
+async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing: Optional[list] = None,
+                                failed_parts: Optional[list] = None) -> bool:
     """Generate a brief from an internal call (no HTTP context). Returns True on success.
 
     partial_missing: set by intake.py when the 25-minute collection window ran
@@ -1559,6 +1583,13 @@ async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing
     parts are named up front in the brief text itself, and recorded on the
     document's metadata so the UI can show a badge; intake.py writes the same
     doc_id again (a refresh) once the missing part arrives.
+
+    failed_parts: set by intake.py (WP10 D4) for parts that reached a
+    TERMINAL failure instead — e.g. jobs scan found no careers page. Unlike
+    partial_missing, a failed part will never "arrive" on its own, so it gets
+    its own "Not collected" note with no refresh promise, and is recorded
+    separately in metadata.failed_parts rather than folded into
+    metadata.partial (which stays [] whenever nothing is still open).
     """
     try:
         client = await db_module.get_client(org_id, client_name)
@@ -1575,14 +1606,15 @@ async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing
                 f"> **Partial brief — missing: {', '.join(partial_missing)}**. "
                 "It refreshes automatically when the missing parts arrive.\n\n" + brief_content
             )
+        elif failed_parts:
+            brief_content = _failed_parts_banner(failed_parts) + "\n\n" + brief_content
         doc_id_str = f"brief-{hashlib.sha256(client_name.encode()).hexdigest()[:12]}-{today}"
         embedding = await db_module.embed_text(brief_content[:512])
         metadata = {"subject": client_name, "generated_date": today}
+        metadata["partial"] = list(partial_missing) if partial_missing else []
+        metadata["failed_parts"] = list(failed_parts) if failed_parts else []
         if partial_missing:
-            metadata["partial"] = list(partial_missing)
             metadata["partial_at"] = datetime.now(timezone.utc).isoformat()
-        else:
-            metadata["partial"] = []
         doc_id = await db_module.index_document(
             org_id=org_id,
             doc_id=doc_id_str,
@@ -1596,11 +1628,65 @@ async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing
         if doc_id > 0:
             await db_module.link_document(doc_id, "client", client["id"])
         logger.info("_auto_generate_brief: brief generated for '%s'%s", client_name,
-                    " (partial)" if partial_missing else "")
+                    " (partial)" if partial_missing else (" (not collected)" if failed_parts else ""))
         return True
     except Exception as exc:
         logger.warning("_auto_generate_brief: failed for '%s': %s", client_name, exc)
         return False
+
+
+_PARTIAL_BANNER_PREFIX = "> **Partial brief"
+
+
+async def _rewrite_brief_close_out(org_id: int, client_name: str, *, failed_parts: list) -> bool:
+    """WP10 D4 close-out path: intake._maybe_finish's 'partial' -> all_terminal
+    branch closes a client's collection point as 'written' WITHOUT calling
+    _auto_generate_brief again (no new content to fold in — everything still
+    open when the partial brief was written has since FAILED, not finished).
+    But that partial brief's document already has the "> **Partial brief —
+    missing: …**. It refreshes automatically…" banner baked into its content
+    from whichever _finish() call originally wrote it, and that promise is
+    now false. Patch the stored document in place instead of running the LLM
+    a second time: a bounded string-replace of the banner's first blockquote
+    line only (the generated brief content beneath it is never touched), and
+    clear metadata.partial in favour of metadata.failed_parts.
+
+    Returns True if a document was found and patched, False otherwise (e.g.
+    no brief was ever written for this client, or the DB is unavailable) —
+    the caller treats either as non-fatal.
+    """
+    if not db_module._pool:
+        return False
+    async with db_module._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT d.doc_id, d.content, d.metadata
+            FROM documents d
+            JOIN document_links dl ON dl.document_id = d.id AND dl.entity_type = 'client'
+            JOIN clients c ON c.id = dl.entity_id
+            WHERE d.org_id = $1 AND c.name ILIKE $2 AND d.type = 'client_brief'
+            ORDER BY d.created_at DESC LIMIT 1
+            """,
+            org_id, client_name,
+        )
+    if not row:
+        return False
+    content = row["content"] or ""
+    first_line, sep, rest = content.partition("\n")
+    if first_line.startswith(_PARTIAL_BANNER_PREFIX):
+        if failed_parts:
+            content = _failed_parts_banner(failed_parts) + sep + rest
+        else:
+            # Nothing actually failed either (a rare edge case — see
+            # _maybe_finish's 'all_terminal' branch docstring): the "Partial"
+            # promise no longer applies at all, so drop the banner entirely
+            # rather than leave a stale one behind.
+            content = rest.lstrip("\n")
+    metadata = dict(row["metadata"] or {})
+    metadata["partial"] = []
+    metadata["failed_parts"] = list(failed_parts) if failed_parts else []
+    await db_module.update_document(org_id, row["doc_id"], {"content": content, "metadata": metadata})
+    return True
 
 
 @router.post("/api/clients/{name}/brief")

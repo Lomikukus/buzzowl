@@ -463,6 +463,19 @@ async def _maybe_finish(org_id: int, client_name: str, meta: dict, *, force: boo
                     org_id, client_name, ["intake", "brief"],
                     {**brief, "status": "written", "missing": _missing_parts(parts), "closed_at": _iso(_now())},
                 )
+                # WP10 D4: the document itself still carries the "Partial
+                # brief — missing: … It refreshes automatically…" banner
+                # baked in by whichever _finish() call originally wrote it —
+                # false now that nothing is left open to arrive. Patch the
+                # stored document's banner/metadata in place too (no LLM
+                # call), mirroring the intake-state patch just above.
+                failed = [m for m in _missing_parts(parts) if " (failed: " in m]
+                try:
+                    from routers.knowledge import _rewrite_brief_close_out
+                    await _rewrite_brief_close_out(org_id, client_name, failed_parts=failed)
+                except Exception as exc:
+                    logger.warning("intake._maybe_finish: brief close-out rewrite failed for '%s': %s",
+                                    client_name, exc)
                 # Mirror _finish's own match-trigger guard (skip if a match
                 # report already exists): the original partial write already
                 # triggered one (see _finish, refresh=False always triggers),
@@ -543,10 +556,23 @@ async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh:
     cas_won_at = _parse_iso(now)
     await db_module.set_client_intake_path(org_id, client_name, ["intake", "brief", "entered_writing_at"], now)
 
+    # WP10 D4: `missing` (from `_missing_parts`) mixes two different
+    # situations that used to share one "Partial brief — missing: …" banner —
+    # a part still queued/running (which really will "arrive" and trigger
+    # the one-time refresh) and a part that already reached a TERMINAL
+    # failure (which never will). Split them apart here so only the former
+    # keeps that promise; the latter gets its own "Not collected" note with
+    # no refresh promise instead (see _auto_generate_brief).
+    partial_missing = [m for m in missing if " (failed: " not in m]
+    failed_parts = [m for m in missing if " (failed: " in m]
+
     from routers.knowledge import _auto_generate_brief
     try:
         async with _INTAKE_LLM_SEM:
-            ok = await _auto_generate_brief(org_id, client_name, partial_missing=missing or None)
+            brief_kwargs = {"partial_missing": partial_missing or None}
+            if failed_parts:
+                brief_kwargs["failed_parts"] = failed_parts
+            ok = await _auto_generate_brief(org_id, client_name, **brief_kwargs)
     except Exception as exc:
         ok = False
         logger.warning("intake._finish: brief generation raised for '%s': %s", client_name, exc)
