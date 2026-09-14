@@ -1295,6 +1295,90 @@ class TestTierPrecedenceAndNoDowngrade:
 
 
 # ---------------------------------------------------------------------------
+# D16 — a careers URL with zero extractable positions is never cached
+# ---------------------------------------------------------------------------
+
+class TestZeroPositionsCareersUrlNotCached:
+    """D16, measured regression: Trumpf's SPA-shell careers page 200s but
+    the LLM extracts zero positions from it. The old code cached it to
+    clients.metadata.careers_url anyway, so the NEXT scan took the
+    "metadata" tier branch, skipped discovery entirely, and repeated the
+    exact same failure forever."""
+
+    @pytest.mark.asyncio
+    async def test_metadata_careers_url_not_written_on_zero_positions(self, monkeypatch):
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://trumpf.com",
+                          careers_url="https://trumpf.com/de_INT/karriere/stellenangebote/")
+        empty_reply = json.dumps({"positions": [], "inferred_needs": []})
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw",
+                           AsyncMock(return_value=("x" * 600, "<html></html>"))), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=empty_reply)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is False
+        assert summary["error"] == "no positions found on careers page"
+        db.update_client_metadata.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_playbook_records_last_tried_url_not_url_on_zero_positions(self, monkeypatch):
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        careers_url = "https://trumpf.com/de_INT/karriere/stellenangebote/"
+        client = _client(website="https://trumpf.com", careers_url=careers_url)
+        empty_reply = json.dumps({"positions": [], "inferred_needs": []})
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw",
+                           AsyncMock(return_value=("x" * 600, "<html></html>"))), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=empty_reply)):
+            await pipeline._scan_client_jobs(1, client)
+
+        args, _ = fake.record.await_args
+        careers_patch = args[2]["careers"]
+        assert careers_patch.get("last_tried_url") == careers_url
+        assert "url" not in careers_patch
+        assert careers_patch["error"] == "no positions found on careers page"
+
+
+class TestLastTriedUrlSkippedAsCandidate:
+    @pytest.mark.asyncio
+    async def test_recently_failed_url_excluded_from_candidates(self):
+        client = _client(website="https://acme.com", careers_url="https://acme.com/karriere")
+        pb = {"careers": {"last_tried_url": "https://acme.com/karriere",
+                           "last_failure_at": datetime.now(timezone.utc).isoformat()}}
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            candidates = await pipeline._careers_candidates(1, client, pb)
+        assert all(c["url"] != "https://acme.com/karriere" for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_stale_last_tried_url_no_longer_excluded(self):
+        client = _client(website="https://acme.com", careers_url="https://acme.com/karriere")
+        old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        pb = {"careers": {"last_tried_url": "https://acme.com/karriere", "last_failure_at": old}}
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            candidates = await pipeline._careers_candidates(1, client, pb)
+        assert any(c["url"] == "https://acme.com/karriere" for c in candidates)
+
+
+# ---------------------------------------------------------------------------
 # D7 — own-domain path-probe failures feed playbook.blocked_urls
 # ---------------------------------------------------------------------------
 

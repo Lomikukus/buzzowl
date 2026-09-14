@@ -3102,6 +3102,12 @@ _PATH_PROBE_STOP_AFTER_HITS = 2
 _PATH_PROBE_BROWSER_RETRY_MAX = 2
 _PATH_PROBE_BLOCK_DAYS = 14
 
+# D16 — a careers URL that 200'd but yielded zero extractable positions
+# (careers.last_tried_url, stamped by _scan_client_jobs' "no positions found"
+# failure) is excluded from _careers_candidates for this many days, so
+# discovery doesn't just hand the exact same known-bad URL straight back.
+_CAREERS_LAST_TRIED_SKIP_DAYS = 7
+
 
 def _ats_match(host: str) -> bool:
     """True when `host` IS one of _ATS_HOSTS (label-anchored) or a subdomain of
@@ -3517,14 +3523,33 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     candidates: list[dict] = []
     seen: set = set()
 
+    careers_pb = (pb or {}).get("careers") or {}
+
+    # D16 — a URL careers.last_tried_url + last_failure_at recorded as "found
+    # nothing" within the last _CAREERS_LAST_TRIED_SKIP_DAYS days is skipped
+    # as a candidate from EVERY tier below (not just the playbook one it came
+    # from), so a homepage/sitemap/path-probe re-discovery of the exact same
+    # dead end doesn't just hand it straight back either.
+    last_tried_url = (careers_pb.get("last_tried_url") or "").strip()
+    last_tried_skip = False
+    if last_tried_url:
+        last_failure_at = careers_pb.get("last_failure_at")
+        if last_failure_at:
+            try:
+                last_tried_skip = (datetime.now(timezone.utc) - datetime.fromisoformat(last_failure_at)) \
+                    <= timedelta(days=_CAREERS_LAST_TRIED_SKIP_DAYS)
+            except (ValueError, TypeError):
+                last_tried_skip = False
+
     def _add(url: str, tier: str, title: str = "") -> None:
         url = (url or "").strip()
         if not url.startswith("http") or url in seen:
             return
+        if last_tried_skip and url == last_tried_url:
+            return
         seen.add(url)
         candidates.append({"url": url, "tier": tier, "title": title[:120]})
 
-    careers_pb = (pb or {}).get("careers") or {}
     pb_blocked = (pb or {}).get("blocked_urls") or []
     pb_url = (careers_pb.get("url") or "").strip()
     if pb_url:
@@ -4000,11 +4025,21 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
             return
         effective_tier = report_tier if report_tier is not None else tier
         careers_patch: dict = {}
-        # Omit "url" entirely when there's nothing to report (e.g. the "no
-        # careers page found" path) — an empty string here would clobber a
-        # good previously-recorded playbook URL. last_failure_at / error
-        # below still get recorded either way.
-        if url:
+        # D16 — a URL that resolved (200) but yielded zero extractable
+        # positions (e.g. Trumpf's SPA shell) is NOT "the careers URL that
+        # works": recording it as careers.url let the exact same failure
+        # resurface next scan via the metadata-cached branch above and
+        # repeat forever. Record it separately as last_tried_url instead so
+        # _careers_candidates can skip re-suggesting this one URL for a
+        # while but still finds a real careers page through another tier.
+        no_positions_failure = not success and reason == "no positions found on careers page"
+        if no_positions_failure and url:
+            careers_patch["last_tried_url"] = url
+        elif url:
+            # Omit "url" entirely when there's nothing to report (e.g. the
+            # "no careers page found" path) — an empty string here would
+            # clobber a good previously-recorded playbook URL. last_failure_at
+            # / error below still get recorded either way.
             careers_patch["url"] = url
         # D5 — "metadata"/"playbook" mean "we already knew the URL", not a
         # fresh discovery: writing them back as `tier` would erase whatever
@@ -4131,9 +4166,6 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                         p["title_source"] = "page"
                     break
 
-    if effective_url and effective_url != meta.get("careers_url"):
-        await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
-
     # From here on `url` always means the URL actually used/found — both the
     # failure stamp below and the success write further down must persist
     # this (effective_url), not the originally discovered/known one; a
@@ -4144,6 +4176,14 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     # Nothing found anywhere — keep any prior good scan, just record we looked.
     if not positions and not needs:
         return await _stamp_failure("no positions found on careers page")
+
+    # D16 — only cache a careers URL once it has actually produced >=1
+    # position. A URL that 200s but yields nothing extractable (e.g.
+    # Trumpf's SPA shell) must not be written to clients.metadata: that
+    # would make the NEXT scan take the "metadata" branch above, skip
+    # discovery entirely, and repeat this exact same failure forever.
+    if positions and effective_url and effective_url != meta.get("careers_url"):
+        await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
 
     # Attach each position's own posting URL (the sitemap path gives per-job URLs;
     # match the LLM-cleaned title back to the closest sitemap title).
