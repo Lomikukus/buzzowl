@@ -1321,6 +1321,10 @@ class TestManualBriefClosesIntake:
         with (
             patch("routers.knowledge.DB_AVAILABLE", True),
             patch("routers.knowledge.db_module", db),
+            # generate_client_brief now resolves {name} via
+            # playbook.resolve_client_exact (WP10 D9), which uses playbook's
+            # own db_module reference — point it at the same fake.
+            patch("playbook.db_module", db),
             patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
             patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
         ):
@@ -1358,6 +1362,7 @@ class TestManualBriefClosesIntake:
         with (
             patch("routers.knowledge.DB_AVAILABLE", True),
             patch("routers.knowledge.db_module", db),
+            patch("playbook.db_module", db),
             patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
             patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
         ):
@@ -1456,6 +1461,12 @@ class TestIntakeAPI:
             resp = app_client.get("/api/clients/Vorwerk%20Test/intake", headers={"Authorization": "Bearer fake"})
         assert resp.status_code == 200
         assert resp.json()["present"] is False
+
+    def test_post_brief_requires_exact_name_match(self, app_client):
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.post("/api/clients/Vorwerk%20Test/brief", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404
 
     def test_post_news_scan_requires_exact_name_match(self, app_client):
         fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}

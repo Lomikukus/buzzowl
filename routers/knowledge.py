@@ -1691,12 +1691,16 @@ async def _rewrite_brief_close_out(org_id: int, client_name: str, *, failed_part
 
 @router.post("/api/clients/{name}/brief")
 async def generate_client_brief(name: str, user: dict = Depends(current_user)):
-    """Generate (or regenerate) the intelligence brief for a client. Runs the cloud model."""
+    """Generate (or regenerate) the intelligence brief for a client. Runs the cloud model.
+
+    WP10 D9: requires an EXACT (case-insensitive, trimmed) name match — see
+    get_client_intake's docstring above."""
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
-    client = await db_module.get_client(user["org_id"], name)
+    import playbook  # lazy: avoid an import cycle at module load
+    client = await playbook.resolve_client_exact(user["org_id"], name)
     if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+        raise HTTPException(status_code=404, detail="client not found (exact name required)")
 
     db_module.log_prompt(user["org_id"], user["id"], "brief", name, {"client": name})
 
