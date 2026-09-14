@@ -48,5 +48,15 @@ else
 fi
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 \
-  && echo "✓ $IMAGE ready — now run: docker compose up -d" \
   || { echo "Build finished but $IMAGE is missing — check the output above." >&2; exit 1; }
+
+# The upstream Dockerfile unzips the Camoufox archive with `|| true`, so a
+# truncated download still "builds" — the image then starts, answers /health,
+# and fails every browser launch (missing libxul.so). Refuse such an image.
+for f in camoufox-bin libxul.so libnspr4.so properties.json; do
+  docker run --rm --entrypoint sh "$IMAGE" -c "test -f /root/.cache/camoufox/$f" \
+    || { echo "✗ $IMAGE is incomplete: /root/.cache/camoufox/$f is missing." >&2
+         echo "  Delete it (docker rmi $IMAGE) and rebuild; check disk space and the download." >&2
+         exit 1; }
+done
+echo "✓ $IMAGE ready (Camoufox files verified) — now run: docker compose up -d"
