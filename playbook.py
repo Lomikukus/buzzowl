@@ -427,6 +427,21 @@ def _is_own_domain(url: str, domain: str) -> bool:
     return bool(host) and (host == domain or host.endswith("." + domain))
 
 
+_CAREERS_CANDIDATE_PATH_RE = re.compile(r"karriere|career|jobs|stellen", re.IGNORECASE)
+
+
+def _ats_match_safe(host: str) -> bool:
+    """Lazy, best-effort import of routers.pipeline._ats_match — mirrors
+    _infer_domain's guard below against the routers.pipeline <-> playbook
+    import cycle (routers/pipeline.py imports playbook, never the reverse,
+    at module load time)."""
+    try:
+        from routers.pipeline import _ats_match
+    except Exception:
+        return False
+    return _ats_match(host)
+
+
 def classify_tool_calls(tool_calls: list, domain: str) -> dict:
     """Pure function: turn a run's raw tool-call log into playbook signals.
 
@@ -445,12 +460,22 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
     subdomain) — a run that got 403'd on a THIRD-PARTY site (e.g. a
     competitor's page cited as evidence) must not tell future runs on the
     CLIENT's own site to avoid that third-party URL.
+
+    careers_candidate_url (D2, WP8): the best URL a CLEAN fetch_page (never
+    one of the sentinels above) landed on that looks like the client's
+    careers/ATS page — either a known ATS host, or an own-domain path
+    containing a careers word (karriere|career|jobs|stellen). Scored ATS
+    first (a real applicant-tracking-system hit always outranks a merely
+    careers-worded own-domain URL); ties keep the first one seen. This is
+    only ever a CANDIDATE — routers/pipeline.py's _scan_client_jobs is still
+    the sole writer of careers.url/tier (see _reflect_on_run_body).
     """
     blocked_urls: list = []
     good_queries: list = []
     failed_queries: list = []
     no_content_own_domain = 0
     pending_searches: list = []  # (index, query)
+    careers_candidates: list = []  # (score, index, url)
     now = _now_iso()
 
     for i, tc in enumerate(tool_calls or []):
@@ -494,12 +519,26 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
             for j, query in pending_searches:
                 if 0 < i - j <= 3 and query not in good_queries:
                     good_queries.append(query)
+            # D2 — this same clean fetch may also be a careers/ATS candidate.
+            host = _host_of(url)
+            is_ats = _ats_match_safe(host)
+            is_careers_path = _is_own_domain(url, domain) and bool(
+                _CAREERS_CANDIDATE_PATH_RE.search(urlparse(url).path)
+            )
+            if is_ats or is_careers_path:
+                careers_candidates.append((2 if is_ats else 1, i, url))
+
+    careers_candidate_url = ""
+    if careers_candidates:
+        careers_candidates.sort(key=lambda t: (-t[0], t[1]))
+        careers_candidate_url = careers_candidates[0][2]
 
     return {
         "blocked_urls": blocked_urls[-_MAX_BLOCKED_URLS:],
         "good_queries": good_queries[:_MAX_QUERY_LIST],
         "failed_queries": failed_queries[:_MAX_QUERY_LIST],
         "needs_js": no_content_own_domain >= 2,
+        "careers_candidate_url": careers_candidate_url,
     }
 
 
@@ -717,6 +756,16 @@ async def _reflect_on_run_body(org_id: int, db_run_id: int, subject: Optional[st
         "failed_queries": classified["failed_queries"],
         "needs_js": classified["needs_js"],
     }
+    # D2 — feed a careers/ATS URL a Pi run turned up into the playbook as a
+    # CANDIDATE only: careers.url/tier stay the scanner's (routers/pipeline.py
+    # _scan_client_jobs) to write; _merge_dict_field's scalar-overwrite means
+    # each new run's candidate simply replaces the last one (bounded to 1).
+    if classified.get("careers_candidate_url"):
+        patch["careers"] = {
+            "candidate_url": classified["careers_candidate_url"],
+            "candidate_source": "pi-run",
+            "candidate_at": _now_iso(),
+        }
     if len(tool_calls) >= _REFLECT_LLM_MIN_TOOL_CALLS:
         try:
             notes = await _llm_navigation_notes(org_id, domain, tool_calls)
