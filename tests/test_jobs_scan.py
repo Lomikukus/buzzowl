@@ -412,7 +412,10 @@ class TestResolveSiteDomain:
         assert pb_args[2] == {"aliases": ["vorwerk.com"]}
 
     @pytest.mark.asyncio
-    async def test_no_redirect_returns_own_domain_and_writes_nothing(self, monkeypatch):
+    async def test_no_redirect_returns_own_domain_but_still_caches_the_check(self, monkeypatch):
+        """Review nit 5 — even a healthy, no-redirect client stamps
+        canonical_checked_at (just not canonical_domain), so it too gets
+        the 30-day cache instead of a fresh homepage GET on every call."""
         fake_pb = MagicMock()
         fake_pb.record = AsyncMock()
         monkeypatch.setitem(sys.modules, "playbook", fake_pb)
@@ -425,9 +428,13 @@ class TestResolveSiteDomain:
             domain = await pipeline._resolve_site_domain(1, client)
 
         assert domain == "acme.com"
-        db.update_client_metadata.assert_not_awaited()
         fake_pb.record.assert_not_awaited()
+        db.update_client_metadata.assert_awaited_once()
+        args = db.update_client_metadata.await_args.args
+        assert args[0] == 1 and args[1] == "Acme"
+        assert args[2] == {"canonical_checked_at": args[2]["canonical_checked_at"]}
         assert "canonical_domain" not in client["metadata"]
+        assert client["metadata"]["canonical_checked_at"]
 
     @pytest.mark.asyncio
     async def test_cached_canonical_domain_skips_the_http_call(self, monkeypatch):
@@ -439,6 +446,20 @@ class TestResolveSiteDomain:
             domain = await pipeline._resolve_site_domain(1, client)
 
         assert domain == "vorwerk.com"
+        ac.assert_not_called()
+        db.update_client_metadata.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cached_no_alias_skips_the_http_call(self):
+        """Review nit 5's other half: the cache also short-circuits for a
+        client that was already checked and found to have NO redirect."""
+        fresh = datetime.now(timezone.utc).isoformat()
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", canonical_checked_at=fresh)
+        with db_patch, patch.object(pipeline.httpx, "AsyncClient") as ac:
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "acme.com"
         ac.assert_not_called()
         db.update_client_metadata.assert_not_awaited()
 
@@ -475,7 +496,158 @@ class TestResolveSiteDomain:
         with db_patch, patch.object(pipeline.httpx, "AsyncClient", side_effect=ConnectionError):
             domain = await pipeline._resolve_site_domain(1, client)
         assert domain == "vorwerk.de"
-        db.update_client_metadata.assert_not_awaited()
+        # Still caches "checked, nothing to adopt" (nit 5) so a persistently
+        # unreachable homepage doesn't get hit again on every single call.
+        db.update_client_metadata.assert_awaited_once()
+        assert db.update_client_metadata.await_args.args[2] == {
+            "canonical_checked_at": db.update_client_metadata.await_args.args[2]["canonical_checked_at"],
+        }
+
+    # -- Review B1: reject redirect targets that aren't plausibly the same
+    # company ---------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_parking_host_rejected(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://example.de")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://sedoparking.com/some-page"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "example.de"
+        fake_pb.record.assert_not_awaited()
+        assert "canonical_domain" not in client["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_aggregator_rejected(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://example.de")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://www.linkedin.com/company/example"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "example.de"
+        fake_pb.record.assert_not_awaited()
+        assert "canonical_domain" not in client["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_ats_host_rejected(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://example.de")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>",
+                                      url="https://boards.greenhouse.io/example"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "example.de"
+        fake_pb.record.assert_not_awaited()
+        assert "canonical_domain" not in client["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_redirect_with_mismatched_sld_label_rejected(self, monkeypatch):
+        """A registrable 2-label domain that isn't itself an aggregator/ATS/
+        parking host must still be rejected when it's simply a different
+        company (SLD label mismatch) — the measured example.de scenario."""
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://example.de")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://www.unrelated-company.com"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "example.de"
+        fake_pb.record.assert_not_awaited()
+        assert "canonical_domain" not in client["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_redirect_strips_subdomain_before_sld_check(self, monkeypatch):
+        """The vorwerk case, restated with a subdomain redirect target: a
+        redirect landing on jobs.vorwerk.com must resolve to the
+        REGISTRABLE domain vorwerk.com before the SLD-match check, not be
+        rejected for "jobs" != "vorwerk"."""
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://vorwerk.de")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://jobs.vorwerk.com/karriere"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "vorwerk.com"
+        args = db.update_client_metadata.await_args.args
+        assert args[2]["canonical_domain"] == "vorwerk.com"
+
+    # -- Review B2: cross-client leakage -------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_cross_client_domain_leakage_rejected(self, monkeypatch):
+        """A redirect target already recorded as some OTHER client's own
+        website domain must never be adopted as this client's alias, even
+        if it would otherwise pass every B1 check (SLD label happens to
+        match too — the point is this domain is already spoken for)."""
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        fake_pb._domain_belongs_to_a_client = AsyncMock(return_value=True)
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(name="Acme Subsidiary", website="https://acme-sub.de")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://acme-sub.com"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "acme-sub.de"
+        fake_pb._domain_belongs_to_a_client.assert_awaited_once_with(
+            1, "acme-sub.com", exclude_name="Acme Subsidiary",
+        )
+        fake_pb.record.assert_not_awaited()
+        assert "canonical_domain" not in client["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_cross_client_check_uses_real_domain_belongs_to_a_client(self, monkeypatch):
+        """End-to-end with the REAL playbook.py function (not a stub): two
+        clients in the same org, one already recording the domain the other
+        client's homepage happens to redirect to."""
+        import playbook as real_playbook
+
+        db = MagicMock()
+        db.update_client_metadata = AsyncMock()
+        db.list_clients = AsyncMock(return_value=[
+            {"id": 2, "name": "Sibling Co", "metadata": {"website": "https://acme-sub.com"}},
+        ])
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(real_playbook, "db_module", db), \
+             _patch_httpx_dynamic(
+                 lambda u: _fake_response(200, "<html></html>", url="https://acme-sub.com"),
+             ):
+            client = _client(name="Acme Subsidiary", website="https://acme-sub.de")
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "acme-sub.de"
+        assert "canonical_domain" not in client["metadata"]
 
 
 class TestVorwerkCanonicalDomainDiscovery:
@@ -1874,6 +2046,7 @@ class TestLastTriedAtDoesNotResetFromUnrelatedFailures:
              patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", self._HOME_HTML))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="")), \
              _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
             summary = await pipeline._scan_client_jobs(1, client)
 
@@ -1908,6 +2081,7 @@ class TestLastTriedAtDoesNotResetFromUnrelatedFailures:
                            AsyncMock(return_value=("x" * 600, self._HOME_HTML))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="")), \
              patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
             summary = await pipeline._scan_client_jobs(1, client)
 

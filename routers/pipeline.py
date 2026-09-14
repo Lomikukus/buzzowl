@@ -996,36 +996,102 @@ def _site_base(website: str) -> str:
 # Vorwerk — every genuine careers-page result on vorwerk.com was dropped).
 _CANONICAL_DOMAIN_RECHECK_DAYS = 30
 
+# Review B1 — ccTLD-style compound public suffixes where the registrable
+# domain is the last THREE labels, not two (acme.co.uk, not co.uk itself).
+# Not a full public-suffix list — a small, deliberately bounded set of the
+# common ones this codebase's clients (mostly DE/EU B2B) are likely to hit.
+_MULTI_PART_PUBLIC_SUFFIXES = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "ltd.uk", "plc.uk",
+    "co.jp", "co.nz", "co.za", "co.in", "co.kr", "co.id",
+    "com.au", "com.br", "com.mx", "com.tr", "com.sg", "com.hk", "com.cn",
+}
+
+# Review B1 — domain parking / for-sale placeholder hosts a broken redirect
+# can land on; never a company's own site regardless of any other check.
+_PARKING_HOST_DOMAINS = {
+    "sedoparking.com", "sedo.com", "parkingcrew.net", "bodis.com", "above.com",
+    "parklogic.com", "dan.com", "hugedomains.com", "godaddy.com", "afternic.com",
+    "undeveloped.com", "domainmarket.com", "namecheap.com", "parked.com",
+    "trellian.com", "voodoo.com", "uniregistry.com",
+}
+
+
+def _registrable_domain(host: str) -> str:
+    """The registrable domain of `host`: the last two labels, or the last
+    three when the last two form a known compound public suffix
+    (_MULTI_PART_PUBLIC_SUFFIXES, e.g. "acme.co.uk" not "co.uk"). Strips a
+    leading "www." first. '' in (or too few labels to have one), same
+    string back out."""
+    host = (host or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    labels = [l for l in host.split(".") if l]
+    if len(labels) < 2:
+        return host
+    last_two = ".".join(labels[-2:])
+    if last_two in _MULTI_PART_PUBLIC_SUFFIXES and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return last_two
+
+
+def _registrable_sld_label(host: str) -> str:
+    """The single label identifying the registrant within the registrable
+    domain — "vorwerk" from both vorwerk.com and vorwerk.co.uk. Used to
+    require a redirect target to plausibly be the SAME company under a
+    different TLD/ccTLD, not merely "some other 2-label domain"."""
+    labels = _registrable_domain(host).split(".")
+    return labels[0] if labels and labels[0] else ""
+
 
 async def _resolve_site_domain(org_id: int, client: dict) -> str:
     """GET the client's homepage once (_site_base, following redirects, 10s)
-    and, if the final resolved host's registrable domain differs from
-    _client_domain(client), record it as metadata.canonical_domain (and
-    stamp metadata.canonical_checked_at) so _own_or_ats and the news block's
-    own-domain checks can treat BOTH as "own". Also records the alias on the
-    domain's site playbook (aliases: [canonical]) — the playbook document
-    itself stays keyed by the ORIGINAL domain (site-playbook-vorwerk.de).
+    and, if the final resolved host's REGISTRABLE domain (_registrable_
+    domain — strips subdomains, so a redirect to jobs.vorwerk.com still
+    resolves to vorwerk.com) differs from _client_domain(client), record it
+    as metadata.canonical_domain (and stamp metadata.canonical_checked_at)
+    so _own_or_ats and the news block's own-domain checks can treat BOTH as
+    "own". Also records the alias on the domain's site playbook
+    (aliases: [canonical]) — the playbook document itself stays keyed by
+    the ORIGINAL domain (site-playbook-vorwerk.de).
 
-    Cached: the resolution GET is skipped when metadata.canonical_domain is
-    already set and metadata.canonical_checked_at is younger than
-    _CANONICAL_DOMAIN_RECHECK_DAYS days — this is a real HTTP request, not a
-    cheap check.
+    Review B1 — a redirect target is adopted ONLY when it plausibly IS the
+    same company: rejected outright when it's a known aggregator
+    (_AGGREGATOR_DOMAINS), an ATS host (_ats_match), a domain-parking host
+    (_PARKING_HOST_DOMAINS), or its registrable-domain SLD label doesn't
+    match the original's (vorwerk.de -> vorwerk.com: "vorwerk" == "vorwerk",
+    accepted; example.de -> sedoparking.com/linkedin.com/some-unrelated.com:
+    SLD mismatch, rejected). A rejected or absent redirect returns the
+    client's own domain unchanged — never a wrong adopted one.
 
-    Returns the canonical domain when a redirect to a different registrable
-    domain was found (this call or a cached prior one), else _client_domain
-    (client)'s own domain unchanged. Never "" when a domain could be
-    determined at all."""
+    Review B2 — cross-client leakage guard: a candidate alias is also
+    rejected when it's already recorded as some OTHER client's own website
+    domain (playbook._domain_belongs_to_a_client), so two unrelated clients
+    whose sites happen to both redirect toward the same third domain (or an
+    acquired subsidiary now folded into a sibling client's own site) never
+    adopt each other's domain as an alias.
+
+    Review nit 5 — metadata.canonical_checked_at is stamped on EVERY live
+    check, found-a-redirect or not, so a healthy client (the common case)
+    also gets the 30-day cache and doesn't pay for a fresh homepage GET on
+    every single discovery/news call.
+
+    Cached: the resolution GET is skipped when metadata.canonical_checked_at
+    is younger than _CANONICAL_DOMAIN_RECHECK_DAYS days, returning whatever
+    metadata.canonical_domain says (possibly "").
+
+    Returns the canonical domain when an accepted redirect was found (this
+    call or a cached prior one), else _client_domain(client)'s own domain
+    unchanged. Never "" when a domain could be determined at all."""
     domain = _client_domain(client)
     if not domain:
         return ""
     meta = client.get("metadata") or {}
-    cached = (meta.get("canonical_domain") or "").strip()
     checked_at = meta.get("canonical_checked_at")
-    if cached and checked_at:
+    if checked_at:
         try:
             if (datetime.now(timezone.utc) - datetime.fromisoformat(checked_at)) \
                     <= timedelta(days=_CANONICAL_DOMAIN_RECHECK_DAYS):
-                return cached
+                return (meta.get("canonical_domain") or "").strip() or domain
         except (ValueError, TypeError):
             pass
 
@@ -1040,32 +1106,46 @@ async def _resolve_site_domain(org_id: int, client: dict) -> str:
         ) as http:
             resp = await http.get(website)
             final_host = urlparse(str(resp.url)).netloc.lower()
-            final_host = final_host[4:] if final_host.startswith("www.") else final_host
             if final_host:
-                resolved_domain = final_host
+                resolved_domain = _registrable_domain(final_host)
     except Exception:
         resolved_domain = domain
 
-    canonical = resolved_domain if resolved_domain != domain else ""
-    if not canonical:
-        # Nothing to persist — the recorded domain is still correct. Not
-        # writing canonical_checked_at here is deliberate (not just an
-        # optimization): that field's only job is caching a FOUND alias, per
-        # this function's own docstring — a healthy client with no redirect
-        # has nothing to cache, and stamping it anyway would only add a
-        # write with no payoff (the next call would still need to check
-        # again, alias or not, since nothing here can regress).
-        return domain
+    canonical = ""
+    if resolved_domain != domain:
+        # B1 — reject an aggregator/ATS/parking host, or one whose SLD
+        # label doesn't match the original's (not plausibly the same
+        # company under a different TLD).
+        if (resolved_domain not in _AGGREGATOR_DOMAINS
+                and resolved_domain not in _PARKING_HOST_DOMAINS
+                and not _ats_match(resolved_domain)
+                and _registrable_sld_label(resolved_domain) == _registrable_sld_label(domain)):
+            canonical = resolved_domain
+
+    if canonical:
+        # B2 — never adopt a domain that's already someone ELSE's own site.
+        try:
+            import playbook  # type: ignore
+            if await playbook._domain_belongs_to_a_client(org_id, canonical, exclude_name=client["name"]):
+                canonical = ""
+        except Exception as exc:
+            console.print(f"[yellow]canonical-domain cross-client check failed for {client['name']}: {exc}[/yellow]")
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    patch = {"canonical_domain": canonical, "canonical_checked_at": now_iso}
+    patch: dict = {"canonical_checked_at": now_iso}
+    if canonical:
+        patch["canonical_domain"] = canonical
     try:
         await db_module.update_client_metadata(org_id, client["name"], patch)
     except Exception as exc:
         console.print(f"[yellow]canonical-domain resolve failed for {client['name']}: {exc}[/yellow]")
-    meta["canonical_domain"] = canonical
     meta["canonical_checked_at"] = now_iso
+    if canonical:
+        meta["canonical_domain"] = canonical
     client["metadata"] = meta
+
+    if not canonical:
+        return domain
 
     try:
         import playbook  # type: ignore
@@ -1073,6 +1153,25 @@ async def _resolve_site_domain(org_id: int, client: dict) -> str:
     except Exception as exc:
         console.print(f"[yellow]canonical-domain alias record failed for {client['name']}: {exc}[/yellow]")
     return canonical
+
+
+def _known_alias_domain(client: dict, pb: Optional[dict]) -> str:
+    """Review nit 2 — the client's canonical alias domain, if already known,
+    WITHOUT triggering a new resolution (_resolve_site_domain is the only
+    writer): prefer a live metadata.canonical_domain (this session's own
+    resolution, or a prior one already persisted to this client); fall back
+    to the domain's site playbook aliases list (written by a resolution
+    from a different call site, run, or session) when metadata doesn't have
+    it yet. Returns "" when nothing is known."""
+    canonical = ((client.get("metadata") or {}).get("canonical_domain") or "").strip()
+    if canonical:
+        return canonical
+    aliases = (pb or {}).get("aliases") or []
+    for a in aliases:
+        a = (a or "").strip()
+        if a:
+            return a
+    return ""
 
 
 # Aggregator/registry/social domains that are never a company's own website
