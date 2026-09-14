@@ -1554,6 +1554,31 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
                     "AND content ILIKE $2 ORDER BY created_at DESC LIMIT 1",
                     org_id, f"%{client_name}%",
                 )
+            # D15 backstop — some Pi builds still write the match_synthesis
+            # report as type='research' (the generic final-report type
+            # every other agent uses) despite the prompt and the tools.ts-
+            # side coercion. That document is then invisible to every
+            # type='match_report' consumer even though match_status is
+            # reported as done below. Recover it by run id and promote it
+            # in place rather than leaving the client stuck on a "done"
+            # match no page can find.
+            if not doc:
+                research_doc = await conn.fetchrow(
+                    "SELECT id FROM documents WHERE org_id=$1 AND agent_run_id=$2 AND type='research' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    org_id, int(svc_run_id),
+                )
+                if research_doc:
+                    await conn.execute(
+                        "UPDATE documents SET type='match_report' WHERE id=$1",
+                        research_doc["id"],
+                    )
+                    doc = research_doc
+                    logger.warning(
+                        "_handle_match_synthesis_callback: coerced doc %s from type='research' to "
+                        "'match_report' for run=%s client=%s org=%d",
+                        research_doc["id"], svc_run_id, client_name, org_id,
+                    )
 
         from datetime import datetime, timezone as _tz
         now_iso = datetime.now(_tz.utc).isoformat()

@@ -40,6 +40,7 @@ export function buildTools(
   subject: string,
   toolCallLog: Array<{ tool: string; args: unknown; result: string; ts: string }>,
   useBrowserFetch = false,
+  agentType = '',
   sourcesAcc?: SourceRef[],
 ): AgentTool[] {
   function log(tool: string, args: unknown, result: string) {
@@ -216,6 +217,16 @@ export function buildTools(
         source_url?: string; client_name?: string; scope?: string; industry?: string;
         relevance_score?: number; signal_type?: string;
       };
+      // D15 — a match_synthesis run's ONLY final-report type is
+      // "match_report"; the model occasionally writes "research" instead
+      // (the generic final-report type every other agent uses), which
+      // makes the report invisible to every type='match_report' consumer
+      // even though match_status is reported as done. Coerce it here,
+      // closer to the source than the Python backstop in routers/agents.py
+      // (_handle_match_synthesis_callback).
+      if (agentType === 'match_synthesis' && p.type !== 'match_report') {
+        p.type = 'match_report';
+      }
       try {
         // Strip benchmark isolation tag (e.g. "Sartorius [pi]" → "Sartorius")
         const effectiveClient = (p.client_name ?? subject).replace(/\s*\[.*?\]\s*$/, '').trim();
