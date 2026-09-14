@@ -122,7 +122,15 @@ def is_active(meta: Optional[dict]) -> bool:
     if not intake:
         return False
     brief = intake.get("brief") or {}
-    return brief.get("status") not in _TERMINAL_BRIEF_STATES
+    status = brief.get("status")
+    if not status:
+        # A NULL/missing status can't match list_clients_with_open_intake()'s
+        # `= ANY(['waiting','writing','partial'])` WHERE clause (NULL = ANY
+        # is NULL, never TRUE) — treat it as inactive here too, or sweep()
+        # could disagree with is_active() about whether this client's
+        # collection point is still open.
+        return False
+    return status not in _TERMINAL_BRIEF_STATES
 
 
 def summary(meta: Optional[dict]) -> dict:
