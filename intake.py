@@ -55,6 +55,17 @@ def _spawn_background(coro) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(_log_background_failure)
+
+
+def _log_background_failure(task: "asyncio.Task") -> None:
+    """Surface an exception that escaped a backgrounded _maybe_finish as a
+    warning instead of asyncio's late "Task exception was never retrieved"."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("intake background task failed: %s", exc, exc_info=exc)
 
 
 # ---------------------------------------------------------------------------
