@@ -182,6 +182,11 @@ transcription_mode: app
 pipeline_sweep_interval_min: 10  # how often the agent sweep scans for unprocessed sessions
 org_agent_enabled: false          # set true to re-enable daily cron + post-research auto-trigger
 
+# Client intake: collects a new/re-triggered client's osint+research+jobs+news
+# parts into one account brief instead of racing a brief per finished part.
+intake_deadline_min: 25          # minutes after the first Pi part reaches 'running' before a partial brief is written
+intake_absolute_cap_min: 90      # minutes after intake starts before it is force-finished regardless of part status
+
 # Heartbeat throttling — research/osint/match heartbeats no longer hit every client.
 # Focus clients (★ on the client page) are monitored on schedule; for osint runs a
 # no-LLM SearXNG news fingerprint skips clients whose news picture hasn't changed.
