@@ -142,6 +142,57 @@ class TestDiscoverSources:
 
 
 # ---------------------------------------------------------------------------
+# _harvest_links_news — routed through _fetch_page_raw's plain -> browser ->
+# Camofox ladder (Trumpf fix), not a bare httpx GET of its own
+# ---------------------------------------------------------------------------
+
+class TestHarvestLinksNewsRenderedTier:
+    @pytest.mark.asyncio
+    async def test_uses_fetch_page_raw_camofox_fallback_when_plain_get_503s(self):
+        """trumpf.com 503s a plain GET of the homepage, so the old bare-httpx
+        implementation never saw its /de_DE/newsroom/ link at all — even
+        though Camofox renders the page fine. Routing through _fetch_page_raw
+        (plain -> browser-service -> Camofox, _camofox_links_html rebuilding
+        <a href> tags from the snapshot) must recover it."""
+        camofox_links_html = '<a href="https://www.trumpf.com/de_DE/newsroom/">Newsroom</a>'
+
+        def _resolver(url):
+            resp = MagicMock(status_code=503, text="")
+            resp.url = url
+            return resp
+
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=lambda u: _resolver(u))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(pipeline.httpx, "AsyncClient", return_value=ctx), \
+             patch.object(pipeline, "_fetch_rendered_tier",
+                           AsyncMock(return_value=("Newsroom", "camofox", camofox_links_html))):
+            hits = await pipeline._harvest_links_news(
+                "https://www.trumpf.com", ("newsroom", "presse", "press"), "trumpf.com",
+            )
+
+        assert hits == [{"url": "https://www.trumpf.com/de_DE/newsroom/", "label": "Newsroom"}]
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_fetch_page_raw_not_its_own_http_call(self):
+        """Same contract TestDiscoverSources relies on: _harvest_links_news
+        stays a single mockable unit with its original name/signature — a
+        caller (or a test) that patches _fetch_page_raw sees it used, no
+        separate raw httpx client of its own."""
+        html = '<a href="https://acme.com/press">Press</a>'
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", html))) as fetch_raw, \
+             patch.object(pipeline.httpx, "AsyncClient") as httpx_client:
+            hits = await pipeline._harvest_links_news("https://acme.com", ("press",), "acme.com")
+
+        fetch_raw.assert_awaited_once_with("https://acme.com")
+        httpx_client.assert_not_called()
+        assert hits == [{"url": "https://acme.com/press", "label": "Press"}]
+
+
+# ---------------------------------------------------------------------------
 # _fetch_source_fp
 # ---------------------------------------------------------------------------
 

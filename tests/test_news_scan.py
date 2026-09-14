@@ -1318,36 +1318,43 @@ class TestClientNewsScan:
         assert call.args[2] == {"blocked_urls": blocked}
 
     @pytest.mark.asyncio
-    async def test_unresponsive_but_not_degraded_still_reported_alongside_found(self):
-        """Some engines down but real dated candidates still came back — not
-        degraded, so it proceeds normally, but the caller still learns which
-        engines were unresponsive."""
+    async def test_unresponsive_but_something_written_is_not_degraded(self):
+        """Some engines down but a real dated candidate still came back AND
+        scored well — a genuinely healthy outcome despite the flaky engine,
+        so it's neither an error nor a warning; the caller still learns
+        which engines were unresponsive."""
         client = _client("Acme GmbH")
         unresponsive = [["brave", "Suspended: too many requests"]]
         cand = [{"url": "https://acme.com/news/1", "title": "t", "content": "c",
                  "_norm_url": "acme.com/news/1", "_published": _RECENT_ISO, "query": "q"}]
+        reply = json.dumps([{"i": 0, "relevance": 3, "signal_type": "news", "headline": "h", "why": "w"}])
         db = MagicMock()
         db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=101)
+        db.link_document = AsyncMock()
         with patch.object(pipeline, "db_module", db), \
              patch.object(pipeline, "_news_candidates",
                           AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive))), \
              _no_newsroom(), \
-             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
             result = await pipeline._client_news_scan(1, client)
         assert result["error"] is None
+        assert "warning" not in result
+        assert result["written"] == 1
         assert result["unresponsive"] == unresponsive
 
     @pytest.mark.asyncio
-    async def test_candidates_exist_but_news_queries_degraded_sets_warning(self):
-        """WP9 review nit 1: both original degraded branches required
-        `not candidates`, so "every news-category query dead, but the
-        site: domain query still returned something" read as healthy. It
-        should warn (not error — there IS a candidate) since the news
-        search itself was degraded."""
+    async def test_thin_sample_written_zero_while_degraded_sets_error(self):
+        """D20 (D3 residual) — the exact WP7c symptom: SearXNG's news-
+        category queries were all degraded (news_zero_all), but a single
+        candidate still came through a non-news query (found=1, so the
+        pre-scoring `not candidates` gate never fires) and the LLM scored
+        it too low to write. A written:0 outcome built on fewer than 3 raw
+        candidates while engines are suspended cannot be trusted as
+        "genuinely no news" — this must fail the part (error), not read as
+        error:null or even just a warning."""
         client = _client("Acme GmbH", website="https://www.acme.com")
         unresponsive = [["brave", "Suspended: too many requests"]]
-        # A candidate that came from the site:domain (general-category)
-        # query, not from a news-category one — every news query was zero.
         cand = [{"url": "https://acme.com/press-release", "title": "t", "content": "c",
                  "_norm_url": "acme.com/press-release", "_published": _RECENT_ISO, "query": "site:acme.com"}]
         db = MagicMock()
@@ -1358,10 +1365,63 @@ class TestClientNewsScan:
              _no_newsroom(), \
              patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
             result = await pipeline._client_news_scan(1, client)
+        assert result["written"] == 0
+        assert result["found"] == 1
+        assert result["error"] is not None
+        assert "search degraded" in result["error"]
+        assert "warning" not in result
+        assert result["unresponsive"] == unresponsive
+
+    @pytest.mark.asyncio
+    async def test_thin_sample_but_something_written_is_only_a_warning(self):
+        """Same degraded backend as above, but this time the thin sample DID
+        score well enough to write something — writing >=1 keeps this a
+        warning, not an error, per the D20 rule."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        unresponsive = [["brave", "Suspended: too many requests"]]
+        cand = [{"url": "https://acme.com/press-release", "title": "t", "content": "c",
+                 "_norm_url": "acme.com/press-release", "_published": _RECENT_ISO, "query": "site:acme.com"}]
+        reply = json.dumps([{"i": 0, "relevance": 3, "signal_type": "news", "headline": "h", "why": "w"}])
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=101)
+        db.link_document = AsyncMock()
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates",
+                          AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive, news_zero_all=True))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            result = await pipeline._client_news_scan(1, client)
         assert result["error"] is None
         assert "warning" in result and "search degraded" in result["warning"]
         assert result["unresponsive"] == unresponsive
-        assert result["found"] == 1   # the candidate is still scored, nothing is dropped
+        assert result["found"] == 1
+        assert result["written"] == 1
+
+    @pytest.mark.asyncio
+    async def test_thin_sample_zero_written_but_three_or_more_found_is_only_a_warning(self):
+        """The found<3 half of the D20 rule: three or more raw candidates is
+        enough of a sample to trust a genuine written:0 outcome even while
+        engines are down — warning, not error."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        unresponsive = [["brave", "Suspended: too many requests"]]
+        cand = [
+            {"url": f"https://acme.com/press-{i}", "title": f"t{i}", "content": "c",
+             "_norm_url": f"acme.com/press-{i}", "_published": _RECENT_ISO, "query": "site:acme.com"}
+            for i in range(3)
+        ]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates",
+                          AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive, news_zero_all=True))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
+            result = await pipeline._client_news_scan(1, client)
+        assert result["found"] == 3
+        assert result["written"] == 0
+        assert result["error"] is None
+        assert "warning" in result and "search degraded" in result["warning"]
 
 
 # ---------------------------------------------------------------------------

@@ -1215,29 +1215,31 @@ async def _probe_newsroom_paths(website: str) -> list[dict]:
 
 
 async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> list[dict]:
-    """Homepage link harvest for newsroom/press pages: GET the homepage and
+    """Homepage link harvest for newsroom/press pages: fetch the homepage and
     pull out <a href> links whose href or visible text mentions one of `keys`,
     restricted to `own_domain` (or a subdomain of it).
 
+    Trumpf fix — routed through _fetch_page_raw (plain GET -> browser-
+    service -> Camofox, the same ladder the jobs block's homepage harvest
+    already uses) instead of doing its own bare httpx GET: a homepage that
+    503s a plain GET (trumpf.com) never yielded its own /de_DE/newsroom/
+    link before this, even though Camofox renders the page fine.
+    _fetch_page_raw's raw_html already falls back to Camofox's rebuilt
+    <a href> markup (_camofox_links_html) when the plain GET comes back
+    empty/thin, so harvesting from THAT instead of a second, separate plain
+    GET picks it up.
+
     Deliberately separate from the jobs block's `_harvest_links(html,
     base_url, keys, own_domain)`: that one parses HTML it is handed and
-    returns bare URLs, this one does its own GET and keeps the link text as
-    a label (used to name the discovered source). Kept as one mockable unit
-    so `TestDiscoverSources` never makes a real HTTP call.
+    returns bare URLs, this one does its own fetch and keeps the link text as
+    a label (used to name the discovered source). Kept as one mockable unit,
+    same name/signature, so `TestDiscoverSources` never makes a real HTTP
+    call.
     """
     if not website:
         return []
     base = _site_base(website)  # D11 — same normalization the jobs block uses
-    html = ""
-    try:
-        async with httpx.AsyncClient(
-            timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
-        ) as http:
-            resp = await http.get(base)
-            if resp.status_code == 200:
-                html = resp.text or ""
-    except Exception:
-        return []
+    _text, html = await _fetch_page_raw(base)
     if not html:
         return []
     hits: list[dict] = []
@@ -2412,22 +2414,16 @@ async def _client_news_scan(
 
     newsroom_saves_it = len(newsroom_candidates) >= 3
 
+    # Hard pre-scoring fail: SearXNG returned NOTHING raw at all (either the
+    # backend itself is down, or every result came back undated) and the
+    # newsroom tier didn't find enough on its own to make up for it — no
+    # point spending an LLM call on a candidate list we already know is
+    # empty or unusable.
     if degraded_reason and not newsroom_saves_it:
         result["error"] = degraded_reason
         if unresponsive:
             result["unresponsive"] = unresponsive
         return result
-
-    if degraded_reason and newsroom_saves_it:
-        # News exists (the newsroom tier alone found enough) — don't fail
-        # the part, but still say the search backend was degraded.
-        result["warning"] = degraded_reason
-    elif news_zero_all and unresponsive:
-        # Nit: candidates can be non-empty here (e.g. the site: domain
-        # query still worked) even though every news-category query was
-        # degraded — that reads as healthy unless flagged explicitly.
-        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
-        result["warning"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
 
     if unresponsive:
         result["unresponsive"] = unresponsive
@@ -2514,6 +2510,29 @@ async def _client_news_scan(
 
     result["written"] = written
     result["max_relevance"] = max_rel
+
+    # D20 (D3 residual) — decide the degraded signal from the ACTUAL outcome
+    # (written), not from raw counts alone: the WP7c symptom was a scan that
+    # found 1-5 raw candidates (so the pre-scoring `not candidates` gate
+    # above never fired), scored them, wrote nothing, and returned
+    # error:null — indistinguishable from "genuinely no news" even though
+    # 6-7 of 8 search engines were suspended. Fail the part explicitly
+    # whenever nothing got written AND the sample was too thin to trust
+    # (fewer than 3 raw+newsroom candidates) while any engine is
+    # unresponsive; keep it a warning once something was actually written,
+    # or the sample was large enough (>=3) to stand on its own despite the
+    # degraded backend.
+    if unresponsive:
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        if written == 0 and result["found"] < 3:
+            result["error"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+        elif degraded_reason or news_zero_all:
+            # Search was flagged degraded on the way in (either the
+            # pre-scoring hard-fail check above, bypassed only because the
+            # newsroom tier saved it, or every news-category query came
+            # back zero) but enough landed (written, or >=3 raw candidates)
+            # to trust the outcome — still worth flagging, not failing.
+            result["warning"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
 
     if written:
         try:
