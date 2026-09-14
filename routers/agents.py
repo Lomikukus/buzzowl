@@ -776,18 +776,20 @@ async def agent_service_callback(body: dict, request: Request):
             output={**prior_output, "service_run_id": svc_run_id, **output},
             error=error,
         )
-        # Backstop for a watcher that did not survive (server restart, or a
-        # caller whose asyncio task outlived its process): without this the row
-        # keeps counters with an empty tool-call list and the run detail is
-        # lost for good.
-        if not (body.get("tool_calls") or prior_output.get("tool_calls")):
-            existing_run = await db_module.get_agent_run(db_run_id)
-            if not (existing_run or {}).get("tool_calls"):
-                await _persist_tool_calls(
-                    db_run_id,
-                    prior_output.get("service_url") or _get_service_url(agent_type),
-                    svc_run_id, final_status,
-                )
+        # Always re-fetch the FULL tool_calls list from agent-pi here, not only
+        # when nothing is stored yet: Pi's callback body carries no tool_calls
+        # of its own (runner.ts), so whatever's already on the row is at best
+        # whatever the watcher's last 5s "running" poll captured — a PARTIAL
+        # list. Skipping this whenever something was already present used to
+        # let reflect_on_run below classify that truncated log and stamp
+        # `reflected`, so the watcher's later, complete write was never
+        # reflected on. _persist_tool_calls is a no-op write when agent-pi's
+        # list is empty/unreachable, so calling it unconditionally is safe.
+        await _persist_tool_calls(
+            db_run_id,
+            prior_output.get("service_url") or _get_service_url(agent_type),
+            svc_run_id, final_status,
+        )
 
     # Self-improving playbook (WP4): reflect on research/osint/pain_point_research
     # runs — done AND failed, since a run that got blocked everywhere still
