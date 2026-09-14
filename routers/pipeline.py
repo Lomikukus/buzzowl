@@ -1263,6 +1263,12 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
 # always DELETE /tabs/{id} to release it. Used as a last-resort tier for
 # bot-protected sites where plain GET and the Playwright browser-service
 # both come back blocked or empty.
+#
+# Its own userId (distinct from the TS agent runtime's "pi"): Camofox keys
+# tab/browser-profile isolation off userId, so using a separate id here
+# keeps this backend's own automated fetches from sharing fingerprint/session
+# state with the "pi" agent's Camofox sessions — same choice already made by
+# routers/knowledge.py's _fetch_event_for_mail.
 _CAMOFOX_USER_ID = "server"
 
 # Bounded ring of the last 50 page fetches, for diagnostics (which tier is
@@ -1279,61 +1285,172 @@ def _record_fetch_tier(url: str, tier: str, chars: int) -> None:
     })
 
 
-async def _fetch_page_camofox(url: str, *, wait_ms: int = 2500, max_chars: int = 18000) -> str:
-    """Fetch a page's visible text via Camofox (Firefox + fingerprint
-    spoofing), for bot-protected sites where plain GET and the
-    browser-service both fail. Mirrors search.ts's fetchPageCamofox: opens a
-    tab, waits wait_ms for it to render, reads the accessibility/text
-    snapshot, then always releases the tab. Never raises — any failure
-    (missing CAMOFOX_URL, non-2xx response, timeout, bad JSON) yields ''.
-    Total time budget is kept well under 40s so callers can await it inline."""
+def _ws_norm(s: str) -> str:
+    """Collapse all whitespace to single spaces and strip. Used to compare
+    candidate texts from different tiers on equal footing — the plain-GET
+    tier's tag-stripped text isn't collapsed until the very end of
+    _fetch_page_text, so comparing raw len() against an already-collapsed
+    browser/Camofox candidate silently favours the plain tier's leftover
+    markup whitespace."""
+    return re.sub(r"\s+", " ", s or "").strip()
+
+
+# Playwright/Camofox ARIA-snapshot link lines, e.g.:
+#   - link "Karriere" [e12]:
+#     - /url: /de_DE/karriere/
+_CAMOFOX_LINK_RE = re.compile(r'-\s*link\s+"([^"]*)"\s*\[[^\]]*\]:\s*\n\s*-\s*/url:\s*(\S+)')
+
+
+def _camofox_links_html(snapshot: str, base_url: str) -> str:
+    """Rebuild an <a href="..">text</a> list from a Camofox accessibility
+    snapshot's link entries, so _harvest_links can rank them exactly like it
+    does for plain-GET HTML. Relative hrefs are resolved against base_url.
+    Returns '' when the snapshot has no link entries."""
+    links = []
+    for text, href in _CAMOFOX_LINK_RE.findall(snapshot or ""):
+        try:
+            resolved = urljoin(base_url, href)
+        except Exception:
+            resolved = href
+        safe_text = text.replace("<", "&lt;").replace(">", "&gt;")
+        links.append(f'<a href="{resolved}">{safe_text}</a>')
+    return "\n".join(links)
+
+
+async def _fetch_page_camofox(url: str, *, wait_ms: int = 2500, max_chars: int = 18000) -> tuple[str, str]:
+    """Fetch a page via Camofox (Firefox + fingerprint spoofing), for
+    bot-protected sites where plain GET and the browser-service both fail.
+    Mirrors search.ts's fetchPageCamofox: opens a tab, waits wait_ms for it
+    to render, reads the accessibility snapshot, then always releases the
+    tab. Never raises — any failure (missing CAMOFOX_URL, non-2xx response,
+    timeout, bad JSON) yields ('', '').
+
+    Returns (text, links_html): text is the same first-pass normalization
+    search.ts applies (collapse blank-line runs, drop NULs, cap length) —
+    _fetch_page_text flattens it further afterward, same as it already does
+    for the browser tier, so don't read this as byte-identical to what
+    search.ts's own caller sees. links_html is the snapshot's link entries
+    rebuilt as <a href> tags (see _camofox_links_html) for callers that want
+    to harvest links off a JS-only page (_fetch_page_raw).
+
+    wait_ms is clamped to [2000, 4000]ms and the three HTTP calls use 8/12/5s
+    timeouts so one call stays well under a 30s budget even when a caller
+    (e.g. a jobs scan harvesting a few sub-links) makes several in a row."""
     camofox_url = os.environ.get("CAMOFOX_URL", "").rstrip("/")
     if not camofox_url:
-        return ""
+        return "", ""
 
+    wait_ms = min(max(wait_ms, 2000), 4000)
     tab_id: Optional[str] = None
     text = ""
+    links_html = ""
     try:
-        async with httpx.AsyncClient(timeout=12.0) as http:
+        async with httpx.AsyncClient(timeout=8.0) as http:
             resp = await http.post(
                 f"{camofox_url}/tabs",
                 json={"userId": _CAMOFOX_USER_ID, "sessionKey": str(uuid.uuid4()), "url": url},
             )
         if resp.status_code not in (200, 201):
             logger.debug("_fetch_page_camofox: /tabs returned %s for %r", resp.status_code, url)
-            return ""
+            return "", ""
         body = resp.json()
         tab_id = body.get("tabId") or body.get("id")
         if not tab_id:
             logger.debug("_fetch_page_camofox: no tabId in response for %r", url)
-            return ""
+            return "", ""
 
-        await asyncio.sleep(max(wait_ms, 0) / 1000)
+        await asyncio.sleep(wait_ms / 1000)
 
-        async with httpx.AsyncClient(timeout=16.0) as http:
+        async with httpx.AsyncClient(timeout=12.0) as http:
             resp = await http.get(
                 f"{camofox_url}/tabs/{tab_id}/snapshot", params={"userId": _CAMOFOX_USER_ID},
             )
         if resp.status_code == 200:
             snapshot = resp.json().get("snapshot", "")
-            # Same normalization as search.ts: collapse runs of blank lines,
-            # drop stray NULs, cap length — keep everything else the
-            # snapshot returns (it's already an accessibility/text view).
             text = re.sub(r"\n{3,}", "\n\n", snapshot).replace("\0", "").strip()[:max_chars]
+            links_html = _camofox_links_html(snapshot, url)
         else:
             logger.debug("_fetch_page_camofox: snapshot returned %s for %r", resp.status_code, url)
     except Exception as exc:
         logger.debug("_fetch_page_camofox: error for %r: %s", url, exc)
-        text = ""
+        text, links_html = "", ""
     finally:
         if tab_id:
             try:
-                async with httpx.AsyncClient(timeout=8.0) as http:
+                async with httpx.AsyncClient(timeout=5.0) as http:
                     await http.delete(f"{camofox_url}/tabs/{tab_id}", params={"userId": _CAMOFOX_USER_ID})
             except Exception as exc:
                 logger.debug("_fetch_page_camofox: tab cleanup failed for %r: %s", url, exc)
 
-    return text
+    return text, links_html
+
+
+async def _fetch_rendered_tier(
+    url: str,
+    text_so_far: str,
+    max_chars: int,
+    wait_ms: int,
+    *,
+    prefer_camofox: bool = False,
+) -> tuple[str, str, str]:
+    """Shared browser-service -> Camofox fallback stage, used by both
+    _fetch_page_text (which only wants the text) and _fetch_page_raw (which
+    also wants Camofox's links_html for link harvesting on JS-only pages —
+    calling this once, rather than _fetch_page_raw invoking
+    _fetch_page_camofox again on its own, avoids opening a second real
+    Camofox tab for the same page).
+
+    text_so_far is whatever the plain-GET tier already produced (possibly
+    '', tag-stripped but not necessarily whitespace-collapsed).
+
+    If text_so_far is already substantial (>=500 normalized chars), it's
+    returned immediately — the common case stays exactly as fast as before.
+    Otherwise it's thin/blocked, and from here browser-service and Camofox
+    are compared only against EACH OTHER, never against the thin plain-GET
+    leftovers: a nav/footer stub's whitespace-inflated raw length must not
+    out-score a shorter but genuine rendered result (this was the WP11
+    review's blocker — main always replaced `text` unconditionally once a
+    later tier answered; a naive length-based rewrite of that regressed on
+    exactly these thin, nav-only pages, e.g. a 160-char "Impressum ..." stub
+    beating a real 109-char job listing because it was compared against the
+    stub's un-collapsed ~309-char length). If every later tier fails or
+    comes back empty, text_so_far is kept as a last resort rather than being
+    thrown away for nothing.
+
+    Returns (text, tier, camofox_links_html)."""
+    plain_text = text_so_far
+    plain_thin = prefer_camofox or len(_ws_norm(plain_text)) < 500
+    if not plain_thin:
+        return plain_text, "http", ""
+
+    text, tier, links_html = "", "none", ""
+    browser_thin_or_failed = prefer_camofox
+
+    browser_url = os.environ.get("BROWSER_SERVICE_URL", "http://localhost:3000").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=40.0) as http:
+            resp = await http.post(
+                f"{browser_url}/fetch", json={"url": url, "max_chars": max_chars, "wait_ms": wait_ms},
+            )
+            if resp.status_code == 200:
+                browser_text = resp.json().get("text", "")
+                browser_thin_or_failed = len(_ws_norm(browser_text)) < 500
+                if _ws_norm(browser_text):
+                    text, tier = browser_text, "browser"
+            else:
+                browser_thin_or_failed = True
+    except Exception:
+        browser_thin_or_failed = True
+
+    if browser_thin_or_failed:
+        camofox_text, links_html = await _fetch_page_camofox(url, wait_ms=wait_ms, max_chars=max_chars)
+        if len(_ws_norm(camofox_text)) > len(_ws_norm(text)):
+            text, tier = camofox_text, "camofox"
+
+    if not _ws_norm(text):
+        text, tier = plain_text, ("http" if plain_text else "none")
+
+    return text, tier, links_html
 
 
 async def _fetch_page_text(
@@ -1346,19 +1463,20 @@ async def _fetch_page_text(
     """Fetch a page's visible text.
 
     Default order: plain GET -> browser-service -> Camofox. Camofox (last
-    resort) is only tried when the plain GET was blocked (403/503/429) or
-    thin (<500 chars) AND the browser-service also came back thin
-    (<500 chars) or failed/timed out — this keeps the common case (a plain
-    GET or the browser-service already returning a real page) exactly as
-    fast as before.
+    resort) is only tried when the plain GET is thin (<500 chars, normalized
+    — this also covers a blocked 403/503/429 response, which never sets any
+    text) AND the browser-service also came back thin (<500 chars) or
+    failed/timed out — this keeps the common case (an early tier already
+    returning real content) exactly as fast as before.
 
     Pass prefer_camofox=True when the caller already knows the site needs
     anti-detection (a playbook needs_js/cookie_wall hit, or a previous 403)
-    to skip the plain GET and go browser-service -> Camofox directly.
+    to skip the plain GET and go browser-service -> Camofox directly. No
+    production caller yet passes this — WP8's jobs path-probe is expected to,
+    for playbook needs_js/cookie_wall hits.
 
     Returns normalized text (possibly '')."""
     text = ""
-    tier = "none"
     plain_status: Optional[int] = None
 
     if not prefer_camofox:
@@ -1370,36 +1488,15 @@ async def _fetch_page_text(
                 plain_status = resp.status_code
                 if resp.status_code == 200:
                     text = _HTML_TAG_RE.sub(" ", resp.text)
-                    tier = "http"
         except Exception:
             pass
 
-    plain_blocked_or_thin = prefer_camofox or plain_status in (403, 503, 429) or len(text.strip()) < 500
-    browser_thin_or_failed = prefer_camofox
+    if plain_status and plain_status != 200:
+        logger.debug("_fetch_page_text: plain GET returned %s for %r", plain_status, url)
 
-    if plain_blocked_or_thin:
-        browser_url = os.environ.get("BROWSER_SERVICE_URL", "http://localhost:3000").rstrip("/")
-        try:
-            async with httpx.AsyncClient(timeout=40.0) as http:
-                resp = await http.post(
-                    f"{browser_url}/fetch", json={"url": url, "max_chars": max_chars, "wait_ms": wait_ms},
-                )
-                if resp.status_code == 200:
-                    browser_text = resp.json().get("text", "")
-                    browser_thin_or_failed = len(browser_text.strip()) < 500
-                    if len(browser_text.strip()) >= len(text.strip()):
-                        text = browser_text
-                        tier = "browser"
-                else:
-                    browser_thin_or_failed = True
-        except Exception:
-            browser_thin_or_failed = True
-
-        if plain_blocked_or_thin and browser_thin_or_failed:
-            camofox_text = await _fetch_page_camofox(url, wait_ms=max(wait_ms, 2500), max_chars=max_chars)
-            if len(camofox_text.strip()) > len(text.strip()):
-                text = camofox_text
-                tier = "camofox"
+    text, tier, _links_html = await _fetch_rendered_tier(
+        url, text, max_chars, wait_ms, prefer_camofox=prefer_camofox,
+    )
 
     text = re.sub(r"\s+", " ", text).strip()
     _record_fetch_tier(url, tier if text else "none", len(text))
@@ -2393,8 +2490,13 @@ def _ats_match(host: str) -> bool:
 
 
 async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000) -> tuple[str, str]:
-    """Return (visible_text, raw_html). raw_html is the plain GET body ('' if the
-    page is JS-only); useful for harvesting links to a deeper listing page."""
+    """Return (visible_text, raw_html). raw_html is the plain GET body, or —
+    when that's empty/thin and the fallback ends up using Camofox — Camofox's
+    link entries rebuilt as <a href> tags (see _camofox_links_html), so a
+    JS-only page's links are still harvestable. '' when neither is available.
+    Calls _fetch_rendered_tier (shared with _fetch_page_text) directly rather
+    than going through _fetch_page_text, so a Camofox tab is opened at most
+    once per call instead of twice (once for text, once for links)."""
     html = ""
     try:
         async with httpx.AsyncClient(
@@ -2406,10 +2508,19 @@ async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000)
     except Exception:
         pass
     text = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()
+    tier = "http" if text else "none"
     if len(text) < 500:
-        rendered = await _fetch_page_text(url, max_chars=max_chars, wait_ms=wait_ms)
-        if len(rendered) > len(text):
-            text = rendered
+        # Trust _fetch_rendered_tier's own choice of winner outright — it
+        # already discards a thin plain-GET stub for comparison purposes
+        # (see its docstring) and only falls back to it if nothing better
+        # came back, so re-comparing raw lengths here would just reopen the
+        # same bug (a whitespace-inflated stub outscoring a shorter, real
+        # rendered result).
+        rendered, tier, links_html = await _fetch_rendered_tier(url, text, max_chars, wait_ms)
+        text = re.sub(r"\s+", " ", rendered).strip()
+        if not html.strip() and links_html:
+            html = links_html
+    _record_fetch_tier(url, tier if text else "none", len(text))
     return text, html
 
 
