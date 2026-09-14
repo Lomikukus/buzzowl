@@ -1688,6 +1688,252 @@ def _parse_published(r: dict) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Date recovery (step 3) — for SearXNG results with neither a publishedDate
+# nor a URL date, and for dating <a href> items harvested straight off a
+# client's own newsroom page (own-newsroom tier, below).
+# ---------------------------------------------------------------------------
+
+_TIME_TAG_RE = re.compile(r'<time\b[^>]*\bdatetime=["\']([^"\']+)["\']', re.I)
+_TEXT_ISO_DATE_RE = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b")
+_TEXT_DE_DATE_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(20\d\d)\b")
+_META_PUBLISHED_RE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|date)["\'][^>]*content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_PUBLISHED_RE_REV = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\'](?:article:published_time|date)["\']',
+    re.I,
+)
+_JSONLD_DATE_RE = re.compile(r'"datePublished"\s*:\s*"([^"]+)"', re.I)
+
+
+def _coerce_iso_date(raw: str) -> Optional[str]:
+    """'YYYY-MM-DD' from an arbitrary date string (full ISO datetime, bare
+    ISO date, or an embedded YYYY[/-]MM[/-]DD) — None if nothing parses."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except (ValueError, TypeError):
+        pass
+    m = _URL_DATE_RE.search(raw)
+    if m:
+        y, mo, d = (int(g) for g in m.groups())
+        try:
+            return date(y, mo, d).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_published_from_html(html: str) -> Optional[str]:
+    """A single article page's own publish date: `<meta
+    property="article:published_time">`, `<meta name="date">`, `<time
+    datetime>`, then JSON-LD `datePublished` — first match wins. Used by the
+    bounded page-header probe (step 3) for SearXNG results with no
+    publishedDate/URL date."""
+    for pattern in (_META_PUBLISHED_RE, _META_PUBLISHED_RE_REV, _TIME_TAG_RE, _JSONLD_DATE_RE):
+        m = pattern.search(html or "")
+        if m:
+            iso = _coerce_iso_date(m.group(1))
+            if iso:
+                return iso
+    return None
+
+
+async def _probe_published_date(url: str) -> Optional[str]:
+    """Bounded page-header probe (step 3): plain GET, 8s. None on any
+    failure or when nothing parses — callers must drop the candidate, never
+    guess a date."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=8.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+        ) as http:
+            resp = await http.get(url)
+            if resp.status_code != 200:
+                return None
+            html = resp.text
+    except Exception:
+        return None
+    return _extract_published_from_html(html)
+
+
+def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Optional[str]:
+    """A date near one <a> match on a listing page (a newsroom index lists
+    many items, each with its own date, so — unlike
+    _extract_published_from_html — this looks only at a window of raw HTML
+    around the anchor): a sibling `<time datetime>` first, else an ISO or
+    German (dd.mm.yyyy) date in the surrounding visible text."""
+    ctx = html[max(0, start - window): min(len(html), end + window)]
+    m = _TIME_TAG_RE.search(ctx)
+    if m:
+        iso = _coerce_iso_date(m.group(1))
+        if iso:
+            return iso
+    text_ctx = _HTML_TAG_RE.sub(" ", ctx)
+    m = _TEXT_ISO_DATE_RE.search(text_ctx)
+    if m:
+        y, mo, d = (int(g) for g in m.groups())
+        try:
+            return date(y, mo, d).isoformat()
+        except ValueError:
+            pass
+    m = _TEXT_DE_DATE_RE.search(text_ctx)
+    if m:
+        d, mo, y = (int(g) for g in m.groups())
+        try:
+            return date(y, mo, d).isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Own-newsroom tier (WP9) — backend-independent of SearXNG: harvest dated
+# items straight off the client's own known newsroom/press pages, so a
+# working newsroom still yields signals when every search engine is blocked.
+# ---------------------------------------------------------------------------
+
+_NEWSROOM_MAX_PAGES = 3
+_NEWSROOM_CAP = 10
+_ANCHOR_RE = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+
+
+def _client_newsroom_urls(client: dict, pb: Optional[dict]) -> list[str]:
+    """Newsroom URLs already known for this client: playbook.newsroom.urls
+    first (org-wide, written by _discover_client_sources' playbook.record
+    call), then client.metadata.monitored_sources (per-client, same origin —
+    see _discover_client_sources). Order preserved, deduped."""
+    urls: list[str] = []
+    seen: set = set()
+    for u in ((pb or {}).get("newsroom") or {}).get("urls") or []:
+        u = (u or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    meta = client.get("metadata") or {}
+    for src in meta.get("monitored_sources") or []:
+        u = (src.get("url") or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls
+
+
+async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], list[dict]]:
+    """Fetch up to _NEWSROOM_MAX_PAGES of the client's own newsroom pages and
+    harvest same-domain, dated <a href> items — plain GET, 12s, _SOURCE_UA;
+    browser-service fallback (_fetch_page_raw) only on 403/503, and only for
+    the first page. Dates come from _parse_published (URL), then
+    _extract_date_near (a <time> tag or ISO/German date near the anchor).
+    Dedupes by _norm_news_url, drops anything older than 90 days, caps at
+    _NEWSROOM_CAP.
+
+    Returns (candidates, blocked) — candidates are shaped like a SearXNG
+    result (url/title/content/_norm_url/_published/query/engine) so they
+    slot straight into _client_news_scan's candidate list; blocked is
+    {"url", "kind", "at"} entries (kind one of "403"/"4xx"/"fetch_error"/
+    "no_content") for the playbook.record(...) blocked_urls patch the news
+    scan already makes.
+    """
+    domain = _client_domain(client)
+    if not domain:
+        return [], []
+
+    try:
+        import playbook  # type: ignore
+    except ImportError:
+        playbook = None
+    pb = None
+    if playbook is not None:
+        try:
+            pb = await playbook.load(org_id, domain)
+        except Exception:
+            pb = None
+
+    urls = _client_newsroom_urls(client, pb)
+    if not urls:
+        return [], []
+
+    today = datetime.now(timezone.utc).date()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    candidates: list[dict] = []
+    blocked: list[dict] = []
+    norm_seen: set = set()
+
+    for i, page_url in enumerate(urls[:_NEWSROOM_MAX_PAGES]):
+        html = ""
+        status_code: Optional[int] = None
+        fetch_failed = False
+        try:
+            async with httpx.AsyncClient(
+                timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+            ) as http:
+                resp = await http.get(page_url)
+                status_code = resp.status_code
+                if status_code == 200:
+                    html = resp.text
+        except Exception:
+            fetch_failed = True
+
+        if not html and not fetch_failed and status_code in (403, 503) and i == 0:
+            try:
+                _text, raw_html = await _fetch_page_raw(page_url)
+                if raw_html:
+                    html = raw_html
+            except Exception:
+                pass
+
+        if not html:
+            if fetch_failed:
+                kind = "fetch_error"
+            elif status_code == 403:
+                kind = "403"
+            elif status_code is not None and status_code >= 400:
+                kind = "4xx"
+            else:
+                kind = "no_content"
+            blocked.append({"url": page_url, "kind": kind, "at": now_iso})
+            continue
+
+        for m in _ANCHOR_RE.finditer(html):
+            href, inner = m.group(1).strip(), m.group(2)
+            if href.startswith(("#", "mailto:", "javascript:", "tel:")):
+                continue
+            full = urljoin(page_url, href)
+            if not full.startswith("http"):
+                continue
+            host = _result_domain(full)
+            if not (host == domain or host.endswith("." + domain)):
+                continue
+            norm = _norm_news_url(full)
+            if not norm or norm in norm_seen:
+                continue
+
+            published = _parse_published({"url": full}) or _extract_date_near(html, m.start(), m.end())
+            if not published:
+                continue
+            try:
+                if (today - date.fromisoformat(published)).days > 90:
+                    continue
+            except ValueError:
+                continue
+
+            norm_seen.add(norm)
+            title = _HTML_TAG_RE.sub(" ", inner).strip()[:120] or urlparse(full).path
+            candidates.append({
+                "url": full, "title": title, "content": "",
+                "_norm_url": norm, "_published": published, "query": "",
+                "engine": "newsroom",
+            })
+            if len(candidates) >= _NEWSROOM_CAP:
+                return candidates, blocked
+
+    return candidates, blocked
+
+
 async def _existing_signal_urls(org_id: int, client_id: int) -> set[str]:
     """Normalized source_url of every type='signal' document already linked to
     this client — so a news scan never re-scores (and re-writes) the same
