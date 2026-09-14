@@ -2722,19 +2722,22 @@ _PATH_PROBE_BLOCKED_CAP = 5
 
 
 async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional[list] = None,
-                                home_title_h1: Optional[tuple] = None) -> tuple[list, list]:
+                                home_title_h1: Optional[tuple] = None,
+                                prefer_camofox: bool = False) -> tuple[list, list]:
     """Run the D1 own-domain path-probe tier: cheap GETs at well-known
     careers paths/subdomains, concurrently (semaphore-bounded, capped at
     _PATH_PROBE_MAX total, one shared httpx.AsyncClient), stopping early
     once _PATH_PROBE_STOP_AFTER_HITS candidates are accepted. Falls back to
-    the browser-service (_fetch_page_raw already does plain GET first) for
-    the best _PATH_PROBE_BROWSER_RETRY_MAX probes that came back 403/503 on
-    the plain GET — those codes usually mean bot-protection, not "nothing
-    here". Returns (accepted_candidates, blocked_entries) — the latter for
-    D7's playbook.blocked_urls bookkeeping, capped at _PATH_PROBE_BLOCKED_CAP
-    per scan (WP8 review nit: a single 403-walled scan could otherwise push
-    10 entries into the org-wide 20-cap blocked_urls list, evicting
-    Pi/news-run history)."""
+    _fetch_rendered_tier's shared browser-service -> Camofox stage (WP11)
+    for the best _PATH_PROBE_BROWSER_RETRY_MAX probes that came back
+    403/503 on the plain GET — those codes usually mean bot-protection, not
+    "nothing here". `prefer_camofox` (the playbook's needs_js/cookie_wall
+    flag) skips straight to browser-service -> Camofox for the fallback,
+    same as _fetch_page_text's caller contract. Returns (accepted_
+    candidates, blocked_entries) — the latter for D7's playbook.blocked_urls
+    bookkeeping, capped at _PATH_PROBE_BLOCKED_CAP per scan (WP8 review nit:
+    a single 403-walled scan could otherwise push 10 entries into the
+    org-wide 20-cap blocked_urls list, evicting Pi/news-run history)."""
     urls = _careers_probe_urls(website, domain, blocked_urls)
     if not urls:
         return [], []
@@ -2759,36 +2762,35 @@ async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional
         for r in retryable[:_PATH_PROBE_BROWSER_RETRY_MAX]:
             if len(hits) >= _PATH_PROBE_STOP_AFTER_HITS:
                 break
-            text, html = await _fetch_page_raw(r["url"])
-            text = text.strip()
+            # WP11 rebase — go through the shared browser-service -> Camofox
+            # fallback stage directly (the prefer_camofox caller
+            # _fetch_rendered_tier's own docstring anticipated), instead of
+            # a private browser-service-only call: a 403/503 probe now also
+            # gets a Camofox attempt, and prefer_camofox (this site's known
+            # needs_js/cookie_wall) skips straight to browser-service ->
+            # Camofox rather than re-trying a plain GET that already failed.
+            text, _tier, links_html = await _fetch_rendered_tier(
+                r["url"], "", 18000, 3000, prefer_camofox=prefer_camofox,
+            )
+            text = re.sub(r"\s+", " ", text).strip()
             if len(text) < 500:
                 continue
-            title = ""
-            hit = False
-            if html:
-                # The plain GET recovered this time (transient 403/503) — we
-                # have real markup, so use the same title/h1/link checks as
-                # the first pass (never the URL: BLOCKER 2 was the same
-                # tautology as BLOCKER 1, just against the whole rendered
-                # text instead of title/h1).
-                if not _is_spa_shell(html, home_title_h1):
-                    job_links = _harvest_links(html, r["url"], _JOB_LINK_KEYS, domain)
-                    if _probe_hit_keyword(html) or len(job_links) >= 3:
-                        hit, title = True, _probe_title(html)
-            else:
-                # Browser-service text only, no markup to parse a title/h1
-                # or harvest links from — require a careers keyword in the
-                # heading region (first 300 chars, where a real careers page
-                # names itself) or several job-ish words anywhere in the
-                # body; an "Impressum und rechtliche Hinweise..." page has
-                # neither (WP8 review BLOCKER 2, measured: all probes 403,
-                # browser fallback returned an Impressum page, accepted).
-                low = text.lower()
-                heading = low[:300]
-                job_word_hits = sum(1 for k in _JOB_LINK_KEYS if k in low)
-                hit = any(k in heading for k in _CAREERS_KEYS) or job_word_hits >= 3
+            # Neither tier _fetch_rendered_tier can land on ever returns real
+            # <title>/<h1> markup — Camofox's links_html is link entries only
+            # (_camofox_links_html) — so the heading region of the rendered
+            # TEXT keeps standing in for title/h1 (BLOCKER 1/2's rule: never
+            # the URL), and links_html, when Camofox produced it, replaces
+            # the plain word-count heuristic for the >=3-job-links check.
+            job_links = _harvest_links(links_html, r["url"], _JOB_LINK_KEYS, domain) if links_html else []
+            low = text.lower()
+            heading = low[:300]
+            job_word_hits = sum(1 for k in _JOB_LINK_KEYS if k in low)
+            # An "Impressum und rechtliche Hinweise..." page has none of
+            # these (WP8 review BLOCKER 2, measured: all probes 403, browser
+            # fallback returned an Impressum page, accepted).
+            hit = any(k in heading for k in _CAREERS_KEYS) or len(job_links) >= 3 or job_word_hits >= 3
             if hit and len(hits) < _PATH_PROBE_STOP_AFTER_HITS:
-                cand = {"url": r["url"], "tier": "path-probe", "title": title}
+                cand = {"url": r["url"], "tier": "path-probe", "title": ""}
                 hits.append(cand)
                 accepted.append(cand)
                 console.print(f"[dim]jobs discovery: path-probe found a careers page at {r['url']} "
@@ -2876,7 +2878,15 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
         # candidates at all" check let it through untouched.
         if not any(_own_or_ats(c["url"], domain) for c in candidates):
             home_title_h1 = _page_title_h1(home_html) if home_html else None
-            probe_hits, probe_blocked = await _probe_careers_paths(website, domain, pb_blocked, home_title_h1)
+            # WP11 rebase: a playbook that already knows this site needs
+            # anti-detection (needs_js from a prior scan, or a cookie wall)
+            # tells the path-probe's rendered-fallback stage to skip
+            # straight to browser-service -> Camofox instead of wasting a
+            # plain GET it already knows will come back thin.
+            prefer_camofox = bool((pb or {}).get("needs_js"))
+            probe_hits, probe_blocked = await _probe_careers_paths(
+                website, domain, pb_blocked, home_title_h1, prefer_camofox,
+            )
             for cand in probe_hits:
                 _add(cand["url"], cand["tier"], cand.get("title", ""))
             if probe_blocked:

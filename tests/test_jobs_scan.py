@@ -603,7 +603,14 @@ class TestPathProbeContentChecks:
 
 class TestPathProbeBrowserFallbackContentChecks:
     """WP8 review BLOCKER 2: same tautology as BLOCKER 1, this time against
-    the whole rendered text instead of title/h1 — never fold the URL in."""
+    the whole rendered text instead of title/h1 — never fold the URL in.
+
+    Post-WP11-rebase: the fallback goes through _fetch_rendered_tier (the
+    shared browser-service -> Camofox stage) directly, so these tests mock
+    that function instead of _fetch_page_raw for the retry step; the
+    homepage fetch inside _careers_candidates still goes through
+    _fetch_page_raw and is mocked separately (empty, so the probe tier
+    isn't suppressed by a homepage-harvested candidate)."""
 
     @pytest.mark.asyncio
     async def test_impressum_via_browser_fallback_rejected(self):
@@ -613,7 +620,9 @@ class TestPathProbeBrowserFallbackContentChecks:
             return _fake_response(403, "", url=url)  # every plain GET is blocked
 
         impressum_text = "Impressum und rechtliche Hinweise. " * 20  # >=500 chars, no careers word
-        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=(impressum_text, ""))), \
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_fetch_rendered_tier",
+                           AsyncMock(return_value=(impressum_text, "browser", ""))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
              _patch_httpx_dynamic(_resolver):
@@ -628,13 +637,61 @@ class TestPathProbeBrowserFallbackContentChecks:
             return _fake_response(403, "", url=url)
 
         careers_text = "Karriere bei Acme. " + ("Wir suchen Verstärkung. " * 30)
-        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=(careers_text, ""))), \
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_fetch_rendered_tier",
+                           AsyncMock(return_value=(careers_text, "browser", ""))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
              _patch_httpx_dynamic(_resolver):
             candidates = await pipeline._careers_candidates(1, client)
         assert len(candidates) >= 1
         assert all(c["tier"] == "path-probe" for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_camofox_links_html_used_for_job_link_check(self):
+        """A generic-heading rendered page with no careers keyword in the
+        first 300 chars, but Camofox's links_html carries >=3 job-like
+        links — accepted via the harvested-link count, not word-counting."""
+        client = _client(website="https://acme.com")
+
+        def _resolver(url):
+            return _fake_response(403, "", url=url)
+
+        generic_text = "Willkommen bei Acme. " + ("Wir sind ein Unternehmen. " * 30)
+        links_html = "".join(
+            f'<a href="https://acme.com/stellenangebote/{i}">Job {i}</a>' for i in range(4)
+        )
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_fetch_rendered_tier",
+                           AsyncMock(return_value=(generic_text, "camofox", links_html))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert len(candidates) >= 1
+
+    @pytest.mark.asyncio
+    async def test_prefer_camofox_threaded_from_playbook_needs_js(self):
+        """WP8 rebase (a): a playbook with needs_js=True must make the
+        path-probe's rendered fallback call _fetch_rendered_tier with
+        prefer_camofox=True — the caller _fetch_rendered_tier's own
+        docstring anticipated."""
+        client = _client(website="https://acme.com")
+        pb = {"needs_js": True}
+
+        def _resolver(url):
+            return _fake_response(403, "", url=url)
+
+        rendered = AsyncMock(return_value=("", "none", ""))
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_fetch_rendered_tier", rendered), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            await pipeline._careers_candidates(1, client, pb)
+        assert rendered.await_args_list
+        for call in rendered.await_args_list:
+            assert call.kwargs.get("prefer_camofox") is True
 
 
 class TestPathProbeConcurrencyCap:
