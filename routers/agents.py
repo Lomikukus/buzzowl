@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -381,6 +381,7 @@ async def _watch_agent_service_run(
     known, else the row is failed cleanly instead of polling a dead id forever.
     """
     missing_polls = 0
+    started_noted = False
     while True:
         await asyncio.sleep(5)
         # Fast-exit: callback may have already updated the DB row
@@ -436,24 +437,55 @@ async def _watch_agent_service_run(
             status = data.get("status", "running")
             tool_calls = [_clean_tool_call(t) for t in (data.get("tool_calls") or [])]
             if status in ("done", "failed", "timeout", "cancelled"):
+                final_status = "done" if status == "done" else "failed"
                 await db_module.update_agent_run(
                     db_run_id,
-                    "done" if status == "done" else "failed",
+                    final_status,
                     tool_calls=tool_calls,
                     output={"service_run_id": svc_run_id, **(data.get("output") or {})},
                     error=data.get("error"),
                 )
                 logger.info("Agent service run %s finished → db_run %d: %s", svc_run_id, db_run_id, status)
-                # After enrichment or people_search, fire a contact_extraction second pass
-                if status == "done" and DB_AVAILABLE:
+                run_info = None
+                if DB_AVAILABLE:
                     try:
                         run_info = await db_module.get_agent_run(db_run_id)
-                        if run_info and run_info.get("agent_type") in ("enrichment", "people_search"):
-                            await _trigger_contact_extraction(run_info.get("task", ""), run_info["org_id"])
+                    except Exception:
+                        run_info = None
+                # After enrichment or people_search, fire a contact_extraction second pass
+                if status == "done" and run_info and run_info.get("agent_type") in ("enrichment", "people_search"):
+                    try:
+                        await _trigger_contact_extraction(run_info.get("task", ""), run_info["org_id"])
                     except Exception as cx_err:
                         logger.warning("Contact extraction trigger failed: %s", cx_err)
+                # Intake collection point (WP5): research/osint terminal, idempotent
+                # with the /api/agents/callback dispatch — whichever lands first wins.
+                if run_info and run_info.get("agent_type") in ("research", "osint") and subject:
+                    try:
+                        import intake
+                        await intake.part_done(
+                            run_info["org_id"], subject, run_info["agent_type"], final_status,
+                            run_id=db_run_id,
+                        )
+                    except Exception as ix_err:
+                        logger.warning("intake.part_done from watcher failed: %s", ix_err)
                 break
             else:
+                # agent-pi reports 'queued' while a run waits for one of its two
+                # FIFO slots (runner.ts:21, index.ts:75) — only a 'running' poll
+                # means the agent has actually started, so only that should ever
+                # start the intake deadline clock (intake.note_run_started).
+                # Otherwise clients queued behind a busy slot get a bogus
+                # deadline_at before their agent has done any work.
+                if status == "running" and not started_noted and subject:
+                    started_noted = True
+                    try:
+                        run_info = await db_module.get_agent_run(db_run_id)
+                        if run_info:
+                            import intake
+                            await intake.note_run_started(run_info["org_id"], subject, db_run_id)
+                    except Exception as ns_err:
+                        logger.debug("intake.note_run_started failed for run %d: %s", db_run_id, ns_err)
                 await db_module.update_agent_run(db_run_id, "running", tool_calls=tool_calls)
         except Exception as exc:
             logger.warning("Agent service poll error for run %s: %s", svc_run_id, exc)
@@ -818,9 +850,12 @@ async def agent_service_callback(body: dict, request: Request):
     if final_status == "done" and agent_type == "match_synthesis" and org_id and subject:
         asyncio.create_task(_handle_match_synthesis_callback(org_id, svc_run_id, subject))
 
-    # research/osint complete → generate brief → then auto-queue pain_point_research (proactive matching)
-    if final_status == "done" and agent_type in ("research", "osint") and org_id and subject:
-        asyncio.create_task(_brief_then_match(org_id, subject))
+    # research/osint terminal (done or failed) → report into the client's active
+    # intake collection point (WP5), or the legacy brief → jobs → match chain
+    # when there isn't one; also fires on failure so a failed part doesn't hang
+    # an open intake waiting for a callback that already happened.
+    if agent_type in ("research", "osint") and org_id and subject:
+        asyncio.create_task(_brief_then_match(org_id, subject, part=agent_type, status=final_status, run_id=db_run_id))
 
     # Telegram push on success
     if final_status == "done" and subject:
@@ -1516,9 +1551,59 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
         logger.error("_handle_match_synthesis_callback failed: %s", exc, exc_info=True)
 
 
-async def _brief_then_match(org_id: int, client_name: str) -> None:
-    """After research/osint: brief, then scan open positions (so hiring-derived
-    needs are on file), then fire pain_point_research → match."""
+async def _needs_jobs_scan(org_id: int, client_name: str) -> bool:
+    """True when there's no jobs doc yet, or the existing one is stale (>7 days).
+    Keeps the source-monitor's OSINT-after-news-change → brief-refresh path
+    (the legacy branch of _brief_then_match below) from re-scanning jobs every
+    single time a brief is regenerated."""
+    if not (DB_AVAILABLE and db_module._pool):
+        return True
+    client = await db_module.get_client(org_id, client_name)
+    if not client:
+        return True
+    async with db_module._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT metadata FROM documents WHERE org_id=$1 AND doc_id=$2",
+            org_id, f"jobs-{client['id']}",
+        )
+    if not row:
+        return True
+    last_scanned = (row["metadata"] or {}).get("last_scanned")
+    if not last_scanned:
+        return True
+    try:
+        dt = datetime.fromisoformat(last_scanned)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return True
+    return (datetime.now(timezone.utc) - dt) > timedelta(days=7)
+
+
+async def _brief_then_match(org_id: int, client_name: str, *, part: Optional[str] = None,
+                             status: str = "done", run_id: Optional[int] = None) -> None:
+    """research/osint terminal notification. When the client has an active
+    intake collection point (WP5 — waiting on osint+research+jobs+news before
+    writing one brief), just report this part in and return; the collection
+    point itself calls the brief → match chain once, when it's ready.
+
+    Otherwise fall back to the legacy immediate path (brief → jobs scan →
+    match) — this is what keeps the source-monitor's OSINT-after-news-change →
+    brief-refresh flow working for clients that don't have an open intake."""
+    if part:
+        try:
+            import intake
+            client = await db_module.get_client(org_id, client_name)
+            if client and intake.is_active(client.get("metadata")):
+                await intake.part_done(org_id, client_name, part, status, run_id=run_id)
+                return
+        except Exception as exc:
+            logger.warning("_brief_then_match: intake dispatch failed for '%s': %s", client_name, exc)
+            return
+
+    if status != "done":
+        return
+
     try:
         from routers.knowledge import _auto_generate_brief
         await _auto_generate_brief(org_id, client_name)
@@ -1527,10 +1612,11 @@ async def _brief_then_match(org_id: int, client_name: str) -> None:
     # Open-positions scan runs after the rest of the research but BEFORE the match,
     # so the inferred needs (written as findings) feed the product-fit synthesis.
     try:
-        from routers.pipeline import _scan_client_jobs
-        client = await db_module.get_client(org_id, client_name)
-        if client:
-            await _scan_client_jobs(org_id, client)
+        if await _needs_jobs_scan(org_id, client_name):
+            from routers.pipeline import _scan_client_jobs
+            client = await db_module.get_client(org_id, client_name)
+            if client:
+                await _scan_client_jobs(org_id, client)
     except Exception as exc:
         logger.warning("_brief_then_match: jobs scan failed for '%s': %s", client_name, exc)
     await _maybe_trigger_pain_point_research(org_id, client_name)

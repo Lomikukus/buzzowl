@@ -22,6 +22,7 @@ import httpx
 import yaml
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
+import intake
 import llm
 from context import DB_AVAILABLE, console, db_module
 from context import _default_org_id, cache_get, cache_set, cache_clear
@@ -295,8 +296,10 @@ async def create_client(body: dict, user: dict = Depends(current_user)):
         org_id=user["org_id"], agent_type="research",
         task=f"Research: {name}", trigger_type="event_hook",
     ) if DB_AVAILABLE else 0
-    asyncio.create_task(_trigger_osint(name, user["org_id"], run_id=osint_run_id or None))
-    asyncio.create_task(_trigger_research(name, user["org_id"], run_id=research_run_id or None))
+    await intake.start(
+        user["org_id"], name, trigger="create",
+        osint_run_id=osint_run_id or None, research_run_id=research_run_id or None,
+    )
     asyncio.create_task(_discover_sources_for_new_client(user["org_id"], name))
     return {"ok": True, "id": client_id, "osint_run_id": osint_run_id, "research_run_id": research_run_id}
 
@@ -588,8 +591,10 @@ async def trigger_client_research(name: str, user: dict = Depends(current_user))
         org_id=user["org_id"], agent_type="research",
         task=f"Research: {name}", trigger_type="event_hook",
     )
-    asyncio.create_task(_trigger_osint(name, user["org_id"], run_id=osint_run_id or None))
-    asyncio.create_task(_trigger_research(name, user["org_id"], run_id=research_run_id or None))
+    await intake.start(
+        user["org_id"], name, trigger="trigger_research",
+        osint_run_id=osint_run_id or None, research_run_id=research_run_id or None,
+    )
     return {"ok": True, "osint_run_id": osint_run_id, "research_run_id": research_run_id}
 
 
@@ -1496,16 +1501,55 @@ async def get_client_brief(name: str, user: dict = Depends(current_user)):
             user["org_id"], client["id"],
         )
     if not row:
-        return {"brief": None, "generated_at": None}
+        return {"brief": None, "generated_at": None, "partial": []}
+    row_meta = row["metadata"] or {}
     return {
         "brief": row["content"],
         "generated_at": str(row["created_at"])[:19],
         "doc_id": row["id"],
+        "partial": row_meta.get("partial") or [],
     }
 
 
-async def _auto_generate_brief(org_id: int, client_name: str) -> bool:
-    """Generate a brief from an internal call (no HTTP context). Returns True on success."""
+@router.get("/api/clients/{name}/intake")
+async def get_client_intake(name: str, user: dict = Depends(current_user)):
+    """Live intake-collection status for static/client.html's #intakeStrip.
+    Always reads straight from the DB (no caching) so polling reflects the
+    true current state of the four parts + the brief gate."""
+    if not DB_AVAILABLE:
+        raise HTTPException(status_code=503, detail="DB unavailable")
+    client = await db_module.get_client(user["org_id"], name)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    data = intake.summary(client.get("metadata") or {})
+    brief_generated_at = None
+    async with db_module._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT d.created_at FROM documents d
+            JOIN document_links dl ON dl.document_id = d.id
+            WHERE d.org_id = $1 AND d.type = 'client_brief'
+              AND dl.entity_type = 'client' AND dl.entity_id = $2
+            ORDER BY d.created_at DESC LIMIT 1
+            """,
+            user["org_id"], client["id"],
+        )
+    if row:
+        brief_generated_at = str(row["created_at"])[:19]
+    data["brief_generated_at"] = brief_generated_at
+    return data
+
+
+async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing: Optional[list] = None) -> bool:
+    """Generate a brief from an internal call (no HTTP context). Returns True on success.
+
+    partial_missing: set by intake.py when the 25-minute collection window ran
+    out before every part (osint/research/jobs/news) finished. The missing
+    parts are named up front in the brief text itself, and recorded on the
+    document's metadata so the UI can show a badge; intake.py writes the same
+    doc_id again (a refresh) once the missing part arrives.
+    """
     try:
         client = await db_module.get_client(org_id, client_name)
         if not client:
@@ -1516,21 +1560,33 @@ async def _auto_generate_brief(org_id: int, client_name: str) -> bool:
         brief_content = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
         if not brief_content:
             return False
+        if partial_missing:
+            brief_content = (
+                f"> **Partial brief — missing: {', '.join(partial_missing)}**. "
+                "It refreshes automatically when the missing parts arrive.\n\n" + brief_content
+            )
         doc_id_str = f"brief-{hashlib.sha256(client_name.encode()).hexdigest()[:12]}-{today}"
         embedding = await db_module.embed_text(brief_content[:512])
+        metadata = {"subject": client_name, "generated_date": today}
+        if partial_missing:
+            metadata["partial"] = list(partial_missing)
+            metadata["partial_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            metadata["partial"] = []
         doc_id = await db_module.index_document(
             org_id=org_id,
             doc_id=doc_id_str,
             doc_type="client_brief",
             title=f"{client_name} — Account Brief {today}",
             content=brief_content,
-            metadata={"subject": client_name, "generated_date": today},
+            metadata=metadata,
             embedding=embedding or [],
             source="agent",
         )
         if doc_id > 0:
             await db_module.link_document(doc_id, "client", client["id"])
-        logger.info("_auto_generate_brief: brief generated for '%s'", client_name)
+        logger.info("_auto_generate_brief: brief generated for '%s'%s", client_name,
+                    " (partial)" if partial_missing else "")
         return True
     except Exception as exc:
         logger.warning("_auto_generate_brief: failed for '%s': %s", client_name, exc)
@@ -1576,6 +1632,29 @@ async def generate_client_brief(name: str, user: dict = Depends(current_user)):
     )
     if doc_id > 0:
         await db_module.link_document(doc_id, "client", client["id"])
+
+    # WP5: a manually-generated brief always wins and closes the client's
+    # intake collection point, if one is still open — otherwise
+    # metadata.intake stays active (the client page's strip polls forever,
+    # sweep() keeps sweeping every 60s) and the collection point later
+    # writes the SAME doc_id (brief-<sha>-<today>), which index_document
+    # upserts — silently replacing this manual brief once it finishes.
+    # cas_client_intake_brief's WHERE only matches waiting/writing/partial,
+    # so this is a no-op when there's no open intake (or none at all).
+    try:
+        intake_updated = await db_module.cas_client_intake_brief(
+            org_id, name, ["waiting", "writing", "partial"], "written",
+        )
+        if intake_updated is not None:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            prior_brief = (intake_updated.get("intake") or {}).get("brief") or {}
+            await db_module.set_client_intake_path(
+                org_id, name, ["intake", "brief"],
+                {**prior_brief, "status": "written", "written_at": now_iso, "missing": [],
+                 "refreshed_at": None, "error": None, "closed_at": now_iso},
+            )
+    except Exception as exc:
+        logger.warning("generate_client_brief: intake close-out failed for '%s': %s", name, exc)
 
     return {
         "brief": brief_content,

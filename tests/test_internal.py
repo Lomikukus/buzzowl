@@ -234,14 +234,21 @@ class TestInternalCreateClient:
         """Regression: cache_clear(org_id) used to run before org_id was
         assigned in the function body — an UnboundLocalError on every call,
         500ing this endpoint outright and breaking the agent's create_client
-        tool and the contact_extraction agent's client step."""
+        tool and the contact_extraction agent's client step.
+
+        OSINT/research are no longer fired directly here (see the old
+        _trigger_osint/_trigger_research assertions this replaced) — WP5's
+        intake collection point (intake.start()) now owns starting all four
+        research parts; see tests/test_intake.py for that dispatch's own
+        coverage. This test only needs to confirm the endpoint still 200s and
+        hands off to intake.start()."""
         with (
             patch("routers.internal.DB_AVAILABLE", True),
             patch("routers.internal.config") as mock_cfg,
             patch("routers.internal.db_module.embed_text", new_callable=AsyncMock, return_value=[0.1]),
             patch("routers.internal.db_module.upsert_client", new_callable=AsyncMock, return_value=7),
-            patch("routers.internal._trigger_osint", new_callable=AsyncMock) as mock_osint,
-            patch("routers.internal._trigger_research", new_callable=AsyncMock) as mock_research,
+            patch("intake.start", new_callable=AsyncMock) as mock_intake_start,
+            patch("routers.knowledge._discover_sources_for_new_client", new_callable=AsyncMock) as mock_discover,
         ):
             mock_cfg.get = _cfg(token="")
             resp = app_client.post(
@@ -250,8 +257,9 @@ class TestInternalCreateClient:
             )
         assert resp.status_code == 200
         assert resp.json() == {"ok": True, "id": 7, "name": "Bosch"}
-        mock_osint.assert_called_once()
-        mock_research.assert_called_once()
+        mock_intake_start.assert_awaited_once()
+        assert mock_intake_start.call_args.kwargs.get("trigger") == "internal"
+        mock_discover.assert_called_once()
 
     def test_create_client_missing_org_id_400(self, app_client):
         with (

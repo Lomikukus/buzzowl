@@ -90,8 +90,28 @@ async def internal_create_client(body: dict, request: Request):
         created_by=None,
     )
 
-    asyncio.create_task(_trigger_osint(name, org_id))
-    asyncio.create_task(_trigger_research(name, org_id))
+    if body.get("skip_research"):
+        # Caller (e.g. a bulk-import queue) will trigger research manually.
+        logger.info("internal: created client '%s' (id=%d) for org=%d — skip_research",
+                    name, client_id, org_id)
+        return {"ok": True, "id": client_id, "name": name}
+
+    osint_run_id = await db_module.create_agent_run(
+        org_id=org_id, agent_type="osint",
+        task=f"OSINT: {name}", trigger_type="event_hook",
+    )
+    research_run_id = await db_module.create_agent_run(
+        org_id=org_id, agent_type="research",
+        task=f"Research: {name}", trigger_type="event_hook",
+    )
+    import intake
+    await intake.start(
+        org_id, name, trigger="internal",
+        osint_run_id=osint_run_id or None, research_run_id=research_run_id or None,
+    )
+
+    from routers.knowledge import _discover_sources_for_new_client  # local: avoids an import cycle
+    asyncio.create_task(_discover_sources_for_new_client(org_id, name))
 
     logger.info("internal: created client '%s' (id=%d) for org=%d", name, client_id, org_id)
     return {"ok": True, "id": client_id, "name": name}
