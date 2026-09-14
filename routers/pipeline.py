@@ -1724,19 +1724,30 @@ def _news_result_allowed(url: str) -> tuple[bool, str]:
     return True, host
 
 
-async def _news_candidates(org_id: int, client: dict) -> list[dict]:
+async def _news_candidates(org_id: int, client: dict) -> dict:
     """Gather candidate news articles for a client via SearXNG: exact-name
     news search, name+industry, own-domain site search, and (only when those
     come up thin) a generic name+news fallback. Drops skip-host results,
     dedupes by normalized URL, and requires a resolvable published date
-    within the last 90 days — any result without a publishedDate gets one
-    more chance via a date embedded in its URL (_parse_published applies
-    this fallback uniformly, not just to own-domain results), but is
-    dropped like everything else if that also comes up empty. Caps at 15.
+    within the last 90 days: publishedDate or a date embedded in the URL
+    (_parse_published applies both), then — for up to 5 results still
+    undated — a bounded page-header probe (step 3, _probe_published_date).
+    Anything still undated after all three is dropped. Caps at 15.
+
+    Uses _searxng_query (not _searxng_results) so degraded-backend signals
+    survive to the caller. Returns {"candidates": [...], "unresponsive":
+    [[engine, reason], ...], "undated_total": n, "news_zero_all": bool}:
+    undated_total counts results that passed the host/dedup filter but never
+    got a date, even after the page probe; news_zero_all is True iff every
+    categories="news" query in this call came back with zero raw results —
+    the WP7 pattern (brave/startpage/qwant/mojeek suspended, only bing news
+    answering, and bing news carries no publishedDate) lands in one or both
+    of these, not silently as found=0/error=None.
 
     Raises when every SearXNG query in this call failed (a real outage) so
-    _client_news_scan can distinguish "SearXNG is down" from "no news found";
-    a partial failure (some queries ok) is not treated as an error.
+    _client_news_scan can distinguish "SearXNG is down" from "degraded/no
+    news found"; a partial failure (some queries ok) is not treated as an
+    error.
     """
     from routers.agents import _ascii_name
 
@@ -1754,21 +1765,29 @@ async def _news_candidates(org_id: int, client: dict) -> list[dict]:
         queries.append((f"site:{domain}", "general", "month"))
 
     candidates: list[dict] = []
+    undated_pending: list[dict] = []
     seen: set[str] = set()
+    unresponsive_all: list = []
     today = datetime.now(timezone.utc).date()
     attempted = 0
     failed = 0
+    news_query_count = 0
+    news_zero_count = 0
 
     async def _collect(query: str, categories: str, time_range: str) -> None:
-        nonlocal attempted, failed
+        nonlocal attempted, failed, news_query_count, news_zero_count
         attempted += 1
         try:
-            results = await _searxng_results(
-                query, limit=15, categories=categories, time_range=time_range,
-            )
+            data = await _searxng_query(query, limit=15, categories=categories, time_range=time_range)
         except Exception:
             failed += 1
             return
+        results = data.get("results") or []
+        unresponsive_all.extend(data.get("unresponsive") or [])
+        if categories == "news":
+            news_query_count += 1
+            if not results:
+                news_zero_count += 1
         for r in results:
             url = (r.get("url") or "").strip()
             allowed, _host = _news_result_allowed(url)
@@ -1777,16 +1796,18 @@ async def _news_candidates(org_id: int, client: dict) -> list[dict]:
             norm = _norm_news_url(url)
             if not norm or norm in seen:
                 continue
+            seen.add(norm)
             published = _parse_published(r)
+            entry = {**r, "_norm_url": norm, "_published": published, "query": query}
             if not published:
+                undated_pending.append(entry)
                 continue
             try:
                 if (today - date.fromisoformat(published)).days > 90:
                     continue
             except ValueError:
                 continue
-            seen.add(norm)
-            candidates.append({**r, "_norm_url": norm, "_published": published, "query": query})
+            candidates.append(entry)
 
     for q, cat, tr in queries:
         await _collect(q, cat, tr)
@@ -1797,7 +1818,25 @@ async def _news_candidates(org_id: int, client: dict) -> list[dict]:
     if attempted and failed == attempted:
         raise ConnectionError("searxng unreachable")
 
-    return candidates[:15]
+    undated_total = len(undated_pending)
+    for entry in undated_pending[:5]:
+        published = await _probe_published_date(entry["url"])
+        if not published:
+            continue
+        try:
+            if (today - date.fromisoformat(published)).days > 90:
+                continue
+        except ValueError:
+            continue
+        entry["_published"] = published
+        candidates.append(entry)
+
+    return {
+        "candidates": candidates[:15],
+        "unresponsive": _dedupe_unresponsive(unresponsive_all),
+        "undated_total": undated_total,
+        "news_zero_all": bool(news_query_count) and news_zero_count == news_query_count,
+    }
 
 
 def _news_listing(candidates: list[dict]) -> str:
