@@ -1814,6 +1814,7 @@ async def _probe_published_date(url: str) -> Optional[str]:
 
 _ANCHOR_OPEN_RE = re.compile(r"<a\b", re.I)
 _ANCHOR_CLOSE_RE = re.compile(r"</a>", re.I)
+_BR_TAG_RE = re.compile(r"<br\b", re.I)
 
 # The tags real listings wrap one item in — <li>/<article>/<tr>/<section>/
 # <div> — used to bound _extract_date_near's search to THIS item's own
@@ -1853,10 +1854,13 @@ def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Op
     tag before it backward) — never a neighbour's, since a container never
     contains another item's markup. Only when no such tag exists on that
     side at all does it fall back to the neighbouring anchor (`<a` forward,
-    `</a>` backward, WP9's first two fixes), further capped at
-    _DATE_NEAR_MAX_DISTANCE chars — a last resort for markup with no
-    per-item wrapper, where "far away" is the only signal left that a
-    match belongs to some OTHER item.
+    `</a>` backward, WP9's first two fixes) AND the nearest bare `<br>`
+    line-break on that side, if any (a wrapper-less listing like `<a>1</a>
+    date<br><a>2</a> date<br><a>3</a>` still separates items even with no
+    <li>/<article>/... at all) — further capped at _DATE_NEAR_MAX_DISTANCE
+    chars, a last resort for markup with no separator whatsoever, where
+    "far away" is the only signal left that a match belongs to some OTHER
+    item.
 
     Every `<time datetime>` / ISO / German (dd.mm.yyyy) match found in
     EITHER region is a candidate; the NEAREST one to the anchor (by
@@ -1873,6 +1877,14 @@ def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Op
         next_anchor = _ANCHOR_OPEN_RE.search(html, end)
         if next_anchor:
             fwd_limit = min(fwd_limit, next_anchor.start())
+        # No <li>/<article>/... wrapper at all — a bare <br> is the only
+        # other common item separator (e.g. <a>1</a> date<br><a>2</a>...);
+        # without this, an anchor-only bound still lets a wrapper-less
+        # listing's last (undated) item reach backward past the <br> into
+        # its predecessor's trailing date.
+        br = _BR_TAG_RE.search(html, end, fwd_limit)
+        if br:
+            fwd_limit = min(fwd_limit, br.start())
 
     window_back_limit = max(0, start - window)
     container_open = None
@@ -1887,6 +1899,11 @@ def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Op
             prev_close = m
         if prev_close is not None:
             back_limit = max(back_limit, prev_close.end())
+        br = None
+        for m in _BR_TAG_RE.finditer(html, back_limit, start):
+            br = m
+        if br is not None:
+            back_limit = max(back_limit, br.end())
 
     candidates: list[tuple[int, str]] = []
 

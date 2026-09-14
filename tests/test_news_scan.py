@@ -421,6 +421,24 @@ class TestExtractDateNear:
         assert html.index("12.09.2026") - anchor_end > pipeline._DATE_NEAR_MAX_DISTANCE
         assert _anchor_dates(html)["/h"] is None
 
+    def test_fixture_i_wrapper_less_listing_separated_by_br(self):
+        """Round-4 nit: no <li>/<article>/... wrapper at all (the fallback
+        branch), items separated only by a bare <br> — the anchor-only
+        fallback bound still let the last (undated) item reach backward,
+        past the <br>, into its predecessor's trailing date (~19 chars,
+        comfortably inside the 120-char cap). The fallback must also cut
+        at the nearest <br> on each side, exactly like the container bound
+        already does for wrapped listings."""
+        html = (
+            '<p><a href="/1">1</a> 12.09.2026<br>'
+            '<a href="/2">2</a> 05.07.2026<br>'
+            '<a href="/3">3</a></p>'
+        )
+        dates = _anchor_dates(html)
+        assert dates["/1"] == "2026-09-12"
+        assert dates["/2"] == "2026-07-05"
+        assert dates["/3"] is None
+
     # -- date-before convention: date, then the title link (re-review) ----
 
     def test_fixture_c_date_before_anchor_three_items_each_keep_their_own_date(self):
