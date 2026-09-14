@@ -210,6 +210,146 @@ def test_classify_tool_calls_binary_and_fetch_error_kinds():
 
 
 # ---------------------------------------------------------------------------
+# D2 — careers_candidate_url: a Pi run's careers/ATS fetch, surfaced as a
+# candidate (never written straight to careers.url/tier)
+# ---------------------------------------------------------------------------
+
+_LONG_JOBS_TEXT = "Open roles: Software Engineer, Sales Manager. " * 6  # >= 200 chars
+
+
+def test_classify_tool_calls_detects_workday_candidate():
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == "https://acme.wd3.myworkdayjobs.com/en-US/Acme"
+
+
+def test_classify_tool_calls_detects_own_domain_careers_path_candidate():
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == "https://acme.com/karriere"
+
+
+def test_classify_tool_calls_ignores_third_party_careers_looking_url():
+    # A clean fetch of a THIRD PARTY's careers-worded URL (e.g. a competitor
+    # cited as evidence) must never become this client's careers candidate.
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://competitor.example/karriere"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == ""
+
+
+def test_classify_tool_calls_blocked_fetch_is_never_a_candidate():
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere"},
+         "result": "Error: HTTP 403", "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == ""
+
+
+def test_classify_tool_calls_empty_result_is_not_content_bearing():
+    # WP8 review nit 6: "clean" only means "not one of the sentinel
+    # strings" — an empty/near-empty 200 body is not actually content, and
+    # must not score as a careers candidate just because the URL matches.
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere"}, "result": "", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
+         "result": "short", "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == ""
+
+
+def test_classify_tool_calls_ats_candidate_outranks_careers_path_candidate():
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
+         "result": _LONG_JOBS_TEXT, "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == "https://acme.wd3.myworkdayjobs.com/en-US/Acme"
+
+
+async def test_reflect_on_run_records_pi_run_careers_candidate():
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    db = MagicMock()
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 20, "org_id": 1, "status": "done", "output": {}, "tool_calls": tool_calls,
+    })
+    db.get_client = AsyncMock(return_value={
+        "id": 1, "name": "Acme GmbH", "metadata": {"website": "https://www.acme.com"},
+    })
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock(return_value={})
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock):
+        await playbook.reflect_on_run(1, 20, subject="Acme GmbH")
+
+    record_mock.assert_awaited_once()
+    call_args, _ = record_mock.await_args
+    careers_patch = call_args[2]["careers"]
+    assert careers_patch["candidate_url"] == "https://acme.wd3.myworkdayjobs.com/en-US/Acme"
+    assert careers_patch["candidate_source"] == "pi-run"
+    assert careers_patch["candidate_at"]
+    # candidate_url is a proposal only — careers.url/tier stay the scanner's.
+    assert "url" not in careers_patch
+    assert "tier" not in careers_patch
+
+
+async def test_reflect_on_run_no_careers_patch_when_no_candidate_found():
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/about"},
+         "result": "About us page content", "ts": "t0"},
+    ]
+    db = MagicMock()
+    db.get_agent_run = AsyncMock(return_value={
+        "id": 21, "org_id": 1, "status": "done", "output": {}, "tool_calls": tool_calls,
+    })
+    db.get_client = AsyncMock(return_value={
+        "id": 1, "name": "Acme GmbH", "metadata": {"website": "https://www.acme.com"},
+    })
+    db.update_agent_run = AsyncMock()
+    record_mock = AsyncMock(return_value={})
+    with patch.object(playbook, "db_module", db), patch.object(playbook, "record", record_mock):
+        await playbook.reflect_on_run(1, 21, subject="Acme GmbH")
+
+    record_mock.assert_awaited_once()
+    call_args, _ = record_mock.await_args
+    assert "careers" not in call_args[2]
+
+
+# ---------------------------------------------------------------------------
+# D2 — playbook.record already merges an externally-supplied blocked_urls
+# list (e.g. from the jobs scanner's own probes, not just reflect_on_run)
+# ---------------------------------------------------------------------------
+
+async def test_record_accepts_blocked_urls_from_a_non_reflect_caller():
+    db = _db()
+    with patch.object(playbook, "db_module", db):
+        merged = await playbook.record(1, "acme.com", {
+            "blocked_urls": [{"url": "https://acme.com/karriere", "kind": "403", "at": "t0"}],
+        })
+    assert merged["blocked_urls"] == [{"url": "https://acme.com/karriere", "kind": "403", "at": "t0"}]
+
+
+# ---------------------------------------------------------------------------
 # _infer_domain — pure
 # ---------------------------------------------------------------------------
 
