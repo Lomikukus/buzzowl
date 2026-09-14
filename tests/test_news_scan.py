@@ -704,32 +704,60 @@ class TestNewsroomCandidates:
             return MagicMock(status_code=404, text="")
 
         httpx_patch, _ = _patch_page_httpx(get_side_effect=get_side_effect)
-        with httpx_patch, patch.object(pipeline, "_fetch_via_browser_service", AsyncMock(return_value="")):
+        with httpx_patch, patch.object(pipeline, "_fetch_rendered_tier",
+                                        AsyncMock(return_value=("", "none", ""))) as rendered_mock:
             candidates, blocked = await pipeline._newsroom_candidates(1, client)
 
         assert candidates == []
         kinds = {b["url"]: b["kind"] for b in blocked}
         assert kinds[urls[0]] == "fetch_error"
-        assert kinds[urls[1]] == "403"   # i=1 — browser fallback is only for the FIRST page
+        assert kinds[urls[1]] == "403"   # i=1 — the rendered-tier fallback is only for the FIRST page
         assert kinds[urls[2]] == "4xx"
+        rendered_mock.assert_not_awaited()   # url[0] raised (not a 403/503); url[1]/url[2] aren't i==0
 
     @pytest.mark.asyncio
-    async def test_browser_fallback_rescues_first_page_403(self, monkeypatch):
-        """WP9 review nit 4: the newsroom tier's 403/503 fallback must call
-        the browser service directly, never re-GET the URL that just
-        403'd (that's what _fetch_page_raw/_fetch_page_text would do)."""
+    async def test_rendered_tier_camofox_links_rescue_first_page_403(self, monkeypatch):
+        """WP11 rebase: the newsroom tier's 403/503 fallback now goes
+        through the shared _fetch_rendered_tier (browser-service ->
+        Camofox), not a private re-GET-free helper — so newsroom pages get
+        Camofox on 403/503 too. Only links_html (Camofox's <a href>
+        reconstruction) is usable for anchor harvesting; _fetch_rendered_tier
+        itself already guarantees no re-GET (text_so_far="" tells it the
+        plain tier already failed)."""
         url = "https://acme.com/presse"
         client = self._client_with_playbook(monkeypatch, newsroom_urls=[url])
-        rescued_html = '<a href="/presse/item">Item</a> <span class="date">12.09.2026</span>'
+        rescued_links_html = '<a href="/presse/item">Item</a> <span class="date">12.09.2026</span>'
         httpx_patch, get_client = _patch_page_httpx(status=403, text="")
-        with httpx_patch, patch.object(pipeline, "_fetch_via_browser_service",
-                                        AsyncMock(return_value=rescued_html)) as browser_mock:
+        with httpx_patch, patch.object(
+            pipeline, "_fetch_rendered_tier",
+            AsyncMock(return_value=("Rendered snapshot text", "camofox", rescued_links_html)),
+        ) as rendered_mock:
             candidates, blocked = await pipeline._newsroom_candidates(1, client)
         assert blocked == []
         assert len(candidates) == 1
         assert candidates[0]["url"] == "https://acme.com/presse/item"
-        browser_mock.assert_awaited_once_with(url)
+        rendered_mock.assert_awaited_once_with(url, "", 18000, 1500)
         get_client.get.assert_awaited_once()   # the 403 GET only, never re-requested
+
+    @pytest.mark.asyncio
+    async def test_browser_tier_rescue_with_no_links_html_yields_no_candidates(self, monkeypatch):
+        """The browser-service tier alone (no Camofox escalation) only ever
+        returns plain innerText — no <a href> markup — so it cannot rescue
+        the newsroom tier's anchor harvesting even though the fetch itself
+        "succeeded"; this must not be misclassified as blocked either,
+        since content genuinely was returned."""
+        url = "https://acme.com/presse"
+        client = self._client_with_playbook(monkeypatch, newsroom_urls=[url])
+        httpx_patch, _ = _patch_page_httpx(status=403, text="")
+        with httpx_patch, patch.object(
+            pipeline, "_fetch_rendered_tier",
+            AsyncMock(return_value=("Some plain rendered text, no markup", "browser", "")),
+        ):
+            candidates, blocked = await pipeline._newsroom_candidates(1, client)
+        assert candidates == []
+        # links_html was '' so `html` stayed '' — same as any other
+        # no-content outcome for this URL's original 403.
+        assert blocked == [{"url": url, "kind": "403", "at": blocked[0]["at"]}]
 
     @pytest.mark.asyncio
     async def test_older_than_90_days_dropped(self, monkeypatch):

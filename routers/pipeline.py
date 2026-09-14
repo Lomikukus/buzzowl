@@ -1907,35 +1907,19 @@ def _client_newsroom_urls(client: dict, pb: Optional[dict]) -> list[str]:
     return urls
 
 
-async def _fetch_via_browser_service(url: str, wait_ms: int = 1500, max_chars: int = 18000) -> str:
-    """POST straight to the browser-service /fetch endpoint — unlike
-    _fetch_page_raw/_fetch_page_text, this never re-issues a plain GET
-    first. Callers that already know the plain GET just failed (a 403/503
-    they saw themselves) should call this directly instead of going
-    through _fetch_page_raw, which would otherwise re-request the same URL
-    that just failed before finally falling back. Returns '' on any
-    failure or non-200 response; never raises."""
-    browser_url = os.environ.get("BROWSER_SERVICE_URL", "http://localhost:3000").rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=40.0) as http:
-            resp = await http.post(
-                f"{browser_url}/fetch", json={"url": url, "max_chars": max_chars, "wait_ms": wait_ms},
-            )
-            if resp.status_code == 200:
-                return resp.json().get("text", "")
-    except Exception:
-        pass
-    return ""
-
-
 async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], list[dict]]:
     """Fetch up to _NEWSROOM_MAX_PAGES of the client's own newsroom pages and
     harvest same-domain, dated <a href> items — plain GET, 12s, _SOURCE_UA;
-    browser-service fallback (_fetch_via_browser_service — called directly,
-    never re-GETting the URL that just failed) only on 403/503, and only
-    for the first page. Dates come from _parse_published (URL), then
-    _extract_date_near (a <time> tag or ISO/German date near the anchor).
-    Dedupes by _norm_news_url, drops anything older than 90 days, caps at
+    on 403/503, and only for the first page, falls back to the shared
+    browser-service -> Camofox tier (_fetch_rendered_tier, the same one
+    _fetch_page_text/_fetch_page_raw use) with text_so_far="" — it already
+    knows not to re-GET a URL that just failed. Only Camofox's links_html
+    is usable here: it rebuilds real <a href> markup from the
+    accessibility snapshot (harvestable by _ANCHOR_RE below), whereas the
+    browser-service tier alone returns plain innerText with no anchors at
+    all. Dates come from _parse_published (URL), then _extract_date_near
+    (a <time> tag or ISO/German date near the anchor). Dedupes by
+    _norm_news_url, drops anything older than 90 days, caps at
     _NEWSROOM_CAP.
 
     Returns (candidates, blocked) — candidates are shaped like a SearXNG
@@ -1986,11 +1970,11 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
             fetch_failed = True
 
         if not html and not fetch_failed and status_code in (403, 503) and i == 0:
-            # Go straight to the browser service — the plain GET already
-            # told us this URL 403/503'd, so re-requesting it first (as
-            # _fetch_page_raw/_fetch_page_text would) only adds latency.
             try:
-                html = await _fetch_via_browser_service(page_url)
+                _rendered_text, _tier, links_html = await _fetch_rendered_tier(
+                    page_url, "", 18000, 1500,
+                )
+                html = links_html
             except Exception:
                 pass
 
