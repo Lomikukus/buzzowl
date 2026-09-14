@@ -1874,11 +1874,33 @@ def _client_newsroom_urls(client: dict, pb: Optional[dict]) -> list[str]:
     return urls
 
 
+async def _fetch_via_browser_service(url: str, wait_ms: int = 1500, max_chars: int = 18000) -> str:
+    """POST straight to the browser-service /fetch endpoint — unlike
+    _fetch_page_raw/_fetch_page_text, this never re-issues a plain GET
+    first. Callers that already know the plain GET just failed (a 403/503
+    they saw themselves) should call this directly instead of going
+    through _fetch_page_raw, which would otherwise re-request the same URL
+    that just failed before finally falling back. Returns '' on any
+    failure or non-200 response; never raises."""
+    browser_url = os.environ.get("BROWSER_SERVICE_URL", "http://localhost:3000").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=40.0) as http:
+            resp = await http.post(
+                f"{browser_url}/fetch", json={"url": url, "max_chars": max_chars, "wait_ms": wait_ms},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("text", "")
+    except Exception:
+        pass
+    return ""
+
+
 async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], list[dict]]:
     """Fetch up to _NEWSROOM_MAX_PAGES of the client's own newsroom pages and
     harvest same-domain, dated <a href> items — plain GET, 12s, _SOURCE_UA;
-    browser-service fallback (_fetch_page_raw) only on 403/503, and only for
-    the first page. Dates come from _parse_published (URL), then
+    browser-service fallback (_fetch_via_browser_service — called directly,
+    never re-GETting the URL that just failed) only on 403/503, and only
+    for the first page. Dates come from _parse_published (URL), then
     _extract_date_near (a <time> tag or ISO/German date near the anchor).
     Dedupes by _norm_news_url, drops anything older than 90 days, caps at
     _NEWSROOM_CAP.
@@ -1931,10 +1953,11 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
             fetch_failed = True
 
         if not html and not fetch_failed and status_code in (403, 503) and i == 0:
+            # Go straight to the browser service — the plain GET already
+            # told us this URL 403/503'd, so re-requesting it first (as
+            # _fetch_page_raw/_fetch_page_text would) only adds latency.
             try:
-                _text, raw_html = await _fetch_page_raw(page_url)
-                if raw_html:
-                    html = raw_html
+                html = await _fetch_via_browser_service(page_url)
             except Exception:
                 pass
 
@@ -1964,7 +1987,7 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
             if not norm or norm in norm_seen:
                 continue
 
-            published = _parse_published({"url": full}) or _extract_date_near(html, m.start(), m.end())
+            published = _parse_published({"url": full}) or _extract_date_near(html, m.end())
             if not published:
                 continue
             try:
@@ -2117,17 +2140,28 @@ async def _news_candidates(org_id: int, client: dict) -> dict:
         raise ConnectionError("searxng unreachable")
 
     undated_total = len(undated_pending)
-    for entry in undated_pending[:5]:
-        published = await _probe_published_date(entry["url"])
-        if not published:
-            continue
-        try:
-            if (today - date.fromisoformat(published)).days > 90:
-                continue
-        except ValueError:
-            continue
-        entry["_published"] = published
-        candidates.append(entry)
+    probe_targets = undated_pending[:5]
+    if probe_targets:
+        # Concurrent, bounded to 3 in flight: sequential 8s-timeout probes
+        # would cost up to 5*8s=40s worst case; a semaphore(3) caps it at
+        # ceil(5/3)*8s ~= 16s. candidates.append() from each task is safe —
+        # asyncio has no real parallelism, only interleaving.
+        probe_sem = asyncio.Semaphore(3)
+
+        async def _probe_one(entry: dict) -> None:
+            async with probe_sem:
+                published = await _probe_published_date(entry["url"])
+            if not published:
+                return
+            try:
+                if (today - date.fromisoformat(published)).days > 90:
+                    return
+            except ValueError:
+                return
+            entry["_published"] = published
+            candidates.append(entry)
+
+        await asyncio.gather(*(_probe_one(e) for e in probe_targets))
 
     return {
         "candidates": candidates[:15],

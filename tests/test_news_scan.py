@@ -624,7 +624,7 @@ class TestNewsroomCandidates:
             return MagicMock(status_code=404, text="")
 
         httpx_patch, _ = _patch_page_httpx(get_side_effect=get_side_effect)
-        with httpx_patch, patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))):
+        with httpx_patch, patch.object(pipeline, "_fetch_via_browser_service", AsyncMock(return_value="")):
             candidates, blocked = await pipeline._newsroom_candidates(1, client)
 
         assert candidates == []
@@ -635,15 +635,21 @@ class TestNewsroomCandidates:
 
     @pytest.mark.asyncio
     async def test_browser_fallback_rescues_first_page_403(self, monkeypatch):
+        """WP9 review nit 4: the newsroom tier's 403/503 fallback must call
+        the browser service directly, never re-GET the URL that just
+        403'd (that's what _fetch_page_raw/_fetch_page_text would do)."""
         url = "https://acme.com/presse"
         client = self._client_with_playbook(monkeypatch, newsroom_urls=[url])
         rescued_html = '<a href="/presse/item">Item</a> <span class="date">12.09.2026</span>'
-        httpx_patch, _ = _patch_page_httpx(status=403, text="")
-        with httpx_patch, patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", rescued_html))):
+        httpx_patch, get_client = _patch_page_httpx(status=403, text="")
+        with httpx_patch, patch.object(pipeline, "_fetch_via_browser_service",
+                                        AsyncMock(return_value=rescued_html)) as browser_mock:
             candidates, blocked = await pipeline._newsroom_candidates(1, client)
         assert blocked == []
         assert len(candidates) == 1
         assert candidates[0]["url"] == "https://acme.com/presse/item"
+        browser_mock.assert_awaited_once_with(url)
+        get_client.get.assert_awaited_once()   # the 403 GET only, never re-requested
 
     @pytest.mark.asyncio
     async def test_older_than_90_days_dropped(self, monkeypatch):
@@ -1198,3 +1204,58 @@ class TestLessonsInMarketNewsScan:
             await pipeline._market_news_scan(1, "Automotive", "the Automotive sector")
         prompt = acomplete.await_args.args[0]
         assert "Learned rules" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# routers.knowledge: POST /api/clients/{name}/news/scan (WP9 review nit 3)
+# ---------------------------------------------------------------------------
+
+class TestNewsScanEndpointOkFlag:
+    """A degraded scan (result["error"] set) must not report ok: True —
+    HTTP 200 is fine, but the body's own ok flag has to say it failed, the
+    same way the rest of this API distinguishes a successful call from one
+    that ran but found a problem."""
+
+    @pytest.mark.asyncio
+    async def test_ok_false_when_scan_degraded(self):
+        from routers import knowledge as knowledge_router
+        client = _client("Acme GmbH")
+        degraded = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0,
+                    "error": "search degraded: 2 engines unresponsive (brave: down, startpage: down)"}
+        db = MagicMock()
+        db.get_client = AsyncMock(return_value=client)
+        with patch.object(knowledge_router, "db_module", db), \
+             patch.object(knowledge_router, "DB_AVAILABLE", True), \
+             patch.object(knowledge_router, "_client_news_scan", AsyncMock(return_value=degraded)):
+            result = await knowledge_router.scan_client_news_endpoint("Acme GmbH", user={"org_id": 1})
+        assert result["ok"] is False
+        assert result["error"] == degraded["error"]
+
+    @pytest.mark.asyncio
+    async def test_ok_true_when_scan_succeeds(self):
+        from routers import knowledge as knowledge_router
+        client = _client("Acme GmbH")
+        ok_result = {"found": 1, "scored": 1, "written": 1, "max_relevance": 3, "error": None}
+        db = MagicMock()
+        db.get_client = AsyncMock(return_value=client)
+        with patch.object(knowledge_router, "db_module", db), \
+             patch.object(knowledge_router, "DB_AVAILABLE", True), \
+             patch.object(knowledge_router, "_client_news_scan", AsyncMock(return_value=ok_result)):
+            result = await knowledge_router.scan_client_news_endpoint("Acme GmbH", user={"org_id": 1})
+        assert result["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_ok_true_when_only_a_warning_is_set(self):
+        """A warning (newsroom rescued a degraded backend) is not a failure."""
+        from routers import knowledge as knowledge_router
+        client = _client("Acme GmbH")
+        warned = {"found": 3, "scored": 3, "written": 3, "max_relevance": 3, "error": None,
+                  "warning": "search degraded: 1 engines unresponsive (brave: down)"}
+        db = MagicMock()
+        db.get_client = AsyncMock(return_value=client)
+        with patch.object(knowledge_router, "db_module", db), \
+             patch.object(knowledge_router, "DB_AVAILABLE", True), \
+             patch.object(knowledge_router, "_client_news_scan", AsyncMock(return_value=warned)):
+            result = await knowledge_router.scan_client_news_endpoint("Acme GmbH", user={"org_id": 1})
+        assert result["ok"] is True
+        assert result["warning"] == warned["warning"]
