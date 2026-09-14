@@ -338,6 +338,12 @@ class TestLessonsInCareersSelectionPrompt:
         assert "Prefer the ATS link over a homepage careers page" in prompt
         assert "A merely proposed jobs lesson" not in prompt
         assert "An approved but news-scoped lesson" not in prompt
+        # WP4 re-review nit: rules must land before the final instruction and
+        # before the (untrusted, search-result-derived) candidate listing —
+        # never after, where a prior version appended them post-format.
+        assert prompt.index("Prefer the ATS link over a homepage careers page") \
+            < prompt.index("Reply with ONLY the single best URL") \
+            < prompt.index("Acme on Greenhouse")
 
     @pytest.mark.asyncio
     async def test_unchanged_when_org_has_no_lessons_document(self, monkeypatch):
@@ -367,6 +373,12 @@ class TestLessonsInJobsExtractPrompt:
         prompt = acomplete.await_args.args[0]
         assert "Skip listings with no location field" in prompt
         assert "A merely proposed jobs lesson" not in prompt
+        # WP4 re-review nit: rules must land before "Return STRICT JSON ONLY"
+        # and before {page} (untrusted page text) — never after, where a
+        # prior version appended them post-format, landing them inside the
+        # untrusted-page region and pushing the JSON contract out of place.
+        assert prompt.index("Skip listings with no location field") < prompt.index("Return STRICT JSON")
+        assert prompt.index("Return STRICT JSON") < prompt.index("x" * 250)
 
     @pytest.mark.asyncio
     async def test_unchanged_when_org_has_no_lessons_document(self, monkeypatch):
@@ -376,7 +388,9 @@ class TestLessonsInJobsExtractPrompt:
         with patch.object(pipeline.llm, "acomplete", acomplete):
             await pipeline._extract_jobs("Acme", text, 1)
         prompt = acomplete.await_args.args[0]
-        assert prompt == pipeline._JOBS_EXTRACT_PROMPT.format(client="Acme", page=text[:16000])
+        assert prompt == pipeline._JOBS_EXTRACT_PROMPT.format(
+            client="Acme", page=text[:16000], rules=pipeline._rules_block(""),
+        )
 
 
 # ---------------------------------------------------------------------------

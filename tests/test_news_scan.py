@@ -415,7 +415,7 @@ class TestClientNewsScan:
 
 # ---------------------------------------------------------------------------
 # WP4: approved cross-site lessons (scope='news') inlined into
-# _NEWS_SCORE_PROMPT via _news_rules_block, for both scan flavors.
+# _NEWS_SCORE_PROMPT via _rules_block, for both scan flavors.
 # ---------------------------------------------------------------------------
 
 def _fake_playbook_with_lessons(lessons):
@@ -470,7 +470,7 @@ class TestLessonsInClientNewsScan:
         assert "Learned rules" not in prompt
         assert prompt == pipeline._NEWS_SCORE_PROMPT.format(
             subject="Acme GmbH", n=1, listing=pipeline._news_listing(cand),
-            rules=pipeline._news_rules_block(""),
+            rules=pipeline._rules_block(""),
         )
 
 

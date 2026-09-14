@@ -1389,20 +1389,25 @@ _NEWS_SCORE_PROMPT = (
 )
 
 
-def _news_rules_block(rules: str) -> str:
-    """Normalize a learned-rules block for _NEWS_SCORE_PROMPT's {rules} slot:
-    '' stays '' (no dangling blank line before "Return STRICT JSON..."), and
-    any other text always gets exactly one trailing newline — whether or not
-    the caller's text already ends in one — so "Return STRICT JSON..." always
-    starts on its own line."""
+def _rules_block(rules: str) -> str:
+    """Normalize a learned-rules block for a prompt's {rules} slot — shared by
+    _NEWS_SCORE_PROMPT, _JOBS_EXTRACT_PROMPT, and the careers-selection
+    prompt. '' stays '' (no dangling blank line before the following
+    instruction), and any other text always gets exactly one trailing
+    newline — whether or not the caller's text already ends in one — so the
+    next instruction always starts on its own line. The slot this feeds must
+    always sit BEFORE the prompt's final instruction / JSON-output contract
+    and never after untrusted content (page text, search-result titles) —
+    landing after would both bury it in a region a malicious page could spoof
+    and push the real instruction out of the position models weight most."""
     rules = (rules or "").rstrip("\n")
     return f"{rules}\n" if rules else ""
 
 
 async def _news_lessons_block(org_id: int) -> str:
-    """Approved cross-site lessons (scope='news', WP4), for _news_rules_block's
+    """Approved cross-site lessons (scope='news', WP4), for _rules_block's
     `rules` argument. '' when playbook isn't available, org_id is falsy, or
-    there are no approved news/all-scope lessons — _news_rules_block already
+    there are no approved news/all-scope lessons — _rules_block already
     collapses '' to no dangling text, so callers pass this straight through."""
     if not org_id:
         return ""
@@ -1625,7 +1630,7 @@ async def _client_news_scan(
 
     prompt = _NEWS_SCORE_PROMPT.format(
         subject=name, n=len(fresh), listing=_news_listing(fresh),
-        rules=_news_rules_block(await _news_lessons_block(org_id)),
+        rules=_rules_block(await _news_lessons_block(org_id)),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
@@ -2010,7 +2015,7 @@ async def _market_news_scan(
 
     prompt = _NEWS_SCORE_PROMPT.format(
         subject=f"the {term} industry", n=len(fresh), listing=_news_listing(fresh),
-        rules=_news_rules_block(await _news_lessons_block(org_id)),
+        rules=_rules_block(await _news_lessons_block(org_id)),
     )
     try:
         reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
@@ -2175,6 +2180,7 @@ _JOBS_EXTRACT_PROMPT = (
     "Cloud Engineer (m/f/d)', 'Head of IT'). Do NOT return department / category / business-area "
     "names (e.g. 'IT & Digitalisation', 'Facility Management', 'Finance, Legal & Administration', "
     "'Strategy & Consulting') — those are navigation categories, not positions; skip them.\n\n"
+    "{rules}"
     "Return STRICT JSON ONLY:\n"
     '{{"positions": [{{"title": "...", "location": "...", "team": "...", "summary": "..."}}], '
     '"inferred_needs": ["short need statement"]}}\n'
@@ -2426,16 +2432,18 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     listing = "\n".join(
         f"{i+1}. {c['title'] or c['url']} — {c['url']}" for i, c in enumerate(candidates[:15])
     )
+    # rules= is filled BEFORE the "Reply with ONLY..." final instruction and,
+    # critically, before {listing} — candidate titles come from search
+    # results (untrusted) — never appended after (see _extract_jobs above).
+    rules = _rules_block(await _jobs_lessons_block(org_id))
     prompt = (
         f"Which of these URLs is {name}'s official careers / open-positions listing page "
         f"(where you can browse their current job openings)? Prefer a page on the company's own "
         f"domain{(' (' + domain + ')') if domain else ''} or its official applicant-tracking system "
-        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday). Reply with ONLY the single best URL, "
-        f"or 'none' if none qualify.\n\n{listing}"
+        f"(e.g. Personio, Greenhouse, SuccessFactors, Workday).\n"
+        f"{rules}"
+        f"Reply with ONLY the single best URL, or 'none' if none qualify.\n\n{listing}"
     )
-    lessons_block = await _jobs_lessons_block(org_id)
-    if lessons_block:
-        prompt = f"{prompt}\n\n{lessons_block}"
     try:
         reply = (await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)).strip()
         m = re.search(r"https?://\S+", reply)
@@ -2475,10 +2483,13 @@ async def _extract_jobs(name: str, text: str, org_id: Optional[int] = None,
     means an empty/JS-only page not worth an LLM call)."""
     if len(text) < min_len:
         return [], []
-    prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000])
-    lessons_block = await _jobs_lessons_block(org_id)
-    if lessons_block:
-        prompt = f"{prompt}\n\n{lessons_block}"
+    # rules= is filled BEFORE "Return STRICT JSON ONLY:" and, critically,
+    # before {page} — the untrusted page text is the last thing in the
+    # prompt, so any learned rules must land ahead of it, never appended
+    # after (a prior version appended post-format, landing the rules inside
+    # the untrusted-page region and pushing the JSON contract out of place).
+    rules = _rules_block(await _jobs_lessons_block(org_id))
+    prompt = _JOBS_EXTRACT_PROMPT.format(client=name, page=text[:16000], rules=rules)
     try:
         # Subscription bridge is text-only: acomplete (never a tool-using
         # chat/agent loop) — it warms the org overlay itself.
