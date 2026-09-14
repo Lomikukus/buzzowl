@@ -885,6 +885,8 @@ class TestClientNewsScan:
         assert result["newsroom_found"] == 3
         assert result["found"] == 3
         assert result["written"] == 3
+        # WP9 review nit 2: the newsroom-rescue path must not drop `unresponsive`.
+        assert result["unresponsive"] == unresponsive
 
     @pytest.mark.asyncio
     async def test_newsroom_under_three_does_not_save_a_degraded_scan(self):
@@ -945,6 +947,32 @@ class TestClientNewsScan:
             result = await pipeline._client_news_scan(1, client)
         assert result["error"] is None
         assert result["unresponsive"] == unresponsive
+
+    @pytest.mark.asyncio
+    async def test_candidates_exist_but_news_queries_degraded_sets_warning(self):
+        """WP9 review nit 1: both original degraded branches required
+        `not candidates`, so "every news-category query dead, but the
+        site: domain query still returned something" read as healthy. It
+        should warn (not error — there IS a candidate) since the news
+        search itself was degraded."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        unresponsive = [["brave", "Suspended: too many requests"]]
+        # A candidate that came from the site:domain (general-category)
+        # query, not from a news-category one — every news query was zero.
+        cand = [{"url": "https://acme.com/press-release", "title": "t", "content": "c",
+                 "_norm_url": "acme.com/press-release", "_published": _RECENT_ISO, "query": "site:acme.com"}]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates",
+                          AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive, news_zero_all=True))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
+            result = await pipeline._client_news_scan(1, client)
+        assert result["error"] is None
+        assert "warning" in result and "search degraded" in result["warning"]
+        assert result["unresponsive"] == unresponsive
+        assert result["found"] == 1   # the candidate is still scored, nothing is dropped
 
 
 # ---------------------------------------------------------------------------

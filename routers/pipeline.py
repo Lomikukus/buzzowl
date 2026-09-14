@@ -2222,15 +2222,26 @@ async def _client_news_scan(
     elif not candidates and undated_total > 0:
         degraded_reason = "search results undated"
 
-    if degraded_reason:
-        if len(newsroom_candidates) >= 3:
-            result["warning"] = degraded_reason
-        else:
-            result["error"] = degraded_reason
-            if unresponsive:
-                result["unresponsive"] = unresponsive
-            return result
-    elif unresponsive:
+    newsroom_saves_it = len(newsroom_candidates) >= 3
+
+    if degraded_reason and not newsroom_saves_it:
+        result["error"] = degraded_reason
+        if unresponsive:
+            result["unresponsive"] = unresponsive
+        return result
+
+    if degraded_reason and newsroom_saves_it:
+        # News exists (the newsroom tier alone found enough) — don't fail
+        # the part, but still say the search backend was degraded.
+        result["warning"] = degraded_reason
+    elif news_zero_all and unresponsive:
+        # Nit: candidates can be non-empty here (e.g. the site: domain
+        # query still worked) even though every news-category query was
+        # degraded — that reads as healthy unless flagged explicitly.
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        result["warning"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+
+    if unresponsive:
         result["unresponsive"] = unresponsive
 
     all_candidates = candidates + newsroom_candidates
