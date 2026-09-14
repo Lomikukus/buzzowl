@@ -1813,66 +1813,95 @@ async def _probe_published_date(url: str) -> Optional[str]:
 
 
 _ANCHOR_OPEN_RE = re.compile(r"<a\b", re.I)
+_ANCHOR_CLOSE_RE = re.compile(r"</a>", re.I)
+
+# WP9 re-review BLOCKER: forward-only search (the previous fix) is wrong for
+# a "date BEFORE the title link" convention (e.g. German
+# <span>12.09.2026</span> <a>Titel</a> listings) — every anchor's forward
+# region runs up to the NEXT `<a`, which is exactly where the next item's
+# OWN leading date sits, so each item silently inherits its successor's
+# date and the last item gets none. Search both directions instead and let
+# distance decide, but cap how far a match may be and still count: in a
+# realistic listing (with normal per-item wrapper markup, e.g. <li>...</li>)
+# an item's OWN marker — whichever side its convention puts it on — sits at
+# most ~30-40 chars from the anchor, while a NEIGHBOUR's marker reached
+# through the "wrong" direction sits past the neighbour's own tag structure,
+# comfortably over 100 chars away. Without this cap, an undated item
+# sandwiched between two dated ones (either convention) would still inherit
+# whichever neighbour happens to be within the +-300-char window.
+_DATE_NEAR_MAX_DISTANCE = 120
 
 
-def _extract_date_near(html: str, end: int, window: int = 300) -> Optional[str]:
+def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Optional[str]:
     """The date belonging to ONE <a> match on a listing page (a newsroom
     index lists many items, each with its own date) — unlike
     _extract_published_from_html (a whole single-article page), this
-    targets the standard trailing-marker convention: title link, then its
-    own date, right after it.
+    handles BOTH a trailing-marker convention (title link, then its own
+    date) and a date-before convention (date, then the title link).
 
-    Searches FORWARD ONLY, from this anchor's own close (`end`) up to the
-    next `<a` (or `window` chars, whichever is nearer) — deliberately never
-    backward from the anchor's start. A symmetric +-window scan (the
-    original bug) could reach past a neighbour into a THIRD item's date;
-    bounding it to "the previous </a>" instead of dropping backward search
-    entirely does not actually fix that — the gap between two anchors is
-    always exactly the PRECEDING anchor's own forward region, so a
-    backward scan into it either re-attributes that neighbour's date to an
-    anchor that has none of its own (an undated item between two dated
-    ones would incorrectly inherit one), or — if instead split at the
-    midpoint to avoid that — truncates a real date that sits hard against
-    the next anchor in a compact, unpadded list. Forward-only sidesteps
-    both failure modes: an anchor with no trailing marker of its own
-    always finds nothing, and a real marker is always read in full.
-
-    Within that forward region, every `<time datetime>` / ISO / German
-    (dd.mm.yyyy) match is a candidate; the NEAREST one to the anchor (by
-    character distance) wins — not whichever pattern is tried first."""
+    Searches a forward region (from `end` up to the next `<a`, or `window`
+    chars) and a backward region (from the previous `</a>` up to `start`,
+    or `window` chars) — bounded by the neighbouring anchors so it can
+    never reach a THIRD item's date. Every `<time datetime>` / ISO / German
+    (dd.mm.yyyy) match found in EITHER region is a candidate; the NEAREST
+    one to the anchor (by character distance, capped at
+    _DATE_NEAR_MAX_DISTANCE — see its comment) wins, not whichever
+    direction or pattern is tried first. In a trailing-marker listing the
+    anchor's own date is a few chars forward while a neighbour's leaks in
+    only from far behind; in a date-before listing it's the mirror image —
+    either way the genuine, close-by match wins and a neighbour's distant
+    one is dropped, so an anchor with no marker of its own still correctly
+    finds nothing."""
     fwd_limit = min(len(html), end + window)
     next_anchor = _ANCHOR_OPEN_RE.search(html, end)
     if next_anchor:
         fwd_limit = min(fwd_limit, next_anchor.start())
 
-    segment = html[end:fwd_limit]
+    back_limit = max(0, start - window)
+    prev_close = None
+    for m in _ANCHOR_CLOSE_RE.finditer(html, back_limit, start):
+        prev_close = m
+    if prev_close is not None:
+        back_limit = max(back_limit, prev_close.end())
+
     candidates: list[tuple[int, str]] = []
 
-    for m in _TIME_TAG_RE.finditer(segment):
-        iso = _coerce_iso_date(m.group(1))
-        if iso:
-            candidates.append((m.start(), iso))
+    def _collect(segment: str, base_offset: int, anchor_pos: int) -> None:
+        for m in _TIME_TAG_RE.finditer(segment):
+            iso = _coerce_iso_date(m.group(1))
+            if iso:
+                candidates.append((abs(base_offset + m.start() - anchor_pos), iso))
+        # Length-preserving tag strip (spaces equal to each tag's own
+        # length, not a single space) so a text-pattern match's offset
+        # inside `text_seg` still lines up with its real position in
+        # `segment`/`html` — _DATE_NEAR_MAX_DISTANCE only means anything
+        # if distances are actual character counts, not stripped-text ones.
+        text_seg = _HTML_TAG_RE.sub(lambda tm: " " * len(tm.group(0)), segment)
+        for m in _TEXT_ISO_DATE_RE.finditer(text_seg):
+            y, mo, d = (int(g) for g in m.groups())
+            try:
+                iso = date(y, mo, d).isoformat()
+            except ValueError:
+                continue
+            candidates.append((abs(base_offset + m.start() - anchor_pos), iso))
+        for m in _TEXT_DE_DATE_RE.finditer(text_seg):
+            d, mo, y = (int(g) for g in m.groups())
+            try:
+                iso = date(y, mo, d).isoformat()
+            except ValueError:
+                continue
+            candidates.append((abs(base_offset + m.start() - anchor_pos), iso))
 
-    text_seg = _HTML_TAG_RE.sub(" ", segment)
-    for m in _TEXT_ISO_DATE_RE.finditer(text_seg):
-        y, mo, d = (int(g) for g in m.groups())
-        try:
-            iso = date(y, mo, d).isoformat()
-        except ValueError:
-            continue
-        candidates.append((m.start(), iso))
-    for m in _TEXT_DE_DATE_RE.finditer(text_seg):
-        d, mo, y = (int(g) for g in m.groups())
-        try:
-            iso = date(y, mo, d).isoformat()
-        except ValueError:
-            continue
-        candidates.append((m.start(), iso))
+    _collect(html[end:fwd_limit], end, end)
+    _collect(html[back_limit:start], back_limit, start)
 
     if not candidates:
         return None
     candidates.sort(key=lambda t: t[0])
-    return candidates[0][1]
+    best_distance, best_iso = candidates[0]
+    if best_distance > _DATE_NEAR_MAX_DISTANCE:
+        return None
+    return best_iso
 
 
 # ---------------------------------------------------------------------------
@@ -2004,7 +2033,7 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
             if not norm or norm in norm_seen:
                 continue
 
-            published = _parse_published({"url": full}) or _extract_date_near(html, m.end())
+            published = _parse_published({"url": full}) or _extract_date_near(html, m.start(), m.end())
             if not published:
                 continue
             try:
