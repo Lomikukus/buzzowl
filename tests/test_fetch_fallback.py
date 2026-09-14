@@ -451,9 +451,11 @@ class TestFetchPageRawCamofoxLinks:
         assert pipeline._FETCH_TIER_LOG[-1]["url"] == base_url
 
     @pytest.mark.asyncio
-    async def test_plain_html_kept_when_present_even_if_thin(self, monkeypatch):
-        """raw_html should only be replaced by Camofox's links when the plain
-        GET produced nothing at all to harvest from."""
+    async def test_plain_html_kept_and_camofox_links_appended(self, monkeypatch):
+        """A thin but real plain body (a JS shell, a nav-only page) keeps its
+        own html AND gets Camofox's links appended, so _harvest_links sees
+        both — a JS shell exposes its real links only through the rendered
+        snapshot."""
         monkeypatch.setenv("CAMOFOX_URL", "http://camofox-test:9377")
         monkeypatch.setenv("BROWSER_SERVICE_URL", "http://browser-test:3000")
         base_url = "https://example.com/karriere"
@@ -469,8 +471,9 @@ class TestFetchPageRawCamofoxLinks:
         )
         with httpx_patch:
             _text, html = await pipeline._fetch_page_raw(base_url)
-        assert html == plain_html
-        assert "Should not appear" not in html
+        assert html.startswith(plain_html)
+        assert 'href="https://example.com/somewhere"' in html
+        assert "Should not appear" in html
 
 
 # ---------------------------------------------------------------------------
