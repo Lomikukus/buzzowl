@@ -196,6 +196,17 @@ _TOP_LIST_CAPS = {
 }
 
 
+def _is_legal_url_safe(url: str) -> bool:
+    """Lazy, best-effort import of routers.pipeline._is_legal_url — same
+    guard pattern as _ats_match_safe below it against the routers.pipeline
+    <-> playbook import cycle."""
+    try:
+        from routers.pipeline import _is_legal_url
+    except Exception:
+        return False
+    return _is_legal_url(url)
+
+
 def _merge(existing: dict, patch: dict, *, domain: str, website: str) -> dict:
     """Deterministic merge: scalars overwrite, the three dict fields deep-merge
     one level, list fields union-preserving-order + bound."""
@@ -213,6 +224,22 @@ def _merge(existing: dict, patch: dict, *, domain: str, website: str) -> dict:
                 merged[key] = _merge_list(merged.get(key), value, _TOP_LIST_CAPS[key])
         else:
             merged[key] = value
+
+    # D24 — a legal/boilerplate URL (Impressum, Datenschutz, ...) is already
+    # kept out of newsroom.urls at the SOURCE (_discover_client_sources'
+    # _is_legal_url check) and filtered on READ (_client_newsroom_urls), but
+    # a playbook written before either of those shipped — or a URL added by
+    # hand — could still carry one in STORAGE forever, since a patch that
+    # only ever adds/unions new URLs never drops an old one. One-time
+    # cleanup: scrub it here too, on every write to this playbook (not just
+    # ones whose own patch touches newsroom), so it eventually falls out on
+    # its own the next time anything records to this domain.
+    newsroom = merged.get("newsroom")
+    if isinstance(newsroom, dict) and newsroom.get("urls"):
+        cleaned = [u for u in newsroom["urls"] if not _is_legal_url_safe(u)]
+        if cleaned != newsroom["urls"]:
+            merged["newsroom"] = {**newsroom, "urls": cleaned}
+
     return merged
 
 

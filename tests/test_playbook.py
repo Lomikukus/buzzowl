@@ -100,6 +100,37 @@ async def test_record_dedupes_blocked_urls_by_url_keeping_newest_at():
     assert by_url["https://acme.com/y"]["at"] == "t0"
 
 
+async def test_record_scrubs_legal_url_from_existing_newsroom_urls_on_any_write():
+    """D24 — a legal/boilerplate URL (e.g. an Impressum page) recorded into
+    newsroom.urls before the source-side filter shipped (or added by hand)
+    must be scrubbed the next time ANYTHING writes to this playbook, not
+    just when a patch's own newsroom.urls list happens to mention it."""
+    existing = {"metadata": {
+        "domain": "datev.de",
+        "newsroom": {"urls": [
+            "https://datev.de/presse",
+            "https://datev.de/ueber-datev/impressum?utm_source=x",
+        ], "last_success_at": "2026-09-14T01:24:00+00:00"},
+    }}
+    db = _db(get_document=existing)
+    with patch.object(playbook, "db_module", db):
+        # An unrelated patch (news.good_queries) still triggers the cleanup.
+        merged = await playbook.record(1, "datev.de", {"news": {"good_queries": ["datev news"]}})
+    assert merged["newsroom"]["urls"] == ["https://datev.de/presse"]
+    assert merged["newsroom"]["last_success_at"] == "2026-09-14T01:24:00+00:00"  # untouched
+
+
+async def test_record_leaves_newsroom_urls_alone_when_none_are_legal():
+    existing = {"metadata": {
+        "domain": "acme.com",
+        "newsroom": {"urls": ["https://acme.com/presse", "https://acme.com/news"]},
+    }}
+    db = _db(get_document=existing)
+    with patch.object(playbook, "db_module", db):
+        merged = await playbook.record(1, "acme.com", {"needs_js": True})
+    assert merged["newsroom"]["urls"] == ["https://acme.com/presse", "https://acme.com/news"]
+
+
 # ---------------------------------------------------------------------------
 # _mirror_summary
 # ---------------------------------------------------------------------------
