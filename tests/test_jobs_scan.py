@@ -85,6 +85,25 @@ class TestFilterPositions:
         positions = [{"title": "Ausbildung Fachinformatiker (m/w/d)"}]
         assert pipeline._filter_positions(positions) == positions
 
+    def test_werkstudent_homebase_with_schwerpunkt_dropped(self):
+        """Junior filter (minor), the actual DATEV title from wp7b_evidence
+        (06_positions.txt line 15): a non-IT "Werkstudent" survived the
+        filter because the bare "erp" override word matched as a substring
+        inside the common German word "Schwerpunkt" ("Sch-w-ERP-unkt",
+        meaning "focus/emphasis") — nothing to do with ERP software. "sap"
+        has the same substring-match risk, so both got word boundaries."""
+        title = ("Werkstudent Homebase Product, Delivery & Process mit Schwerpunkt "
+                 "Kommunikation & Organisation")
+        assert pipeline._filter_positions([{"title": title}]) == []
+
+    def test_standalone_erp_and_sap_still_override_junior_drop(self):
+        """The word-boundary fix must not stop matching a GENUINE ERP/SAP
+        role — only the substring-inside-another-word false positive."""
+        assert pipeline._filter_positions([{"title": "Werkstudent ERP Consultant"}]) == \
+            [{"title": "Werkstudent ERP Consultant"}]
+        assert pipeline._filter_positions([{"title": "Praktikum SAP Basis"}]) == \
+            [{"title": "Praktikum SAP Basis"}]
+
     def test_praktikum_marketing_dropped(self):
         assert pipeline._filter_positions([{"title": "Praktikum Marketing"}]) == []
 

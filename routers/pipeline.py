@@ -3769,7 +3769,7 @@ _JUNIOR_TITLE_RE = re.compile(
 # terms qualify as an override.
 _IT_MGMT_WORD_RE = re.compile(
     r"fachinformatiker|informatik|software|entwickler|developer|engineer|data|cloud|"
-    r"security|cyber|devops|sap|erp|\bit\b|architekt|architect|cio|cto|ciso|head of|leiter",
+    r"security|cyber|devops|\bsap\b|\berp\b|\bit\b|architekt|architect|cio|cto|ciso|head of|leiter",
     re.IGNORECASE,
 )
 
