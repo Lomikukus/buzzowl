@@ -12,6 +12,7 @@ Covers:
 
 import asyncio
 import hashlib
+import html
 import json
 import logging
 import os
@@ -3924,34 +3925,71 @@ async def _map_needs_to_products(org_id: int, client_name: str, needs: list) -> 
 _POSTING_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 _POSTING_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.I | re.S)
 
+# D17 — a visible separator between the real title and a trailing site-name
+# segment: "Senior Engineer - Acme GmbH", "Data Engineer | Acme", Personio's
+# "... (Gütersloh) › Miele Gruppe", "... – Stellenangebot". Whatever follows
+# the FIRST one is always the site/company name, never part of the role — a
+# plain hyphen only counts with mandatory whitespace on both sides so a
+# compound word like "Kubernetes-Platform" is never mistaken for one.
+_TITLE_SEGMENT_SPLIT_RE = re.compile(r"\s+-\s+|\s*[|›–—]\s*")
+# A bare boilerplate tail with NO separator at all (Workday's "... Job
+# Details") — anchored on the whitespace before it so a role genuinely
+# titled e.g. "IT Support Jobs Coordinator" is untouched.
+_TITLE_BARE_SUFFIX_RE = re.compile(r"\s+(?:job\s*details?|jobdetails)\s*$", re.IGNORECASE)
+_TITLE_FETCH_MAX = 20
+_TITLE_FETCH_CONCURRENCY = 6
+
+
+def _clean_posting_title(title: str) -> str:
+    """D17: html-unescape entities (&amp; -> &), drop a leading
+    "Jobangebot:" prefix, strip everything from the FIRST "|"/" - "/"›"/
+    en-or-em-dash separator onward (that's always the site/company name,
+    e.g. "Senior Engineer - Acme GmbH", "... › Miele Gruppe") plus a bare
+    "Job Details" tail with no separator at all (Workday), and collapse
+    whitespace. '' in, '' out."""
+    text = html.unescape(title or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^\s*jobangebot\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    if not text:
+        return ""
+    m = _TITLE_SEGMENT_SPLIT_RE.search(text)
+    if m:
+        text = text[:m.start()].strip()
+    text = _TITLE_BARE_SUFFIX_RE.sub("", text).strip()
+    return text
+
 
 async def _fetch_posting_title(url: str) -> str:
-    """D10: plain-GET a single job-posting page and return a cleaned
-    <title>/<h1> (company suffix after ' - '/' | ' stripped) — used to
-    replace a sitemap-slug-derived title, which is only ever as good as the
-    URL's slug and gets truncated mid-word for a longer role name. '' on any
-    failure (no response, no title/h1, or an empty one after cleanup) — the
-    caller falls back to the slug title in that case."""
-    html = ""
+    """D10/D17/D19: plain-GET a single job-posting page and return a cleaned
+    <title>/<h1> (_clean_posting_title: html-unescaped, boilerplate site-name
+    suffix/prefix stripped, whitespace collapsed) — used to replace a
+    sitemap-slug-derived title, which is only ever as good as the URL's slug
+    and gets truncated mid-word for a longer role name. '' on any failure
+    (no response, no title/h1, or an empty one after cleanup) — the caller
+    falls back to the slug title in that case."""
+    body = ""
     try:
         async with httpx.AsyncClient(
             timeout=8.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
         ) as http:
             resp = await http.get(url)
             if resp.status_code == 200:
-                html = resp.text
+                body = resp.text
     except Exception:
+        _record_fetch_tier(url, "none", 0)
         return ""
+    # D19 — this tier fetches through its own httpx client (not
+    # _fetch_page_text/_fetch_page_raw), so it must record its own ring-log
+    # entry or title fetches stay invisible to /api/agents/fetch-log.
+    _record_fetch_tier(url, "http" if body else "none", len(body))
     for pattern in (_POSTING_TITLE_RE, _POSTING_H1_RE):
-        m = pattern.search(html or "")
+        m = pattern.search(body or "")
         if not m:
             continue
         raw = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", m.group(1))).strip()
-        for sep in (" - ", " | "):
-            if sep in raw:
-                raw = raw.split(sep)[0].strip()
-        if raw:
-            return raw
+        cleaned = _clean_posting_title(raw)
+        if cleaned:
+            return cleaned
     return ""
 
 
@@ -4210,14 +4248,23 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
             if best and best_score >= 0.5:
                 p["url"] = best
 
-        # D10 — replace a slug-derived title with the real posting page's
-        # <title>/<h1> for the (at most 8) positions that got a posting URL
-        # above; a fetch that fails or turns up nothing leaves the slug title
-        # in place (title_source stays "slug").
-        slug_positions = [p for p in positions if p.get("title_source") == "slug" and p.get("url")][:8]
+        # D10/D17 — replace a slug-derived title with the real posting page's
+        # <title>/<h1> for the (at most _TITLE_FETCH_MAX) positions that got a
+        # posting URL above; a fetch that fails or turns up nothing leaves the
+        # slug title in place (title_source stays "slug"). Concurrency is
+        # bounded (_TITLE_FETCH_CONCURRENCY) rather than firing all of them
+        # at once now that the cap itself was raised 8 -> 20.
+        slug_positions = [p for p in positions if p.get("title_source") == "slug" and p.get("url")] \
+            [:_TITLE_FETCH_MAX]
         if slug_positions:
+            title_sem = asyncio.Semaphore(_TITLE_FETCH_CONCURRENCY)
+
+            async def _bounded_title(u: str) -> str:
+                async with title_sem:
+                    return await _fetch_posting_title(u)
+
             page_titles = await asyncio.gather(
-                *[_fetch_posting_title(p["url"]) for p in slug_positions]
+                *[_bounded_title(p["url"]) for p in slug_positions]
             )
             for p, page_title in zip(slug_positions, page_titles):
                 if page_title:

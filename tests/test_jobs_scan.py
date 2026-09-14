@@ -1596,16 +1596,16 @@ class TestSlugTitleReplacedByPageTitle:
     async def test_blocker3_positions_refiltered_after_title_replacement(self):
         """WP8 review BLOCKER 3: _filter_positions ran once on the ORIGINAL
         slug titles; _fetch_posting_title then overwrote titles afterwards
-        with no re-filter and no re-dedupe. Measured: 10 distinct slugs
-        whose posting pages all title "Praktikum Marketing (m/w/d) - Acme"
-        (a junior title) produced 8 identical junior rows. After the fix,
-        the (at most 8) positions whose title got replaced must be
-        re-filtered: all 8 collapse/drop as junior, leaving only the 2
-        positions outside the 8-fetch cap with their original, distinct,
-        non-junior slug titles."""
+        with no re-filter and no re-dedupe. D17 raised the title-fetch cap
+        8 -> 20: with 22 distinct slugs whose posting pages all title
+        "Praktikum Marketing (m/w/d) - Acme" (a junior title), the (at most
+        20) positions whose title got replaced must be re-filtered: all 20
+        collapse/drop as junior. The remaining 2 were already dropped by
+        _filter_positions' own pre-existing 20-cap before a title fetch was
+        ever attempted for them, so none of the 22 survive."""
         db_patch, db = _patch_db()
         client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
-        titles = [f"Distinct Role {i}" for i in range(10)]
+        titles = [f"Distinct Role {i}" for i in range(22)]
         sitemap = [(t, f"https://acme.com/jobs/role-{i}") for i, t in enumerate(titles)]
         reply = json.dumps({"positions": [{"title": t} for t in titles], "inferred_needs": []})
         junior_title = "Praktikum Marketing (m/w/d) - Acme"
@@ -1615,17 +1615,20 @@ class TestSlugTitleReplacedByPageTitle:
              patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value=junior_title)):
             summary = await pipeline._scan_client_jobs(1, client)
 
-        # Only the 2 positions outside the 8-post cap keep their distinct,
-        # non-junior slug title; the other 8 all became the same junior
-        # title and must be dropped, not stored as 8 duplicate rows.
-        assert summary["positions"] == 2
+        assert summary["positions"] == 0
         _, kwargs = db.index_document.await_args_list[0]
         stored_titles = [p["title"] for p in kwargs["metadata"]["positions"]]
         assert junior_title not in stored_titles
-        assert kwargs["metadata"]["filtered_out"] == 8
+        # 2 dropped by _filter_positions' own 20-cap up front, then all 20
+        # survivors collapse to the same junior title on re-filter.
+        assert kwargs["metadata"]["filtered_out"] == 22
 
     @pytest.mark.asyncio
-    async def test_at_most_eight_posting_pages_fetched(self):
+    async def test_more_than_eight_posting_pages_now_fetched(self):
+        """D17: the title-fetch cap was raised from 8 to 20 — a careers page
+        with 12 distinct postings (more than the OLD cap, fewer than the
+        NEW one) must now get a title fetch for every single one of them,
+        not just the first 8."""
         db_patch, db = _patch_db()
         client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
         titles = [f"Engineer Number {i}" for i in range(12)]
@@ -1639,7 +1642,138 @@ class TestSlugTitleReplacedByPageTitle:
             summary = await pipeline._scan_client_jobs(1, client)
 
         assert summary["positions"] == 12
-        assert fetch_title.await_count <= 8
+        assert fetch_title.await_count == 12
+
+    @pytest.mark.asyncio
+    async def test_title_fetch_cap_still_bounded_at_twenty(self):
+        """The cap is now 20, not unlimited — 25 distinct postings must
+        still only get (at most) 20 title fetches (_filter_positions' own
+        pre-existing 20-cap on the raw sitemap titles already enforces
+        this, since it runs before the title-fetch step)."""
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        titles = [f"Engineer Number {i}" for i in range(25)]
+        sitemap = [(t, f"https://acme.com/jobs/eng-{i}") for i, t in enumerate(titles)]
+        reply = json.dumps({"positions": [{"title": t} for t in titles], "inferred_needs": []})
+        fetch_title = AsyncMock(return_value="")
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=sitemap)), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)), \
+             patch.object(pipeline, "_fetch_posting_title", fetch_title):
+            await pipeline._scan_client_jobs(1, client)
+
+        assert fetch_title.await_count <= 20
+
+
+class TestCleanPostingTitle:
+    """D17 — html-unescape, boilerplate suffix/prefix stripping, whitespace
+    collapse. Titles are the actual (unredacted) strings from wp7b_evidence
+    (13_festo_positions.txt, 06_positions.txt)."""
+
+    def test_workday_job_details_suffix_stripped(self):
+        assert pipeline._clean_posting_title(
+            "System Engineer Kubernetes-Platform Engi Job Details",
+        ) == "System Engineer Kubernetes-Platform Engi"
+
+    def test_html_entity_unescaped_and_job_details_suffix_stripped(self):
+        assert pipeline._clean_posting_title(
+            "Endpoint &amp; OT Client Platform Engineer Job Details",
+        ) == "Endpoint & OT Client Platform Engineer"
+
+    def test_personio_breadcrumb_suffix_stripped(self):
+        assert pipeline._clean_posting_title(
+            "Product Architect Embedded Software (m/w/d) (Gütersloh) › Miele Gruppe",
+        ) == "Product Architect Embedded Software (m/w/d) (Gütersloh)"
+
+    def test_jobangebot_prefix_stripped(self):
+        assert pipeline._clean_posting_title("Jobangebot: Senior Java Developer") == "Senior Java Developer"
+
+    def test_dash_karriere_suffix_stripped(self):
+        assert pipeline._clean_posting_title("Backend Engineer - Karriere") == "Backend Engineer"
+
+    def test_en_dash_stellenangebot_suffix_stripped(self):
+        assert pipeline._clean_posting_title("Backend Engineer – Stellenangebot") == "Backend Engineer"
+
+    def test_pipe_jobs_suffix_stripped(self):
+        assert pipeline._clean_posting_title("Backend Engineer | Jobs") == "Backend Engineer"
+
+    def test_compound_word_hyphen_not_mistaken_for_a_separator(self):
+        """A bare mid-word hyphen (no surrounding whitespace) must survive —
+        only " - " with spaces on both sides is a real separator."""
+        assert pipeline._clean_posting_title("Full-Stack Developer") == "Full-Stack Developer"
+
+    def test_whitespace_collapsed(self):
+        assert pipeline._clean_posting_title("  Backend   Engineer  \n\n(Remote)  ") \
+            == "Backend Engineer (Remote)"
+
+    def test_empty_input_returns_empty(self):
+        assert pipeline._clean_posting_title("") == ""
+        assert pipeline._clean_posting_title(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# D19 — path-probe and title-fetch tiers recorded to the fetch-tier ring log
+# ---------------------------------------------------------------------------
+
+class TestFetchTierLogCoversPathProbesAndTitleFetches:
+    def setup_method(self):
+        pipeline._FETCH_TIER_LOG.clear()
+
+    def teardown_method(self):
+        pipeline._FETCH_TIER_LOG.clear()
+
+    @pytest.mark.asyncio
+    async def test_path_probe_hit_recorded_as_http(self):
+        client = _client(website="https://acme.com")
+        hit_url = "https://acme.com/karriere"
+        hit_html = ("<html><head><title>Karriere bei Acme</title></head><body>"
+                    + ("Aktuelle Stellenangebote. " * 30) + "</body></html>")
+
+        def _resolver(url):
+            if url == hit_url:
+                return _fake_response(200, hit_html, url=hit_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            await pipeline._careers_candidates(1, client)
+
+        logged_urls = [e["url"] for e in pipeline._FETCH_TIER_LOG]
+        assert hit_url in logged_urls
+        hit_entry = next(e for e in pipeline._FETCH_TIER_LOG if e["url"] == hit_url)
+        assert hit_entry["tier"] == "http"
+        assert hit_entry["chars"] > 0
+
+    @pytest.mark.asyncio
+    async def test_path_probe_miss_recorded_as_none(self):
+        client = _client(website="https://acme.com")
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            await pipeline._careers_candidates(1, client)
+
+        assert len(pipeline._FETCH_TIER_LOG) == 10  # one per probe URL issued
+        assert all(e["tier"] == "none" for e in pipeline._FETCH_TIER_LOG)
+
+    @pytest.mark.asyncio
+    async def test_title_fetch_success_recorded_as_http(self):
+        html = "<html><head><title>Backend Engineer</title></head></html>"
+        with _patch_httpx_dynamic(lambda u: _fake_response(200, html, url=u)):
+            await pipeline._fetch_posting_title("https://acme.com/jobs/x")
+        assert pipeline._FETCH_TIER_LOG[-1]["url"] == "https://acme.com/jobs/x"
+        assert pipeline._FETCH_TIER_LOG[-1]["tier"] == "http"
+        assert pipeline._FETCH_TIER_LOG[-1]["chars"] > 0
+
+    @pytest.mark.asyncio
+    async def test_title_fetch_failure_recorded_as_none(self):
+        with _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            await pipeline._fetch_posting_title("https://acme.com/jobs/gone")
+        assert pipeline._FETCH_TIER_LOG[-1]["url"] == "https://acme.com/jobs/gone"
+        assert pipeline._FETCH_TIER_LOG[-1]["tier"] == "none"
+        assert pipeline._FETCH_TIER_LOG[-1]["chars"] == 0
 
 
 # ---------------------------------------------------------------------------
