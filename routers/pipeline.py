@@ -987,6 +987,94 @@ def _site_base(website: str) -> str:
     return f"{p.scheme}://{host}{path}"
 
 
+# D27 — some clients' recorded domain (metadata.website) is stale: the site
+# now redirects EVERYTHING to a different registrable domain (vorwerk.de ->
+# vorwerk.com). _client_domain still returns the ORIGINAL domain (playbooks
+# stay keyed by it, unchanged — see playbook.domain_of), but a probe/harvest
+# result landing on the new domain must still count as "the client's own
+# site", or it's silently discarded as off-domain forever (root cause for
+# Vorwerk — every genuine careers-page result on vorwerk.com was dropped).
+_CANONICAL_DOMAIN_RECHECK_DAYS = 30
+
+
+async def _resolve_site_domain(org_id: int, client: dict) -> str:
+    """GET the client's homepage once (_site_base, following redirects, 10s)
+    and, if the final resolved host's registrable domain differs from
+    _client_domain(client), record it as metadata.canonical_domain (and
+    stamp metadata.canonical_checked_at) so _own_or_ats and the news block's
+    own-domain checks can treat BOTH as "own". Also records the alias on the
+    domain's site playbook (aliases: [canonical]) — the playbook document
+    itself stays keyed by the ORIGINAL domain (site-playbook-vorwerk.de).
+
+    Cached: the resolution GET is skipped when metadata.canonical_domain is
+    already set and metadata.canonical_checked_at is younger than
+    _CANONICAL_DOMAIN_RECHECK_DAYS days — this is a real HTTP request, not a
+    cheap check.
+
+    Returns the canonical domain when a redirect to a different registrable
+    domain was found (this call or a cached prior one), else _client_domain
+    (client)'s own domain unchanged. Never "" when a domain could be
+    determined at all."""
+    domain = _client_domain(client)
+    if not domain:
+        return ""
+    meta = client.get("metadata") or {}
+    cached = (meta.get("canonical_domain") or "").strip()
+    checked_at = meta.get("canonical_checked_at")
+    if cached and checked_at:
+        try:
+            if (datetime.now(timezone.utc) - datetime.fromisoformat(checked_at)) \
+                    <= timedelta(days=_CANONICAL_DOMAIN_RECHECK_DAYS):
+                return cached
+        except (ValueError, TypeError):
+            pass
+
+    website = _site_base(meta.get("website") or "")
+    if not website:
+        return domain
+
+    resolved_domain = domain
+    try:
+        async with httpx.AsyncClient(
+            timeout=10.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+        ) as http:
+            resp = await http.get(website)
+            final_host = urlparse(str(resp.url)).netloc.lower()
+            final_host = final_host[4:] if final_host.startswith("www.") else final_host
+            if final_host:
+                resolved_domain = final_host
+    except Exception:
+        resolved_domain = domain
+
+    canonical = resolved_domain if resolved_domain != domain else ""
+    if not canonical:
+        # Nothing to persist — the recorded domain is still correct. Not
+        # writing canonical_checked_at here is deliberate (not just an
+        # optimization): that field's only job is caching a FOUND alias, per
+        # this function's own docstring — a healthy client with no redirect
+        # has nothing to cache, and stamping it anyway would only add a
+        # write with no payoff (the next call would still need to check
+        # again, alias or not, since nothing here can regress).
+        return domain
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    patch = {"canonical_domain": canonical, "canonical_checked_at": now_iso}
+    try:
+        await db_module.update_client_metadata(org_id, client["name"], patch)
+    except Exception as exc:
+        console.print(f"[yellow]canonical-domain resolve failed for {client['name']}: {exc}[/yellow]")
+    meta["canonical_domain"] = canonical
+    meta["canonical_checked_at"] = now_iso
+    client["metadata"] = meta
+
+    try:
+        import playbook  # type: ignore
+        await playbook.record(org_id, domain, {"aliases": [canonical]}, website=meta.get("website") or "")
+    except Exception as exc:
+        console.print(f"[yellow]canonical-domain alias record failed for {client['name']}: {exc}[/yellow]")
+    return canonical
+
+
 # Aggregator/registry/social domains that are never a company's own website
 _AGGREGATOR_DOMAINS = {
     "linkedin.com", "xing.com", "facebook.com", "instagram.com", "youtube.com",
@@ -1214,10 +1302,13 @@ async def _probe_newsroom_paths(website: str) -> list[dict]:
     return hits
 
 
-async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> list[dict]:
+async def _harvest_links_news(website: str, keys: tuple, own_domain: str, *,
+                               alias: str = "") -> list[dict]:
     """Homepage link harvest for newsroom/press pages: fetch the homepage and
     pull out <a href> links whose href or visible text mentions one of `keys`,
-    restricted to `own_domain` (or a subdomain of it).
+    restricted to `own_domain` (or a subdomain of it) — or, D27, `alias` (the
+    client's canonical alias domain, when its recorded domain just redirects
+    elsewhere — e.g. vorwerk.com when metadata.website is still vorwerk.de).
 
     Trumpf fix — routed through _fetch_page_raw (plain GET -> browser-
     service -> Camofox, the same ladder the jobs block's homepage harvest
@@ -1252,7 +1343,9 @@ async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> lis
             continue
         url = urljoin(base, href)
         host = _result_domain(url)
-        if not own_domain or not (host == own_domain or host.endswith("." + own_domain)):
+        is_own = own_domain and (host == own_domain or host.endswith("." + own_domain))
+        is_alias = alias and (host == alias or host.endswith("." + alias))
+        if not (is_own or is_alias):
             continue
         if url in seen:
             continue
@@ -1296,6 +1389,12 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
         return existing
 
     domain = _client_domain(client)
+    # D27 — vorwerk.de -> vorwerk.com: resolve (and cache) the client's
+    # canonical alias domain, so a genuine newsroom result on the NEW domain
+    # counts as "own" too, not just the stale recorded one.
+    alias = await _resolve_site_domain(org_id, client)
+    if alias == domain:
+        alias = ""
 
     candidates: list[tuple[int, str, str]] = []
 
@@ -1307,7 +1406,7 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
         candidates.append((0, h["url"], h.get("label", "")))
 
     try:
-        harvested = await _harvest_links_news(website, _SOURCE_KEYWORDS, domain)
+        harvested = await _harvest_links_news(website, _SOURCE_KEYWORDS, domain, alias=alias)
     except Exception:
         harvested = []
     for h in harvested:
@@ -1325,7 +1424,9 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
             if not url.startswith("http"):
                 continue
             host = _result_domain(url)
-            if not (host == domain or host.endswith("." + domain)):
+            is_own = host == domain or host.endswith("." + domain)
+            is_alias = alias and (host == alias or host.endswith("." + alias))
+            if not (is_own or is_alias):
                 continue
             candidates.append((2, url, (r.get("title") or "")[:60]))
 
@@ -2087,6 +2188,15 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
     if not urls:
         return [], []
 
+    # D27 — vorwerk.de -> vorwerk.com: an article link on a newsroom page
+    # can itself live on the canonical alias domain, not the stale recorded
+    # one — resolve (and cache) it so the own-domain filter below accepts
+    # it. Only worth the extra GET once there's actually a newsroom page to
+    # read.
+    alias = await _resolve_site_domain(org_id, client)
+    if alias == domain:
+        alias = ""
+
     today = datetime.now(timezone.utc).date()
     now_iso = datetime.now(timezone.utc).isoformat()
     candidates: list[dict] = []
@@ -2137,7 +2247,9 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
             if not full.startswith("http"):
                 continue
             host = _result_domain(full)
-            if not (host == domain or host.endswith("." + domain)):
+            is_own = host == domain or host.endswith("." + domain)
+            is_alias = alias and (host == alias or host.endswith("." + alias))
+            if not (is_own or is_alias):
                 continue
             norm = _norm_news_url(full)
             if not norm or norm in norm_seen:
@@ -3224,15 +3336,21 @@ async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000)
     return text, html
 
 
-def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "") -> list[str]:
+def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "", *,
+                    alias: str = "") -> list[str]:
     """Rank links on a page by relevance to `keys` (substring match against the
     full URL) plus ATS-host / own-domain bonuses. Generalises the old
     _career_listing_links so the same code harvests a careers-page link off a
     homepage (keys=_CAREERS_KEYS) or a job-listing link off a careers landing
-    page (keys=_JOB_LINK_KEYS) today, and a newsroom link (WP3) later."""
+    page (keys=_JOB_LINK_KEYS) today, and a newsroom link (WP3) later.
+
+    `alias` (D27): the client's canonical alias domain (metadata.
+    canonical_domain), when its recorded domain redirects elsewhere — a link
+    landing on it earns the same own-domain scoring bonus `own_domain` does."""
     from urllib.parse import urljoin
     base_host = urlparse(base_url).netloc.lower().replace("www.", "")
     own_domain = (own_domain or base_host).lower().replace("www.", "")
+    alias = (alias or "").lower().replace("www.", "")
     ranked: list[tuple[int, str]] = []
     seen: set = set()
     for m in re.finditer(r'href=["\']([^"\']+)["\']', html or "", re.I):
@@ -3249,7 +3367,8 @@ def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "") 
         if full in seen or not (is_ats or is_match):
             continue
         seen.add(full)
-        score = (3 if is_ats else 0) + (1 if own_domain and own_domain in host else 0) \
+        is_own = (own_domain and own_domain in host) or (alias and alias in host)
+        score = (3 if is_ats else 0) + (1 if is_own else 0) \
                   + (1 if any(t in low for t in ("stellenangebote", "all-jobs", "open-positions", "joblist", "stellensuche")) else 0)
         ranked.append((score, full))
     ranked.sort(reverse=True)
@@ -3543,13 +3662,18 @@ async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional
     return accepted, blocked
 
 
-def _own_or_ats(url: str, domain: str) -> bool:
-    """True when `url` is on the client's own domain (or a subdomain of it)
-    or a known ATS host. Module-level (was a _discover_careers_url closure)
-    so _careers_candidates can also use it to decide whether the path-probe
+def _own_or_ats(url: str, domain: str, alias: str = "") -> bool:
+    """True when `url` is on the client's own domain (or a subdomain of it),
+    its D27 canonical alias domain (or a subdomain of THAT — e.g.
+    vorwerk.com when metadata.website is still vorwerk.de), or a known ATS
+    host. Module-level (was a _discover_careers_url closure) so
+    _careers_candidates can also use it to decide whether the path-probe
     tier is still worth running (WP8 review nit 1)."""
     host = urlparse(url).netloc.lower().replace("www.", "")
-    return bool(domain and (host == domain or host.endswith("." + domain))) or _ats_match(host)
+    for d in (domain, alias):
+        if d and (host == d or host.endswith("." + d)):
+            return True
+    return _ats_match(host)
 
 
 def _playbook_careers_fresh(careers_pb: dict) -> bool:
@@ -3676,11 +3800,17 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     # it into a URL. See _site_base's docstring for the exact failure mode.
     website = _site_base(meta.get("website") or "")
     domain = _client_domain(client)
+    # D27 — vorwerk.de -> vorwerk.com: resolve (and cache) the client's
+    # canonical alias domain ONCE per discovery pass, so every own-domain
+    # check below treats a result on either domain as "own".
+    alias = await _resolve_site_domain(org_id, client)
+    if alias == domain:
+        alias = ""
 
     if website:
         _home_text, home_html = await _fetch_page_raw(website)
         if home_html:
-            for link in _harvest_links(home_html, website, _CAREERS_KEYS, domain):
+            for link in _harvest_links(home_html, website, _CAREERS_KEYS, domain, alias=alias):
                 _add(link, "homepage")
 
         # D1 — own-domain path-probe tier: only worth the extra requests when
@@ -3690,7 +3820,7 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
         # metadata URL that turns out to be off-domain) must not suppress
         # this tier; that was the WP7 symptom verbatim. A bare "any
         # candidates at all" check let it through untouched.
-        if not any(_own_or_ats(c["url"], domain) for c in candidates):
+        if not any(_own_or_ats(c["url"], domain, alias) for c in candidates):
             home_title_h1 = _page_title_h1(home_html) if home_html else None
             # WP11 rebase: a playbook that already knows this site needs
             # anti-detection (needs_js from a prior scan, or a cookie wall)
@@ -3752,13 +3882,17 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     already ruled out as junior/student boards this scan."""
     candidates = await _careers_candidates(org_id, client, pb, exclude=exclude)
     domain = _client_domain(client)
+    # D27 — _careers_candidates already resolved (and cached in-memory on
+    # client["metadata"]) the canonical alias domain, if any; read it back
+    # here rather than re-resolving (another live GET) a second time.
+    alias = ((client.get("metadata") or {}).get("canonical_domain") or "").strip()
 
     # Constrain EVERY path (single-candidate short-circuit, LLM pick, heuristic
     # fallback) up front — filtering only inside the LLM branch let an
     # off-domain lone candidate (or an LLM pick from an all-off-domain pool)
     # through untouched, and that URL then persists in clients.metadata
     # forever once a scan writes it back.
-    candidates = [c for c in candidates if _own_or_ats(c["url"], domain)]
+    candidates = [c for c in candidates if _own_or_ats(c["url"], domain, alias)]
     if not candidates:
         return "", ""
     if len(candidates) == 1:
@@ -3787,7 +3921,7 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
         if m:
             picked = m.group(0).rstrip(").,>\"'")
             match = next((c for c in candidates if c["url"] == picked), None)
-            if match and _own_or_ats(picked, domain):
+            if match and _own_or_ats(picked, domain, alias):
                 return match["url"], match["tier"]
     except Exception as exc:
         console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
@@ -3800,7 +3934,9 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     ranked: list[tuple[int, dict]] = []
     for c in candidates:
         host = urlparse(c["url"]).netloc.lower().replace("www.", "")
-        score = (2 if domain and (host == domain or host.endswith("." + domain)) else 0) \
+        is_own = (domain and (host == domain or host.endswith("." + domain))) \
+              or (alias and (host == alias or host.endswith("." + alias)))
+        score = (2 if is_own else 0) \
               + (2 if _ats_match(host) else 0) \
               + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
         if score:

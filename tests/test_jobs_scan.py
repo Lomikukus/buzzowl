@@ -374,6 +374,167 @@ class TestSiteBase:
         assert pipeline._site_base("http://acme.com") == "http://acme.com"
 
 
+# ---------------------------------------------------------------------------
+# D27 — _resolve_site_domain: a client's recorded domain redirects to a
+# different registrable domain (vorwerk.de -> vorwerk.com)
+# ---------------------------------------------------------------------------
+
+class TestResolveSiteDomain:
+    @pytest.mark.asyncio
+    async def test_redirect_to_different_domain_is_recorded_as_canonical(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://vorwerk.de")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://www.vorwerk.com/de/de"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "vorwerk.com"
+        db.update_client_metadata.assert_awaited_once()
+        args = db.update_client_metadata.await_args.args
+        assert args[0] == 1 and args[1] == "Acme"
+        assert args[2]["canonical_domain"] == "vorwerk.com"
+        assert "canonical_checked_at" in args[2]
+        # The in-memory client dict is updated too, for callers in the same
+        # discovery pass that read metadata straight off it.
+        assert client["metadata"]["canonical_domain"] == "vorwerk.com"
+
+        # Playbook doc stays keyed by the ORIGINAL domain, with the new
+        # domain recorded as an alias.
+        fake_pb.record.assert_awaited_once()
+        pb_args, pb_kwargs = fake_pb.record.await_args
+        assert pb_args[0] == 1
+        assert pb_args[1] == "vorwerk.de"
+        assert pb_args[2] == {"aliases": ["vorwerk.com"]}
+
+    @pytest.mark.asyncio
+    async def test_no_redirect_returns_own_domain_and_writes_nothing(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com")
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://acme.com"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "acme.com"
+        db.update_client_metadata.assert_not_awaited()
+        fake_pb.record.assert_not_awaited()
+        assert "canonical_domain" not in client["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_cached_canonical_domain_skips_the_http_call(self, monkeypatch):
+        fresh = datetime.now(timezone.utc).isoformat()
+        db_patch, db = _patch_db()
+        client = _client(website="https://vorwerk.de", canonical_domain="vorwerk.com",
+                          canonical_checked_at=fresh)
+        with db_patch, patch.object(pipeline.httpx, "AsyncClient") as ac:
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "vorwerk.com"
+        ac.assert_not_called()
+        db.update_client_metadata.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_past_thirty_days_re_resolves(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+        db_patch, db = _patch_db()
+        client = _client(website="https://vorwerk.de", canonical_domain="vorwerk.com",
+                          canonical_checked_at=old)
+        with db_patch, _patch_httpx_dynamic(
+            lambda u: _fake_response(200, "<html></html>", url="https://www.vorwerk.com/de/de"),
+        ):
+            domain = await pipeline._resolve_site_domain(1, client)
+
+        assert domain == "vorwerk.com"
+        db.update_client_metadata.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_website_returns_domain_without_http_call(self):
+        client = {"id": 1, "name": "Acme", "metadata": {}}
+        with patch.object(pipeline.httpx, "AsyncClient") as ac:
+            domain = await pipeline._resolve_site_domain(1, client)
+        assert domain == ""
+        ac.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connection_error_falls_back_to_own_domain(self):
+        db_patch, db = _patch_db()
+        client = _client(website="https://vorwerk.de")
+        with db_patch, patch.object(pipeline.httpx, "AsyncClient", side_effect=ConnectionError):
+            domain = await pipeline._resolve_site_domain(1, client)
+        assert domain == "vorwerk.de"
+        db.update_client_metadata.assert_not_awaited()
+
+
+class TestVorwerkCanonicalDomainDiscovery:
+    """D27 end-to-end: vorwerk.de redirects everything to vorwerk.com — a
+    genuine careers page found ON vorwerk.com must survive
+    _discover_careers_url's own-domain filter instead of being silently
+    dropped (the actual root cause of Vorwerk's "no careers page found")."""
+
+    @pytest.mark.asyncio
+    async def test_probe_hit_on_alias_domain_survives_own_domain_filter(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        client = _client(website="https://vorwerk.de")
+        probed_url = "https://vorwerk.de/de/karriere"  # one of _CAREERS_PATHS
+        hit_url = "https://www.vorwerk.com/de/karriere"
+        hit_html = ("<html><head><title>Karriere bei Vorwerk</title></head><body>"
+                    + ("Aktuelle Stellenangebote und Karrieremoeglichkeiten. " * 20)
+                    + "</body></html>")
+
+        def _resolver(u):
+            if u == "https://vorwerk.de":
+                # _resolve_site_domain's own homepage GET redirects to
+                # vorwerk.com.
+                return _fake_response(200, "<html></html>", url="https://www.vorwerk.com/de/de")
+            if u == probed_url:
+                # This particular own-domain PATH PROBE redirects to a real
+                # careers page — on the alias domain, not vorwerk.de.
+                return _fake_response(200, hit_html, url=hit_url)
+            return _fake_response(404, "", url=u)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(side_effect=AssertionError(
+                 "no LLM call needed — the redirect is the only candidate"))), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+            hit = next((c for c in candidates if c["url"] == hit_url), None)
+            assert hit is not None, f"vorwerk.com candidate missing: {candidates}"
+
+            url, tier = await pipeline._discover_careers_url(1, client)
+        assert url == hit_url
+        assert tier == "path-probe"
+
+    def test_alias_widens_acceptance_but_unrelated_domain_still_rejected(self):
+        """The alias only widens acceptance to the original domain AND its
+        resolved alias — a genuinely unrelated third domain (the D26
+        misleading-log scenario: vorwerk-group.com is neither vorwerk.de
+        nor its resolved alias vorwerk.com) must still be rejected."""
+        assert pipeline._own_or_ats(
+            "https://www.vorwerk-group.com/de", "vorwerk.de", "vorwerk.com",
+        ) is False
+        assert pipeline._own_or_ats(
+            "https://www.vorwerk.com/de/karriere", "vorwerk.de", "vorwerk.com",
+        ) is True
+
+
 class TestBareDomainPathProbeEndToEnd:
     """D11, measured regression (WP7b): all four clients created via
     POST /api/internal/clients store metadata.website as a bare domain
@@ -387,6 +548,7 @@ class TestBareDomainPathProbeEndToEnd:
         with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="")), \
              _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u), calls=calls):
             await pipeline._careers_candidates(1, client)
         assert len(calls) == 10
@@ -501,6 +663,7 @@ class TestPathProbeTier:
         with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="")), \
              _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u), calls=calls):
             await pipeline._careers_candidates(1, client)
         assert len(calls) <= 10
@@ -619,6 +782,7 @@ class TestPathProbeTier:
         with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="")), \
              _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)) as async_client_mock:
             await pipeline._careers_candidates(1, client)
         assert async_client_mock.call_count == 1

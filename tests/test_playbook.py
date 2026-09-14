@@ -120,6 +120,19 @@ async def test_record_scrubs_legal_url_from_existing_newsroom_urls_on_any_write(
     assert merged["newsroom"]["last_success_at"] == "2026-09-14T01:24:00+00:00"  # untouched
 
 
+async def test_record_writes_aliases_field_under_original_domain():
+    """D27 — the playbook document stays keyed by the ORIGINAL domain
+    (site-playbook-vorwerk.de), with the canonical alias recorded as a
+    top-level scalar field, not nested under careers/newsroom/news."""
+    db = _db()
+    with patch.object(playbook, "db_module", db):
+        merged = await playbook.record(1, "vorwerk.de", {"aliases": ["vorwerk.com"]})
+    assert merged["aliases"] == ["vorwerk.com"]
+    db.index_document.assert_awaited_once()
+    kwargs = db.index_document.await_args.kwargs
+    assert kwargs["doc_id"] == "site-playbook-vorwerk.de"
+
+
 async def test_record_leaves_newsroom_urls_alone_when_none_are_legal():
     existing = {"metadata": {
         "domain": "acme.com",

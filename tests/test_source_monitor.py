@@ -6,6 +6,7 @@ _monitor_client, _maybe_escalate_match, and news_pending clearing.
 """
 
 import hashlib
+import sys
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -190,6 +191,73 @@ class TestHarvestLinksNewsRenderedTier:
         fetch_raw.assert_awaited_once_with("https://acme.com")
         httpx_client.assert_not_called()
         assert hits == [{"url": "https://acme.com/press", "label": "Press"}]
+
+    @pytest.mark.asyncio
+    async def test_alias_domain_link_accepted(self):
+        """D27 — vorwerk.de -> vorwerk.com: a newsroom link found ON the
+        homepage but hosted on the resolved alias domain must not be
+        dropped as off-domain."""
+        html = '<a href="https://www.vorwerk.com/de/presse">Presse</a>'
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", html))):
+            hits = await pipeline._harvest_links_news(
+                "https://vorwerk.de", ("presse",), "vorwerk.de", alias="vorwerk.com",
+            )
+        assert hits == [{"url": "https://www.vorwerk.com/de/presse", "label": "Presse"}]
+
+    @pytest.mark.asyncio
+    async def test_no_alias_still_drops_off_domain_link(self):
+        html = '<a href="https://www.vorwerk.com/de/presse">Presse</a>'
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", html))):
+            hits = await pipeline._harvest_links_news("https://vorwerk.de", ("presse",), "vorwerk.de")
+        assert hits == []
+
+
+class TestDiscoverClientSourcesUsesCanonicalAlias:
+    """D27 — _discover_client_sources resolves the canonical alias domain
+    and accepts SearXNG results landing on it, same as the jobs block's
+    discovery — the site: query itself still targets the ORIGINAL domain,
+    but a result that happens to resolve to the alias must not be dropped
+    by the own-domain filter."""
+
+    @pytest.mark.asyncio
+    async def test_searxng_result_on_alias_domain_kept(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://vorwerk.de")
+        searx_results = [{"url": "https://www.vorwerk.com/de/presse", "title": "Presse"}]
+
+        with db_patch, \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="vorwerk.com")), \
+             patch.object(pipeline, "_probe_newsroom_paths", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_harvest_links_news", AsyncMock(return_value=[])), \
+             _searxng(searx_results):
+            sources = await pipeline._discover_client_sources(1, client)
+
+        urls = [s["url"] for s in sources]
+        assert "https://www.vorwerk.com/de/presse" in urls
+
+    @pytest.mark.asyncio
+    async def test_searxng_result_on_unrelated_domain_still_dropped(self, monkeypatch):
+        fake_pb = MagicMock()
+        fake_pb.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://vorwerk.de")
+        searx_results = [{"url": "https://www.vorwerk-group.com/de/presse", "title": "Presse"}]
+
+        with db_patch, \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="vorwerk.com")), \
+             patch.object(pipeline, "_probe_newsroom_paths", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_harvest_links_news", AsyncMock(return_value=[])), \
+             _searxng(searx_results):
+            sources = await pipeline._discover_client_sources(1, client)
+
+        urls = [s["url"] for s in sources]
+        assert "https://www.vorwerk-group.com/de/presse" not in urls
 
 
 # ---------------------------------------------------------------------------

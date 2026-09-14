@@ -864,6 +864,26 @@ class TestNewsroomCandidates:
         assert by_url["https://acme.com/presse/produkt-c"] == "2026-09-10"
 
     @pytest.mark.asyncio
+    async def test_alias_domain_article_link_kept_not_dropped(self, monkeypatch):
+        """D27 — vorwerk.de -> vorwerk.com: an article link ON a newsroom
+        page that itself lives on the resolved canonical alias domain must
+        not be discarded as off-domain."""
+        fake_pb = MagicMock()
+        fake_pb.load = AsyncMock(return_value=None)
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+        client = _client("Vorwerk", website="https://vorwerk.de",
+                          monitored_sources=[{"url": "https://vorwerk.de/presse"}])
+        html = ('<html><body><a href="https://www.vorwerk.com/de/presse/produkt-a">'
+                'Vorwerk launches Produkt A</a> <span class="date">12.09.2026</span></body></html>')
+        httpx_patch, _ = _patch_page_httpx(html)
+        with httpx_patch, patch.object(pipeline, "_resolve_site_domain",
+                                        AsyncMock(return_value="vorwerk.com")):
+            candidates, blocked = await pipeline._newsroom_candidates(1, client)
+        assert blocked == []
+        assert len(candidates) == 1
+        assert candidates[0]["url"] == "https://www.vorwerk.com/de/presse/produkt-a"
+
+    @pytest.mark.asyncio
     async def test_no_date_nearby_dropped(self, monkeypatch):
         client = self._client_with_playbook(monkeypatch)
         html = '<html><body><a href="/presse/no-date">No date here</a></body></html>'
@@ -933,10 +953,12 @@ class TestNewsroomCandidates:
         client = self._client_with_playbook(monkeypatch, newsroom_urls=[url])
         rescued_links_html = '<a href="/presse/item">Item</a> <span class="date">12.09.2026</span>'
         httpx_patch, get_client = _patch_page_httpx(status=403, text="")
-        with httpx_patch, patch.object(
-            pipeline, "_fetch_rendered_tier",
-            AsyncMock(return_value=("Rendered snapshot text", "camofox", rescued_links_html)),
-        ) as rendered_mock:
+        with httpx_patch, \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="")), \
+             patch.object(
+                 pipeline, "_fetch_rendered_tier",
+                 AsyncMock(return_value=("Rendered snapshot text", "camofox", rescued_links_html)),
+             ) as rendered_mock:
             candidates, blocked = await pipeline._newsroom_candidates(1, client)
         assert blocked == []
         assert len(candidates) == 1
