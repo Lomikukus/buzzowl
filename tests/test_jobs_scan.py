@@ -10,6 +10,7 @@ in _build_brief_context.
 Fake-db/config helpers mirror tests/test_source_monitor.py.
 """
 
+import asyncio
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -306,8 +307,12 @@ class TestCareersDiscovery:
 def _patch_httpx_dynamic(resolver, calls=None):
     """Like _patch_httpx_sitemap but per-URL: `resolver(url) -> MagicMock`
     (a fake httpx.Response). `calls`, if given, is a list every requested URL
-    is appended to."""
+    is appended to. The `asyncio.sleep(0)` forces a genuine event-loop yield
+    per "request" so concurrent probes actually interleave (a mock with no
+    real suspension point would run each task to completion before the next
+    one starts, hiding the exact race WP8 review nit 3 is about)."""
     async def _get(url, *_a, **_kw):
+        await asyncio.sleep(0)
         if calls is not None:
             calls.append(url)
         return resolver(url)
@@ -418,6 +423,258 @@ class TestPathProbeTier:
              _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u), calls=calls):
             await pipeline._careers_candidates(1, client, pb)
         assert blocked_url in calls
+
+    @pytest.mark.asyncio
+    async def test_subdomain_probe_is_actually_reachable(self):
+        """WP8 review nit 2: 13 own-domain paths alone already hit
+        _PATH_PROBE_MAX=10, so the karriere./jobs./careers.<domain> subdomain
+        probes — interleaved at positions 2-4 — must still be tried, not
+        silently trimmed off the end of the list every time."""
+        client = _client(website="https://acme.com")
+        hit_url = "https://karriere.acme.com/"
+        hit_html = ("<html><head><title>Karriere bei Acme</title></head><body>"
+                    + ("Aktuelle Stellenangebote. " * 30) + "</body></html>")
+
+        def _resolver(url):
+            if url == hit_url:
+                return _fake_response(200, hit_html, url=hit_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert any(c["url"] == hit_url for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_offdomain_homepage_link_does_not_suppress_the_probe_tier(self):
+        """WP8 review nit 1 (near-blocker), the WP7 symptom verbatim: the
+        homepage's only "jobs" link points off-domain (e.g. a LinkedIn jobs
+        page) — that must NOT count as "a candidate already found" and skip
+        path-probing; the tier must still run and find the real page."""
+        client = _client(website="https://acme.com")
+        home_html = ('<html><body><a href="https://www.linkedin.com/company/acme/jobs">'
+                     "Jobs on LinkedIn</a></body></html>")
+        hit_url = "https://acme.com/karriere"
+        hit_html = ("<html><head><title>Karriere bei Acme</title></head><body>"
+                    + ("Aktuelle Stellenangebote. " * 30) + "</body></html>")
+
+        def _resolver(url):
+            if url == hit_url:
+                return _fake_response(200, hit_html, url=hit_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", home_html))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        urls = [c["url"] for c in candidates]
+        assert hit_url in urls
+
+    @pytest.mark.asyncio
+    async def test_offdomain_stale_playbook_url_does_not_suppress_the_probe_tier(self):
+        """Same nit 1 fix, the stale-playbook-URL variant explicitly called
+        out in the review: a playbook careers URL that is itself off-domain
+        (and therefore useless) must not block path-probing either."""
+        client = _client(website="https://acme.com")
+        old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        pb = {"careers": {"url": "https://jobs.example-board.com/acme", "tier": "searxng",
+                           "last_success_at": old}}
+        hit_url = "https://acme.com/karriere"
+        hit_html = ("<html><head><title>Karriere bei Acme</title></head><body>"
+                    + ("Aktuelle Stellenangebote. " * 30) + "</body></html>")
+
+        def _resolver(url):
+            if url == hit_url:
+                return _fake_response(200, hit_html, url=hit_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client, pb)
+        urls = [c["url"] for c in candidates]
+        assert hit_url in urls
+
+    @pytest.mark.asyncio
+    async def test_shared_httpx_client_reused_across_probes(self):
+        """WP8 review nit 7: one AsyncClient per discovery pass, not one per
+        probed URL."""
+        client = _client(website="https://acme.com")
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)) as async_client_mock:
+            await pipeline._careers_candidates(1, client)
+        assert async_client_mock.call_count == 1
+
+
+class TestPathProbeContentChecks:
+    """WP8 review BLOCKER 1: _probe_hit_keyword must never fold the probed
+    URL into its haystack — every probed path already contains a careers
+    word by construction, so that made the check trivially true for any
+    200+long-enough response."""
+
+    @pytest.mark.asyncio
+    async def test_impressum_page_at_karriere_path_rejected(self):
+        client = _client(website="https://acme.com")
+        probed_url = "https://acme.com/karriere"
+        html = ("<html><head><title>Impressum</title></head><body>"
+                + ("Angaben gemäß 5 TMG. " * 40) + "</body></html>")
+
+        def _resolver(url):
+            if url == probed_url:
+                return _fake_response(200, html, url=probed_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert all(c["url"] != probed_url for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_spa_shell_identical_to_homepage_rejected(self):
+        """An SPA that 200s the exact same shell (same <title>/<h1>) at
+        every path must be rejected even though the body is long."""
+        client = _client(website="https://acme.com")
+        shell_html = ("<html><head><title>Acme</title></head><body><h1>Acme</h1>"
+                      + ("Loading application. " * 40) + "</body></html>")
+
+        def _resolver(url):
+            return _fake_response(200, shell_html, url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", shell_html))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert candidates == []
+
+    @pytest.mark.asyncio
+    async def test_real_karriere_title_accepted(self):
+        client = _client(website="https://acme.com")
+        probed_url = "https://acme.com/karriere"
+        html = ("<html><head><title>Karriere bei Acme</title></head><body>"
+                + ("Wir suchen Verstärkung. " * 40) + "</body></html>")
+
+        def _resolver(url):
+            if url == probed_url:
+                return _fake_response(200, html, url=probed_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert any(c["url"] == probed_url for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_generic_title_with_four_job_links_accepted(self):
+        """No careers keyword in title/h1 at all, but >=3 job-like links on
+        the page — accepted via the link-harvest alternative."""
+        client = _client(website="https://acme.com")
+        probed_url = "https://acme.com/karriere"
+        html = ("<html><head><title>Willkommen</title></head><body>"
+                + ("Unternehmensinformationen und mehr. " * 30)
+                + '<a href="https://acme.com/stellenangebote/1">Job 1</a>'
+                + '<a href="https://acme.com/stellenangebote/2">Job 2</a>'
+                + '<a href="https://acme.com/stellenangebote/3">Job 3</a>'
+                + '<a href="https://acme.com/stellenangebote/4">Job 4</a>'
+                + "</body></html>")
+
+        def _resolver(url):
+            if url == probed_url:
+                return _fake_response(200, html, url=probed_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert any(c["url"] == probed_url for c in candidates)
+
+
+class TestPathProbeBrowserFallbackContentChecks:
+    """WP8 review BLOCKER 2: same tautology as BLOCKER 1, this time against
+    the whole rendered text instead of title/h1 — never fold the URL in."""
+
+    @pytest.mark.asyncio
+    async def test_impressum_via_browser_fallback_rejected(self):
+        client = _client(website="https://acme.com")
+
+        def _resolver(url):
+            return _fake_response(403, "", url=url)  # every plain GET is blocked
+
+        impressum_text = "Impressum und rechtliche Hinweise. " * 20  # >=500 chars, no careers word
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=(impressum_text, ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert candidates == []
+
+    @pytest.mark.asyncio
+    async def test_careers_heading_via_browser_fallback_accepted(self):
+        client = _client(website="https://acme.com")
+
+        def _resolver(url):
+            return _fake_response(403, "", url=url)
+
+        careers_text = "Karriere bei Acme. " + ("Wir suchen Verstärkung. " * 30)
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=(careers_text, ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert len(candidates) >= 1
+        assert all(c["tier"] == "path-probe" for c in candidates)
+
+
+class TestPathProbeConcurrencyCap:
+    @pytest.mark.asyncio
+    async def test_never_accepts_more_than_two_hits_under_concurrency(self):
+        """WP8 review nit 3: with 4-way concurrency, checking the hit count
+        only before the request let up to 4 requests race past the check
+        before any of them appended — measured 4 accepted hits, not 2. Every
+        probe here is an immediate, equally-fast hit; the accepted count must
+        still cap at 2."""
+        client = _client(website="https://acme.com")
+        html = ("<html><head><title>Karriere</title></head><body>"
+                + ("Aktuelle Stellenangebote. " * 30) + "</body></html>")
+
+        def _resolver(url):
+            return _fake_response(200, html, url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        assert len(candidates) <= 2
+
+    @pytest.mark.asyncio
+    async def test_blocked_urls_capped_at_five_per_scan(self):
+        """WP8 review nit 5: a single 403-walled scan must contribute at
+        most 5 blocked_urls entries, not push out Pi/news history in the
+        shared 20-cap list."""
+        client = _client(website="https://acme.com")
+
+        def _resolver(url):
+            return _fake_response(403, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            await pipeline._careers_candidates(1, client)
+        assert len(client.get("_probe_blocked") or []) <= 5
 
 
 # ---------------------------------------------------------------------------
@@ -972,6 +1229,38 @@ class TestSlugTitleReplacedByPageTitle:
         assert position["title_source"] == "slug"
 
     @pytest.mark.asyncio
+    async def test_blocker3_positions_refiltered_after_title_replacement(self):
+        """WP8 review BLOCKER 3: _filter_positions ran once on the ORIGINAL
+        slug titles; _fetch_posting_title then overwrote titles afterwards
+        with no re-filter and no re-dedupe. Measured: 10 distinct slugs
+        whose posting pages all title "Praktikum Marketing (m/w/d) - Acme"
+        (a junior title) produced 8 identical junior rows. After the fix,
+        the (at most 8) positions whose title got replaced must be
+        re-filtered: all 8 collapse/drop as junior, leaving only the 2
+        positions outside the 8-fetch cap with their original, distinct,
+        non-junior slug titles."""
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        titles = [f"Distinct Role {i}" for i in range(10)]
+        sitemap = [(t, f"https://acme.com/jobs/role-{i}") for i, t in enumerate(titles)]
+        reply = json.dumps({"positions": [{"title": t} for t in titles], "inferred_needs": []})
+        junior_title = "Praktikum Marketing (m/w/d) - Acme"
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=sitemap)), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value=junior_title)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        # Only the 2 positions outside the 8-post cap keep their distinct,
+        # non-junior slug title; the other 8 all became the same junior
+        # title and must be dropped, not stored as 8 duplicate rows.
+        assert summary["positions"] == 2
+        _, kwargs = db.index_document.await_args_list[0]
+        stored_titles = [p["title"] for p in kwargs["metadata"]["positions"]]
+        assert junior_title not in stored_titles
+        assert kwargs["metadata"]["filtered_out"] == 8
+
+    @pytest.mark.asyncio
     async def test_at_most_eight_posting_pages_fetched(self):
         db_patch, db = _patch_db()
         client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
@@ -1068,6 +1357,50 @@ class TestJobsMonitorRotationPrefersPiCandidates:
             await pipeline._run_jobs_monitor(1)
 
         assert scanned_order == ["Stale Co"]
+
+    @pytest.mark.asyncio
+    async def test_recently_scanned_client_skips_playbook_load(self, monkeypatch):
+        """WP8 review nit 4: bound the per-client playbook.load gather to
+        clients that haven't been scanned (success or failure) in the last
+        7 days — a recently-touched client isn't a rotation-jump candidate
+        regardless of what its playbook says, so don't even ask. Was an
+        unconditional extra query for every non-focus client, every run."""
+        clients = [
+            {"id": 1, "name": "Recently Scanned Co", "metadata": {"website": "https://recent.com"}},
+            {"id": 2, "name": "Never Scanned Co", "metadata": {"website": "https://never.com"}},
+        ]
+        recent_ts = datetime.now(timezone.utc) - timedelta(days=1)
+
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[{"cid": 1, "ts": recent_ts}])
+        acquire_ctx = MagicMock()
+        acquire_ctx.__aenter__ = AsyncMock(return_value=conn)
+        acquire_ctx.__aexit__ = AsyncMock(return_value=False)
+        pool = MagicMock()
+        pool.acquire = MagicMock(return_value=acquire_ctx)
+
+        db = MagicMock()
+        db.list_clients = AsyncMock(return_value=clients)
+        db._pool = pool
+
+        fake_playbook = MagicMock()
+        load_calls: list = []
+
+        async def _load(_org_id, domain):
+            load_calls.append(domain)
+            return None
+
+        fake_playbook.load = AsyncMock(side_effect=_load)
+        monkeypatch.setitem(sys.modules, "playbook", fake_playbook)
+
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_scan_client_jobs",
+                           AsyncMock(return_value={"found": False, "positions": 0, "needs": 0})), \
+             patch.object(pipeline.context, "config", {"jobs_max_per_run": 5}):
+            await pipeline._run_jobs_monitor(1)
+
+        assert "recent.com" not in load_calls
+        assert "never.com" in load_calls
 
 
 # ---------------------------------------------------------------------------

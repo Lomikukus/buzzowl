@@ -2596,43 +2596,76 @@ def _blocked_recently(url: str, blocked_urls: list, days: int = _PATH_PROBE_BLOC
 
 
 def _careers_probe_urls(website: str, domain: str, blocked_urls: Optional[list] = None) -> list[str]:
-    """Own-domain path probes (_CAREERS_PATHS) plus karriere/jobs/careers
-    subdomain probes, in priority order, minus anything blocked in the last
-    _PATH_PROBE_BLOCK_DAYS days (D7), capped at _PATH_PROBE_MAX total."""
+    """Own-domain path probes (_CAREERS_PATHS) with the karriere/jobs/careers
+    subdomain probes interleaved at positions 2-4 (WP8 review nit: 13 paths
+    alone already exceed _PATH_PROBE_MAX=10, which left the subdomains dead —
+    always trimmed off the end before a single one was ever tried), minus
+    anything blocked in the last _PATH_PROBE_BLOCK_DAYS days (D7), capped at
+    _PATH_PROBE_MAX total."""
     p = urlparse(website)
     if not p.netloc:
         return []
     base = f"{p.scheme}://{p.netloc}"
-    urls = [base + path for path in _CAREERS_PATHS]
-    if domain:
-        urls += [f"https://karriere.{domain}/", f"https://jobs.{domain}/", f"https://careers.{domain}/"]
+    path_urls = [base + path for path in _CAREERS_PATHS]
+    subdomain_urls = (
+        [f"https://karriere.{domain}/", f"https://jobs.{domain}/", f"https://careers.{domain}/"]
+        if domain else []
+    )
+    urls = path_urls[:1] + subdomain_urls + path_urls[1:]
     urls = [u for u in urls if not _blocked_recently(u, blocked_urls)]
     return urls[:_PATH_PROBE_MAX]
 
 
-def _probe_hit_keyword(html: str, url: str) -> bool:
-    """A careers keyword in the page's <title>/<h1> or in the URL itself."""
+def _page_title_h1(html: str) -> tuple[str, str]:
+    """Cleaned (whitespace-normalized, not lowercased) <title> and <h1> text,
+    '' for either that's absent."""
     title_m = re.search(r"<title[^>]*>(.*?)</title>", html or "", re.I | re.S)
     h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", html or "", re.I | re.S)
-    title = _HTML_TAG_RE.sub(" ", title_m.group(1)) if title_m else ""
-    h1 = _HTML_TAG_RE.sub(" ", h1_m.group(1)) if h1_m else ""
-    haystack = f"{title} {h1} {url}".lower()
-    return any(k in haystack for k in _CAREERS_KEYS)
+    title = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", title_m.group(1))).strip() if title_m else ""
+    h1 = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", h1_m.group(1))).strip() if h1_m else ""
+    return title, h1
+
+
+def _probe_hit_keyword(html: str) -> bool:
+    """A careers keyword in the page's <title>/<h1> — NEVER the URL. Every
+    probed path already contains a careers word by construction (/karriere,
+    /careers, ...), so folding the URL into the haystack made this check
+    trivially true for every single probe (WP8 review BLOCKER 1: an
+    <title>Impressum</title> page served at /karriere was being accepted)."""
+    title, h1 = _page_title_h1(html)
+    return any(k in f"{title} {h1}".lower() for k in _CAREERS_KEYS)
 
 
 def _probe_title(html: str) -> str:
-    m = re.search(r"<title[^>]*>(.*?)</title>", html or "", re.I | re.S)
-    return re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", m.group(1))).strip() if m else ""
+    return _page_title_h1(html)[0]
 
 
-async def _probe_careers_path(url: str, *, own_domain: str, hits: list) -> dict:
-    """One GET at a candidate careers path/subdomain (D1). Returns
+def _is_spa_shell(html: str, home_title_h1: Optional[tuple]) -> bool:
+    """True when this probe's <title>/<h1> are IDENTICAL to the homepage's
+    (WP8 review BLOCKER 1) — a single-page-app that 200s the same shell at
+    every path proves nothing about this specific path, no matter what its
+    title/h1 says. '' when there's no homepage baseline to compare against
+    (home_title_h1 is None, or the homepage itself had neither tag)."""
+    if not home_title_h1 or not any(home_title_h1):
+        return False
+    return _page_title_h1(html) == home_title_h1
+
+
+async def _probe_careers_path(url: str, *, own_domain: str, hits: list, http: httpx.AsyncClient,
+                               home_title_h1: Optional[tuple] = None) -> dict:
+    """One GET at a candidate careers path/subdomain (D1), via the shared
+    `http` client for this whole discovery pass (WP8 review nit: one
+    AsyncClient reused across probes instead of one per probe). Returns
     {"url", "status", "accepted", "blocked"} — `accepted` is a candidate dict
     ({"url", "tier", "title"}) or None; `blocked` is a {"url","kind","at"}
-    dict when the own-domain probe came back 403/4xx (D7 bookkeeping), else
-    None. `hits` is a list shared across every concurrent probe in this
-    discovery pass — sibling tasks bail out (soft early-stop) once
-    _PATH_PROBE_STOP_AFTER_HITS candidates have already been accepted."""
+    dict when the own-domain probe came back 403/4xx/errored (D7
+    bookkeeping), else None. `hits` is a list shared across every concurrent
+    probe in this discovery pass — checked BEFORE the request (so a probe
+    already at the cap never starts) AND again right before appending (WP8
+    review nit 3: with 4-way concurrency, up to 4 requests can pass the
+    first check before any of them has appended, so the pre-request check
+    alone let 4 hits land instead of 2 — a still-in-flight request is left
+    to finish, but its result is discarded if the cap was reached first)."""
     if len(hits) >= _PATH_PROBE_STOP_AFTER_HITS:
         return {"url": url, "status": None, "accepted": None, "blocked": None}
     status = None
@@ -2640,14 +2673,11 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list) -> dict:
     final_url = url
     now_iso = datetime.now(timezone.utc).isoformat()
     try:
-        async with httpx.AsyncClient(
-            timeout=10.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
-        ) as http:
-            resp = await http.get(url)
-            status = resp.status_code
-            final_url = str(resp.url)
-            if status == 200:
-                html = resp.text
+        resp = await http.get(url)
+        status = resp.status_code
+        final_url = str(resp.url)
+        if status == 200:
+            html = resp.text
     except Exception:
         # D7 — a fetch that raised (timeout, connection refused, ...) is as
         # much an own-domain failure as an explicit 403/4xx.
@@ -2658,6 +2688,8 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list) -> dict:
     if final_url != url and _ats_match(final_host):
         # A redirect to a known ATS host is a real careers link on its own —
         # no content/keyword check needed (the ATS page itself is the proof).
+        if len(hits) >= _PATH_PROBE_STOP_AFTER_HITS:
+            return {"url": url, "status": status, "accepted": None, "blocked": None}
         accepted = {"url": final_url, "tier": "path-probe", "title": ""}
         hits.append(accepted)
         console.print(f"[dim]jobs discovery: path-probe {url} redirected to ATS host {final_host} "
@@ -2673,56 +2705,104 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list) -> dict:
     accepted = None
     if status == 200:
         text = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()
-        if len(text) >= 500:
+        if len(text) >= 500 and not _is_spa_shell(html, home_title_h1):
             job_links = _harvest_links(html, final_url, _JOB_LINK_KEYS, own_domain)
-            if _probe_hit_keyword(html, final_url) or len(job_links) >= 3:
+            if _probe_hit_keyword(html) or len(job_links) >= 3:
                 accepted = {"url": final_url, "tier": "path-probe", "title": _probe_title(html)}
-    if accepted:
+    if accepted and len(hits) < _PATH_PROBE_STOP_AFTER_HITS:
         hits.append(accepted)
         console.print(f"[dim]jobs discovery: path-probe found a careers page at {final_url} "
                        f"(tier=path-probe)[/dim]")
+    elif accepted:
+        accepted = None  # cap reached while this request was in flight — drop it
     return {"url": url, "status": status, "accepted": accepted, "blocked": blocked}
 
 
-async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional[list] = None) -> tuple[list, list]:
+_PATH_PROBE_BLOCKED_CAP = 5
+
+
+async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional[list] = None,
+                                home_title_h1: Optional[tuple] = None) -> tuple[list, list]:
     """Run the D1 own-domain path-probe tier: cheap GETs at well-known
     careers paths/subdomains, concurrently (semaphore-bounded, capped at
-    _PATH_PROBE_MAX total), stopping early once _PATH_PROBE_STOP_AFTER_HITS
-    candidates are accepted. Falls back to the browser-service
-    (_fetch_page_raw already does plain GET first) for the best
-    _PATH_PROBE_BROWSER_RETRY_MAX probes that came back 403/503 on the plain
-    GET — those codes usually mean bot-protection, not "nothing here".
-    Returns (accepted_candidates, blocked_entries) — the latter for D7's
-    playbook.blocked_urls bookkeeping."""
+    _PATH_PROBE_MAX total, one shared httpx.AsyncClient), stopping early
+    once _PATH_PROBE_STOP_AFTER_HITS candidates are accepted. Falls back to
+    the browser-service (_fetch_page_raw already does plain GET first) for
+    the best _PATH_PROBE_BROWSER_RETRY_MAX probes that came back 403/503 on
+    the plain GET — those codes usually mean bot-protection, not "nothing
+    here". Returns (accepted_candidates, blocked_entries) — the latter for
+    D7's playbook.blocked_urls bookkeeping, capped at _PATH_PROBE_BLOCKED_CAP
+    per scan (WP8 review nit: a single 403-walled scan could otherwise push
+    10 entries into the org-wide 20-cap blocked_urls list, evicting
+    Pi/news-run history)."""
     urls = _careers_probe_urls(website, domain, blocked_urls)
     if not urls:
         return [], []
     sem = asyncio.Semaphore(_PATH_PROBE_CONCURRENCY)
     hits: list = []
 
-    async def _bounded(u: str) -> dict:
-        async with sem:
-            return await _probe_careers_path(u, own_domain=domain, hits=hits)
+    async with httpx.AsyncClient(
+        timeout=10.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+    ) as http:
+        async def _bounded(u: str) -> dict:
+            async with sem:
+                return await _probe_careers_path(u, own_domain=domain, hits=hits, http=http,
+                                                  home_title_h1=home_title_h1)
 
-    results = await asyncio.gather(*[_bounded(u) for u in urls])
+        results = await asyncio.gather(*[_bounded(u) for u in urls])
 
     accepted = [r["accepted"] for r in results if r["accepted"]]
-    blocked = [r["blocked"] for r in results if r["blocked"]]
+    blocked = [r["blocked"] for r in results if r["blocked"]][:_PATH_PROBE_BLOCKED_CAP]
 
     if len(accepted) < _PATH_PROBE_STOP_AFTER_HITS:
         retryable = [r for r in results if r["status"] in (403, 503) and not r["accepted"]]
         for r in retryable[:_PATH_PROBE_BROWSER_RETRY_MAX]:
             if len(hits) >= _PATH_PROBE_STOP_AFTER_HITS:
                 break
-            text, _html = await _fetch_page_raw(r["url"])
+            text, html = await _fetch_page_raw(r["url"])
             text = text.strip()
-            if len(text) >= 500 and any(k in f"{text} {r['url']}".lower() for k in _CAREERS_KEYS):
-                cand = {"url": r["url"], "tier": "path-probe", "title": ""}
+            if len(text) < 500:
+                continue
+            title = ""
+            hit = False
+            if html:
+                # The plain GET recovered this time (transient 403/503) — we
+                # have real markup, so use the same title/h1/link checks as
+                # the first pass (never the URL: BLOCKER 2 was the same
+                # tautology as BLOCKER 1, just against the whole rendered
+                # text instead of title/h1).
+                if not _is_spa_shell(html, home_title_h1):
+                    job_links = _harvest_links(html, r["url"], _JOB_LINK_KEYS, domain)
+                    if _probe_hit_keyword(html) or len(job_links) >= 3:
+                        hit, title = True, _probe_title(html)
+            else:
+                # Browser-service text only, no markup to parse a title/h1
+                # or harvest links from — require a careers keyword in the
+                # heading region (first 300 chars, where a real careers page
+                # names itself) or several job-ish words anywhere in the
+                # body; an "Impressum und rechtliche Hinweise..." page has
+                # neither (WP8 review BLOCKER 2, measured: all probes 403,
+                # browser fallback returned an Impressum page, accepted).
+                low = text.lower()
+                heading = low[:300]
+                job_word_hits = sum(1 for k in _JOB_LINK_KEYS if k in low)
+                hit = any(k in heading for k in _CAREERS_KEYS) or job_word_hits >= 3
+            if hit and len(hits) < _PATH_PROBE_STOP_AFTER_HITS:
+                cand = {"url": r["url"], "tier": "path-probe", "title": title}
                 hits.append(cand)
                 accepted.append(cand)
                 console.print(f"[dim]jobs discovery: path-probe found a careers page at {r['url']} "
                                f"via browser fallback (tier=path-probe)[/dim]")
     return accepted, blocked
+
+
+def _own_or_ats(url: str, domain: str) -> bool:
+    """True when `url` is on the client's own domain (or a subdomain of it)
+    or a known ATS host. Module-level (was a _discover_careers_url closure)
+    so _careers_candidates can also use it to decide whether the path-probe
+    tier is still worth running (WP8 review nit 1)."""
+    host = urlparse(url).netloc.lower().replace("www.", "")
+    return bool(domain and (host == domain or host.endswith("." + domain))) or _ats_match(host)
 
 
 def _playbook_careers_fresh(careers_pb: dict) -> bool:
@@ -2788,10 +2868,15 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
                 _add(link, "homepage")
 
         # D1 — own-domain path-probe tier: only worth the extra requests when
-        # the homepage harvest above found nothing (a homepage careers link
-        # already makes this redundant work).
-        if not candidates:
-            probe_hits, probe_blocked = await _probe_careers_paths(website, domain, pb_blocked)
+        # NOTHING own-domain-or-ATS has surfaced yet (WP8 review nit 1) — an
+        # earlier off-domain candidate (e.g. the homepage's only "jobs" link
+        # points at linkedin.com/company/acme/jobs, or a stale playbook/
+        # metadata URL that turns out to be off-domain) must not suppress
+        # this tier; that was the WP7 symptom verbatim. A bare "any
+        # candidates at all" check let it through untouched.
+        if not any(_own_or_ats(c["url"], domain) for c in candidates):
+            home_title_h1 = _page_title_h1(home_html) if home_html else None
+            probe_hits, probe_blocked = await _probe_careers_paths(website, domain, pb_blocked, home_title_h1)
             for cand in probe_hits:
                 _add(cand["url"], cand["tier"], cand.get("title", ""))
             if probe_blocked:
@@ -2840,16 +2925,12 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     candidates = await _careers_candidates(org_id, client, pb)
     domain = _client_domain(client)
 
-    def _own_or_ats(url: str) -> bool:
-        host = urlparse(url).netloc.lower().replace("www.", "")
-        return bool(domain and (host == domain or host.endswith("." + domain))) or _ats_match(host)
-
     # Constrain EVERY path (single-candidate short-circuit, LLM pick, heuristic
     # fallback) up front — filtering only inside the LLM branch let an
     # off-domain lone candidate (or an LLM pick from an all-off-domain pool)
     # through untouched, and that URL then persists in clients.metadata
     # forever once a scan writes it back.
-    candidates = [c for c in candidates if _own_or_ats(c["url"])]
+    candidates = [c for c in candidates if _own_or_ats(c["url"], domain)]
     if not candidates:
         return "", ""
     if len(candidates) == 1:
@@ -2878,7 +2959,7 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
         if m:
             picked = m.group(0).rstrip(").,>\"'")
             match = next((c for c in candidates if c["url"] == picked), None)
-            if match and _own_or_ats(picked):
+            if match and _own_or_ats(picked, domain):
                 return match["url"], match["tier"]
     except Exception as exc:
         console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
@@ -3404,6 +3485,18 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                     p["title"] = page_title
                     p["title_source"] = "page"
 
+            # BLOCKER 3 (WP8 review) — a page title fetched above can turn out
+            # to be junior (the slug looked fine, the real posting doesn't)
+            # or collide with another position's real title (many distinct
+            # slugs all resolving to the same generic posting page title,
+            # e.g. every one titled "Praktikant Marketing (m/w/d) - Acme").
+            # _filter_positions already ran once on the ORIGINAL slug titles;
+            # re-run it now that titles may have changed, and fold any newly
+            # dropped/deduped count into filtered_out rather than overwrite it.
+            before_refilter = len(positions)
+            positions = _filter_positions(positions)
+            filtered_out += before_refilter - len(positions)
+
     # Map each inferred need to the seller's products, with a one-line justification.
     needs_mapped = await _map_needs_to_products(org_id, name, needs)
 
@@ -3505,11 +3598,32 @@ async def _run_jobs_monitor(org_id: int) -> dict:
         except (ValueError, TypeError):
             return False
 
+    # WP8 review nit 4 — only bother checking clients whose jobs doc hasn't
+    # been touched (success OR failure) in the last 7 days; a recently-
+    # scanned client isn't a rotation-jump candidate regardless of what its
+    # playbook says, so skip the playbook.load round-trip for it. Bounds
+    # what was an unconditional per-client SQL/document read (one extra
+    # query for every non-focus client, every run) down to just the ones
+    # that could actually change the ordering below.
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+
+    def _stale_or_never_scanned(c: dict) -> bool:
+        ts = last.get(c["id"])
+        if not ts:
+            return True
+        try:
+            return ts < seven_days_ago
+        except TypeError:
+            return True
+
+    check_candidates = [c for c in rest if _stale_or_never_scanned(c)]
+
     prioritized: list = []
-    if playbook is not None and rest:
-        flags = await asyncio.gather(*[_has_fresh_pi_candidate(c) for c in rest])
-        prioritized = [c for c, f in zip(rest, flags) if f]
-        rest = [c for c, f in zip(rest, flags) if not f]
+    if playbook is not None and check_candidates:
+        flags = await asyncio.gather(*[_has_fresh_pi_candidate(c) for c in check_candidates])
+        jump_ids = {c["id"] for c, f in zip(check_candidates, flags) if f}
+        prioritized = [c for c in rest if c["id"] in jump_ids]
+        rest = [c for c in rest if c["id"] not in jump_ids]
 
     others = (prioritized + sorted(rest, key=lambda c: last.get(c["id"]) or epoch))[:max_other]
 
