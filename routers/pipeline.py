@@ -932,6 +932,41 @@ def _client_domain(client: dict) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _site_base(website: str) -> str:
+    """Normalize a client's metadata.website into a fetchable https:// base
+    URL for the jobs-discovery block (D11).
+
+    metadata.website is stored VERBATIM by routers/internal.py's
+    internal_create_client — for the four clients created that way in the
+    WP7b drive that meant a bare domain with no scheme ("trumpf.com",
+    "datev.de", "vorwerk.de", "festo.com"). urlparse("trumpf.com") then
+    yields an EMPTY netloc (the whole string lands in .path instead), so
+    every consumer that trusted a schemeless website silently did nothing:
+    _careers_probe_urls returned [] (netloc check), _fetch_page_raw handed
+    "trumpf.com" straight to httpx (which raises, then the same bad string
+    reaches Camofox, which logs "Invalid URL: trumpf.com"), and
+    _sitemap_job_urls' own netloc check also came back empty. One place to
+    fix, reused at every jobs-block call site that turns metadata.website
+    into a URL: the homepage fetch, the path-probe tier, and the sitemap
+    probe (_client_domain above already gets this right and stays
+    domain-only; the news block's _probe_newsroom_paths has the same
+    https:// prepend inline).
+
+    strip -> prepend https:// when there's no scheme -> drop a trailing
+    slash -> lower-case the host. '' in, '' out."""
+    website = (website or "").strip()
+    if not website:
+        return ""
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", website):
+        website = f"https://{website}"
+    p = urlparse(website)
+    host = p.netloc.lower()
+    if not host:
+        return ""
+    path = p.path.rstrip("/")
+    return f"{p.scheme}://{host}{path}"
+
+
 # Aggregator/registry/social domains that are never a company's own website
 _AGGREGATOR_DOMAINS = {
     "linkedin.com", "xing.com", "facebook.com", "instagram.com", "youtube.com",
@@ -1125,8 +1160,7 @@ async def _probe_newsroom_paths(website: str) -> list[dict]:
     plain heuristics, same spirit as _fetch_source_fp's readability floor."""
     if not website:
         return []
-    base = website if website.startswith("http") else f"https://{website}"
-    base = base.rstrip("/")
+    base = _site_base(website)  # D11 — same normalization the jobs block uses
     hits: list[dict] = []
     async with httpx.AsyncClient(
         timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
@@ -1173,7 +1207,7 @@ async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> lis
     """
     if not website:
         return []
-    base = website if website.startswith("http") else f"https://{website}"
+    base = _site_base(website)  # D11 — same normalization the jobs block uses
     html = ""
     try:
         async with httpx.AsyncClient(
@@ -3170,6 +3204,10 @@ def _careers_probe_urls(website: str, domain: str, blocked_urls: Optional[list] 
     always trimmed off the end before a single one was ever tried), minus
     anything blocked in the last _PATH_PROBE_BLOCK_DAYS days (D7), capped at
     _PATH_PROBE_MAX total."""
+    # D11 — normalize defensively here too (not just at _careers_candidates'
+    # call site): website may be a bare domain with no scheme, and
+    # urlparse() on that yields an empty netloc, silently returning [].
+    website = _site_base(website)
     p = urlparse(website)
     if not p.netloc:
         return []
@@ -3476,7 +3514,11 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
         if website:
             meta["website"] = website
             client["metadata"] = meta
-    website = (meta.get("website") or "").strip()
+    # D11 — normalize once here: metadata.website can be a bare domain with
+    # no scheme (internal_create_client stores it verbatim), and every
+    # consumer below (homepage fetch, path-probe tier, sitemap probe) turns
+    # it into a URL. See _site_base's docstring for the exact failure mode.
+    website = _site_base(meta.get("website") or "")
     domain = _client_domain(client)
 
     if website:

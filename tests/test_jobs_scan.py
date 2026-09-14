@@ -331,6 +331,99 @@ def _fake_response(status_code=200, text="", url=None):
     return resp
 
 
+# ---------------------------------------------------------------------------
+# D11 — _site_base normalizes a bare-domain metadata.website
+# ---------------------------------------------------------------------------
+
+class TestSiteBase:
+    def test_bare_domain_gets_https_scheme(self):
+        assert pipeline._site_base("trumpf.com") == "https://trumpf.com"
+
+    def test_already_schemed_url_with_trailing_slash_unchanged_in_effect(self):
+        """A well-formed https://.../ URL only loses its (functionally
+        meaningless) trailing slash — the host/scheme/path are untouched."""
+        assert pipeline._site_base("https://www.trumpf.com/") == "https://www.trumpf.com"
+
+    def test_strips_whitespace_and_lowercases_host(self):
+        assert pipeline._site_base("  TRUMPF.com  ") == "https://trumpf.com"
+
+    def test_empty_input_returns_empty(self):
+        assert pipeline._site_base("") == ""
+        assert pipeline._site_base(None) == ""
+
+    def test_http_scheme_preserved_not_forced_to_https(self):
+        assert pipeline._site_base("http://acme.com") == "http://acme.com"
+
+
+class TestBareDomainPathProbeEndToEnd:
+    """D11, measured regression (WP7b): all four clients created via
+    POST /api/internal/clients store metadata.website as a bare domain
+    ("trumpf.com"), so _careers_probe_urls' urlparse(website).netloc came
+    back empty and the whole path-probe tier issued zero requests."""
+
+    @pytest.mark.asyncio
+    async def test_bare_domain_website_issues_ten_probe_requests(self):
+        client = _client(website="trumpf.com")  # no scheme, exactly as stored
+        calls: list = []
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u), calls=calls):
+            await pipeline._careers_candidates(1, client)
+        assert len(calls) == 10
+        assert all(u.startswith("https://trumpf.com") or ".trumpf.com" in u for u in calls)
+
+    @pytest.mark.asyncio
+    async def test_bare_domain_finds_karriere_path(self):
+        """The exact WP7b symptom: trumpf.com's homepage 503s, the sitemap
+        is empty, but /de_DE/karriere/ is a real page — with the bare
+        domain normalized, the path-probe tier must still find it."""
+        client = _client(website="trumpf.com")
+        hit_url = "https://trumpf.com/de_DE/karriere/"
+        hit_html = ("<html><head><title>Karriere bei TRUMPF</title></head><body>"
+                    + ("Aktuelle Stellenangebote und Karrieremoeglichkeiten. " * 20)
+                    + "</body></html>")
+
+        def _resolver(url):
+            if url == hit_url:
+                return _fake_response(200, hit_html, url=hit_url)
+            return _fake_response(404, "", url=url)
+
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            candidates = await pipeline._careers_candidates(1, client)
+        hit = next((c for c in candidates if c["url"] == hit_url), None)
+        assert hit is not None
+        assert hit["tier"] == "path-probe"
+
+    @pytest.mark.asyncio
+    async def test_bare_domain_homepage_fetch_gets_a_real_url(self):
+        """The homepage-harvest fetch must receive a proper https:// URL,
+        not the bare domain string _fetch_page_raw would otherwise hand
+        straight to httpx/Camofox (the "Invalid URL: trumpf.com" symptom)."""
+        client = _client(website="trumpf.com")
+        home_fetch = AsyncMock(return_value=("", ""))
+        with patch.object(pipeline, "_fetch_page_raw", home_fetch), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            await pipeline._careers_candidates(1, client)
+        home_fetch.assert_awaited_once_with("https://trumpf.com")
+
+    @pytest.mark.asyncio
+    async def test_bare_domain_sitemap_probe_gets_a_real_url(self):
+        client = _client(website="trumpf.com")
+        sitemap_fn = AsyncMock(return_value=[])
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", sitemap_fn), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            await pipeline._careers_candidates(1, client)
+        sitemap_fn.assert_awaited_once_with("https://trumpf.com")
+
+
 class TestPathProbeTier:
     @pytest.mark.asyncio
     async def test_finds_karriere_path_when_homepage_503_and_sitemap_empty(self):
