@@ -1154,6 +1154,99 @@ class TestScanClientJobsSuccess:
         assert kwargs["metadata"]["filtered_out"] == 1
 
 
+# ---------------------------------------------------------------------------
+# D22 — a junior/student board is never accepted as THE careers page; the
+# scan tries the next candidate instead, and never caches the student board
+# ---------------------------------------------------------------------------
+
+class TestJuniorBoardRetryScan:
+    _STUDENT_URL = "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students"
+    _PRO_URL = "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"
+
+    def _fake_fetch_page_raw(self, url, wait_ms=3500, **_kw):
+        if url == self._STUDENT_URL:
+            return ("student board page text " * 60, "<html>student board</html>")
+        return ("professional board page text " * 60, "<html>professional board</html>")
+
+    async def _fake_extract_jobs(self, name, text, org_id=None, min_len=200):
+        if text.startswith("student board"):
+            # 15 raw positions: 12 pure-junior (dropped), 3 kept (not junior).
+            positions = [{"title": f"Werkstudent Bereich {i}"} for i in range(12)] + [
+                {"title": "Senior Cloud Engineer"},
+                {"title": "IT Solution Architect"},
+                {"title": "Data Platform Engineer"},
+            ]
+            return positions, []
+        return [{"title": f"Backend Engineer {i}"} for i in range(5)], ["Growing the platform team"]
+
+    @pytest.mark.asyncio
+    async def test_student_board_not_cached_next_candidate_tried(self, monkeypatch):
+        """The reviewer's D22 scenario: a metadata-cached student board
+        (12 of 15 positions junior) must not be accepted or cached as the
+        careers URL — the scan discovers and accepts the professional
+        board instead, and the student board is remembered as a junior
+        board, not as careers.url."""
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://trumpf.com", careers_url=self._STUDENT_URL)
+
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw", side_effect=self._fake_fetch_page_raw), \
+             patch.object(pipeline, "_extract_jobs", side_effect=self._fake_extract_jobs), \
+             patch.object(pipeline, "_discover_careers_url",
+                           AsyncMock(return_value=(self._PRO_URL, "sitemap"))):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is True
+        assert summary["careers_url"] == self._PRO_URL
+        assert summary["positions"] == 5
+        assert summary["tier"] == "sitemap"
+
+        # The student board is never cached as clients.metadata.careers_url —
+        # only the professional board is, once.
+        db.update_client_metadata.assert_awaited_once_with(1, "Acme", {"careers_url": self._PRO_URL})
+
+        # Playbook: a junior_board_url patch for the student board, AND the
+        # final success patch recording the professional board as careers.url.
+        junior_calls = [c for c in fake.record.await_args_list
+                        if (c.args[2].get("careers") or {}).get("junior_board_url") == self._STUDENT_URL]
+        assert len(junior_calls) == 1
+        success_calls = [c for c in fake.record.await_args_list
+                          if (c.args[2].get("careers") or {}).get("url") == self._PRO_URL]
+        assert len(success_calls) == 1
+        assert success_calls[0].args[2]["careers"]["last_success_at"]
+
+    @pytest.mark.asyncio
+    async def test_all_candidates_junior_reports_honest_failure_and_caches_nothing(self, monkeypatch):
+        """If discovery has nothing else to offer, the scan must fail
+        honestly (distinct from the generic "no careers page found") rather
+        than silently accepting the junior board."""
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://trumpf.com", careers_url=self._STUDENT_URL)
+
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw", side_effect=self._fake_fetch_page_raw), \
+             patch.object(pipeline, "_extract_jobs", side_effect=self._fake_extract_jobs), \
+             patch.object(pipeline, "_discover_careers_url", AsyncMock(return_value=("", ""))):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is False
+        assert "junior/student boards found" in summary["error"]
+        assert self._STUDENT_URL in summary["error"]
+        db.update_client_metadata.assert_not_awaited()
+
+
 class TestPlaybookIntegration:
     @pytest.mark.asyncio
     async def test_scan_records_success_to_playbook(self, monkeypatch):
@@ -1344,7 +1437,11 @@ class TestZeroPositionsCareersUrlNotCached:
 
         assert summary["found"] is False
         assert summary["error"] == "no positions found on careers page"
-        db.update_client_metadata.assert_not_awaited()
+        # D21 — the stale metadata URL is never rewritten to itself (that's
+        # still the D16 property this test was originally about), but IS now
+        # explicitly cleared to "" so the next scan re-discovers instead of
+        # taking the "metadata" tier branch and repeating this forever.
+        db.update_client_metadata.assert_awaited_once_with(1, "Acme", {"careers_url": ""})
 
     @pytest.mark.asyncio
     async def test_playbook_records_last_tried_url_not_url_on_zero_positions(self, monkeypatch):
@@ -1412,6 +1509,167 @@ class TestLastTriedUrlSkippedAsCandidate:
              _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
             candidates = await pipeline._careers_candidates(1, client, pb)
         assert any(c["url"] == "https://acme.com/karriere" for c in candidates)
+
+
+# ---------------------------------------------------------------------------
+# D22 — a confirmed junior/student board is excluded from every candidate
+# tier, both via careers.junior_board_url (persisted) and the `exclude` kwarg
+# (this scan's own retry loop)
+# ---------------------------------------------------------------------------
+
+class TestJuniorBoardCandidateExclusion:
+    @pytest.mark.asyncio
+    async def test_playbook_junior_board_url_excluded_from_candidates(self):
+        client = _client(website="https://trumpf.com", careers_url="https://trumpf.com/students")
+        pb = {"careers": {"junior_board_url": "https://trumpf.com/students"}}
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            candidates = await pipeline._careers_candidates(1, client, pb)
+        assert all(c["url"] != "https://trumpf.com/students" for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_exclude_kwarg_excludes_a_fresh_playbook_url_too(self):
+        """A junior board confirmed mid-scan (this scan's own retry loop,
+        not yet persisted to the playbook when the NEXT candidate is
+        picked) must also be excluded from the fresh-playbook-URL
+        short-circuit — not just the ordinary _add path."""
+        client = _client(website="https://trumpf.com")
+        fresh = datetime.now(timezone.utc).isoformat()
+        pb = {"careers": {"url": "https://trumpf.com/students", "tier": "sitemap",
+                           "last_success_at": fresh}}
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            candidates = await pipeline._careers_candidates(
+                1, client, pb, exclude={"https://trumpf.com/students"},
+            )
+        assert all(c["url"] != "https://trumpf.com/students" for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_discover_careers_url_forwards_exclude(self):
+        candidates = [
+            {"url": "https://trumpf.com/students", "tier": "pi-run", "title": ""},
+            {"url": "https://trumpf.com/professionals", "tier": "pi-run", "title": ""},
+        ]
+        client = _client(website="https://trumpf.com")
+        captured = {}
+
+        async def fake_candidates(_org_id, _client, _pb=None, *, exclude=None):
+            captured["exclude"] = exclude
+            return [c for c in candidates if c["url"] not in (exclude or set())]
+
+        with patch.object(pipeline, "_careers_candidates", fake_candidates):
+            url, tier = await pipeline._discover_careers_url(
+                1, client, exclude={"https://trumpf.com/students"},
+            )
+        assert captured["exclude"] == {"https://trumpf.com/students"}
+        assert url == "https://trumpf.com/professionals"
+
+
+# ---------------------------------------------------------------------------
+# D21 — the last_tried_url 7-day skip must also apply to the metadata and
+# argument tiers, which short-circuit PAST _careers_candidates (the only
+# place the skip used to be consulted) entirely.
+# ---------------------------------------------------------------------------
+
+class TestMetadataArgumentLastTriedSkip:
+    @pytest.mark.asyncio
+    async def test_metadata_url_recently_tried_skips_to_discovery(self, monkeypatch):
+        """The reviewer's scenario: a metadata-cached URL that just
+        0-positioned (last_tried_at 2 days ago, inside the 7-day window)
+        must not win the "metadata" branch again — _scan_client_jobs falls
+        through to real discovery instead of re-trying it directly."""
+        fake = MagicMock()
+        recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        pb_state = {"careers": {"last_tried_url": "https://acme.com/careers-old",
+                                 "last_tried_at": recent}}
+        fake.load = AsyncMock(return_value=pb_state)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/careers-old")
+        discover = AsyncMock(return_value=("", ""))
+        with db_patch, patch.object(pipeline, "_discover_careers_url", discover):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is False
+        discover.assert_awaited_once()
+        db.update_client_metadata.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_metadata_url_skip_expires_after_seven_days(self, monkeypatch):
+        """Mirrors _careers_candidates' own last_tried_url skip window:
+        once last_tried_at is more than 7 days old, the metadata branch is
+        used directly again, no discovery call needed."""
+        fake = MagicMock()
+        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        pb_state = {"careers": {"last_tried_url": "https://acme.com/jobs/", "last_tried_at": old}}
+        fake.load = AsyncMock(return_value=pb_state)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        reply = json.dumps({"positions": [{"title": "Cloud Engineer"}], "inferred_needs": []})
+        discover = AsyncMock(side_effect=AssertionError("discovery must be skipped"))
+        with db_patch, \
+             patch.object(pipeline, "_discover_careers_url", discover), \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("Cloud Engineer", "https://acme.com/jobs/cloud-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["tier"] == "metadata"
+        discover.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_argument_url_recently_tried_skips_to_discovery(self, monkeypatch):
+        fake = MagicMock()
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        pb_state = {"careers": {"last_tried_url": "https://acme.com/karriere", "last_tried_at": recent}}
+        fake.load = AsyncMock(return_value=pb_state)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com")
+        discover = AsyncMock(return_value=("", ""))
+        with db_patch, patch.object(pipeline, "_discover_careers_url", discover):
+            summary = await pipeline._scan_client_jobs(1, client, careers_url="https://acme.com/karriere")
+
+        assert summary["found"] is False
+        discover.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_zero_position_metadata_failure_clears_metadata_and_records_last_tried(self, monkeypatch):
+        """The other half of D21: once a metadata URL 0-positions THIS
+        scan, clients.metadata.careers_url is cleared (not just left
+        pointing at a now-known-bad URL) and careers.last_tried_url is
+        stamped — the combination that makes the skip above actually fire
+        on the NEXT scan."""
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/careers-old")
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("x" * 600, "<html></html>"))), \
+             patch.object(pipeline.llm, "acomplete",
+                           AsyncMock(return_value=json.dumps({"positions": [], "inferred_needs": []}))):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is False
+        db.update_client_metadata.assert_awaited_once_with(1, "Acme", {"careers_url": ""})
+        args, _ = fake.record.await_args
+        assert args[2]["careers"]["last_tried_url"] == "https://acme.com/careers-old"
 
 
 # ---------------------------------------------------------------------------

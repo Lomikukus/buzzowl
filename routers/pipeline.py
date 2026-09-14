@@ -3137,6 +3137,19 @@ _PATH_PROBE_BLOCK_DAYS = 14
 # discovery doesn't just hand the exact same known-bad URL straight back.
 _CAREERS_LAST_TRIED_SKIP_DAYS = 7
 
+# D22 — a careers page whose extracted roles are ≥70% junior/student/intern
+# AND leaves fewer than 5 real positions is treated as a junior/student
+# board (e.g. Trumpf's Workday "TRUMPF_Students"), never as "the" careers
+# page: recorded as careers.junior_board_url (never careers.url), excluded
+# from every future candidate list, and _scan_client_jobs retries the next
+# candidate instead of accepting it.
+_JUNIOR_BOARD_MIN_RATIO = 0.7
+_JUNIOR_BOARD_MAX_REMAINING = 5
+# D22 — bounds the retry loop's candidate attempts within one scan (each one
+# can cost an LLM call) so a pathological run of junior-only boards can't
+# spend unlimited requests.
+_MAX_CAREERS_ATTEMPTS = 4
+
 
 def _ats_match(host: str) -> bool:
     """True when `host` IS one of _ATS_HOSTS (label-anchored) or a subdomain of
@@ -3552,19 +3565,29 @@ def _playbook_careers_fresh(careers_pb: dict) -> bool:
         return False
 
 
-async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = None) -> list[dict]:
+async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = None, *,
+                               exclude: Optional[set] = None) -> list[dict]:
     """Ordered candidate careers/jobs URLs, cheapest and most reliable first:
     a fresh (<=60 days) playbook careers URL short-circuits everything else
     (no HTTP, no SearXNG); then the client's own recorded careers_url; then a
     homepage link harvest; then a sitemap probe of the site root; then the
     legacy SearXNG queries as the last resort. Each candidate carries the tier
-    it came from so the caller never has to re-derive it."""
+    it came from so the caller never has to re-derive it.
+
+    `exclude` (D22): URLs already confirmed to be junior/student boards (this
+    scan's own retry loop, or a prior scan via careers.junior_board_url) —
+    never offered as a candidate at any tier, same treatment as the
+    last_tried_url skip below."""
     name = client["name"]
     meta = client.get("metadata") or {}
     candidates: list[dict] = []
     seen: set = set()
+    excluded_urls = exclude or set()
 
     careers_pb = (pb or {}).get("careers") or {}
+    junior_board_url = (careers_pb.get("junior_board_url") or "").strip()
+    if junior_board_url:
+        excluded_urls = excluded_urls | {junior_board_url}
 
     # D16 — a URL careers.last_tried_url recorded as "found nothing" within
     # the last _CAREERS_LAST_TRIED_SKIP_DAYS days is skipped as a candidate
@@ -3596,6 +3619,8 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
         url = (url or "").strip()
         if not url.startswith("http") or url in seen:
             return
+        if url in excluded_urls:
+            return
         if last_tried_skip and url == last_tried_url:
             # Smuggled onto the client dict (same pattern as _probe_blocked/
             # _sitemap_cache below — _careers_candidates' signature is
@@ -3610,7 +3635,7 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
 
     pb_blocked = (pb or {}).get("blocked_urls") or []
     pb_url = (careers_pb.get("url") or "").strip()
-    if pb_url:
+    if pb_url and pb_url not in excluded_urls:
         fresh = _playbook_careers_fresh(careers_pb)
         if fresh:
             # Review nit (documented, not changed): this short-circuit
@@ -3626,8 +3651,17 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
 
     # D2 — a careers/ATS URL a Pi run cited but the scanner hasn't confirmed
     # yet: one rung below a confirmed playbook URL, still ahead of whatever
-    # was just typed into metadata.
-    _add((careers_pb.get("candidate_url") or "").strip(), "pi-run")
+    # was just typed into metadata. D22: a run can see BOTH a junior/student
+    # board and a sibling "professionals" board for the same ATS tenant
+    # (Workday's "TRUMPF_Students" vs "TRUMPF_Graduates_and_Professionals")
+    # — classify_tool_calls ranks up to 3, professional-board first, in
+    # careers.candidate_urls; a playbook recorded before that shipped only
+    # has the single candidate_url, kept as a one-item fallback.
+    candidate_urls = list(careers_pb.get("candidate_urls") or [])
+    if not candidate_urls and careers_pb.get("candidate_url"):
+        candidate_urls = [careers_pb["candidate_url"]]
+    for candidate_url in candidate_urls[:3]:
+        _add((candidate_url or "").strip(), "pi-run")
 
     _add((meta.get("careers_url") or "").strip(), "metadata")
 
@@ -3703,7 +3737,8 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     return candidates
 
 
-async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = None) -> tuple[str, str]:
+async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = None, *,
+                                 exclude: Optional[set] = None) -> tuple[str, str]:
     """Find a client's careers/jobs page. Cheap candidates (playbook, known
     metadata, homepage harvest, sitemap probe) come first and, if only one
     surfaces, it is used directly with no LLM call at all. Once SearXNG
@@ -3711,8 +3746,11 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     only accepted when it lands on the client's own domain or a known ATS
     host, so it can never wander off to an unrelated URL. Falls back to a
     own-domain + careers-keyword heuristic ranking when the LLM is
-    unavailable, unsure, or picks something off-domain."""
-    candidates = await _careers_candidates(org_id, client, pb)
+    unavailable, unsure, or picks something off-domain.
+
+    `exclude` (D22): passed straight through to _careers_candidates — URLs
+    already ruled out as junior/student boards this scan."""
+    candidates = await _careers_candidates(org_id, client, pb, exclude=exclude)
     domain = _client_domain(client)
 
     # Constrain EVERY path (single-candidate short-circuit, LLM pick, heuristic
@@ -4103,14 +4141,155 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     pb_url = (careers_pb.get("url") or "").strip()
     arg_url = (careers_url or "").strip()
     meta_url = (meta.get("careers_url") or "").strip()
-    if pb_url and _playbook_careers_fresh(careers_pb):
-        url, tier = pb_url, "playbook"
-    elif arg_url:
-        url, tier = arg_url, "argument"
-    elif meta_url:
-        url, tier = meta_url, "metadata"
+
+    # D21 — careers.last_tried_url (a URL that just 0-positioned within the
+    # last _CAREERS_LAST_TRIED_SKIP_DAYS days) used to be consulted ONLY
+    # inside _careers_candidates, which the metadata/argument branches below
+    # short-circuit past entirely — so a stale metadata.careers_url that had
+    # just 0-positioned kept re-entering via the "metadata" branch every
+    # subsequent scan and the skip could never apply in practice. Same
+    # last_tried_at clock, same _careers_candidates docstring reasoning:
+    # last_failure_at is only a fallback for a playbook recorded before
+    # last_tried_at existed.
+    def _recently_tried(candidate: str) -> bool:
+        last_tried_url = (careers_pb.get("last_tried_url") or "").strip()
+        if not last_tried_url or candidate != last_tried_url:
+            return False
+        last_tried_at = careers_pb.get("last_tried_at") or careers_pb.get("last_failure_at")
+        if not last_tried_at:
+            return False
+        try:
+            return (datetime.now(timezone.utc) - datetime.fromisoformat(last_tried_at)) \
+                <= timedelta(days=_CAREERS_LAST_TRIED_SKIP_DAYS)
+        except (ValueError, TypeError):
+            return False
+
+    # D22 — a URL already confirmed (this scan, or a prior one) to be a
+    # junior/student board is excluded at every tier below, not just
+    # discovery's candidate list — this scan's own retry loop adds more of
+    # them as it rules candidates out.
+    junior_board_url = (careers_pb.get("junior_board_url") or "").strip()
+    excluded_urls: set = {junior_board_url} if junior_board_url else set()
+    junior_boards_found: list = []
+
+    async def _pick_url() -> tuple[str, str]:
+        if pb_url and pb_url not in excluded_urls and _playbook_careers_fresh(careers_pb):
+            return pb_url, "playbook"
+        if arg_url and arg_url not in excluded_urls and not _recently_tried(arg_url):
+            return arg_url, "argument"
+        if meta_url and meta_url not in excluded_urls and not _recently_tried(meta_url):
+            return meta_url, "metadata"
+        return await _discover_careers_url(org_id, client, pb, exclude=excluded_urls)
+
+    async def _extract_from(start_url: str) -> tuple[list, list, int, str, bool, list]:
+        """The sitemap -> page-text -> listing-link extraction ladder (D22
+        split out of the main body so it can run once per candidate in the
+        retry loop below). Returns (positions, needs, filtered_out,
+        effective_url, needs_js, sitemap_jobs)."""
+        positions: list = []
+        needs: list = []
+        filtered_out = 0
+        needs_js_local = False
+        effective = start_url
+
+        # (1) Sitemap of actual postings — the JS-free ground truth. A JS-heavy
+        # careers page (own-domain or ATS-hosted) only exposes category filters
+        # to a fetch, but its sitemap lists every real opening (e.g.
+        # jobs.apleona.com — apleona's own domain, not an ATS host — →
+        # /offer/<slug>/<uuid>). A single hit is trusted (lowered from 3): the
+        # sitemap can't lie about what's posted.
+        # Reuse the crawl _careers_candidates already did during discovery
+        # instead of hitting the same sitemap a second time when the host
+        # matches.
+        sitemap_cache = client.pop("_sitemap_cache", None)
+        url_host = urlparse(start_url).netloc.lower().replace("www.", "")
+        if sitemap_cache and sitemap_cache.get("host") == url_host:
+            sitemap_jobs = sitemap_cache.get("jobs") or []
+        else:
+            sitemap_jobs = await _sitemap_job_urls(start_url)
+        if len(sitemap_jobs) >= 1:
+            listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
+            listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
+            listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
+            raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
+            positions = _filter_positions(raw_positions)
+            filtered_out = len(raw_positions) - len(positions)
+            # D10 — a title here is only ever as good as the sitemap URL's
+            # slug (e.g. "IT Solution Architect Customer Serv", cut mid-word);
+            # the per-job-URL match below tries to replace it with the real
+            # posting page's <title>/<h1>.
+            for p in positions:
+                p["title_source"] = "slug"
+
+        # (2) Careers-page text (good for sites that list roles inline).
+        if not positions:
+            text, html = await _fetch_page_raw(start_url, wait_ms=3500)
+            plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()) if html else 0
+            raw_positions, needs = await _extract_jobs(name, text, org_id)
+            positions = _filter_positions(raw_positions)
+            filtered_out = len(raw_positions) - len(positions)
+            for p in positions:
+                p["title_source"] = "page"  # from the actual page text, never a slug
+            if positions and plain_len < 500:
+                needs_js_local = True  # only the browser-rendered fallback found anything
+            # (3) Landing page with no roles → follow its job-listing links.
+            if not positions and html:
+                for link in _harvest_links(html, start_url, _JOB_LINK_KEYS, domain):
+                    sub_text, sub_html = await _fetch_page_raw(link, wait_ms=5000)
+                    sub_plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", sub_html)).strip()) \
+                        if sub_html else 0
+                    p2, n2 = await _extract_jobs(name, sub_text, org_id)
+                    p2f = _filter_positions(p2)
+                    if p2f:
+                        positions, needs, effective = p2f, n2, link
+                        filtered_out = len(p2) - len(p2f)
+                        if sub_plain_len < 500:
+                            needs_js_local = True
+                        for p in positions:
+                            p["title_source"] = "page"
+                        break
+
+        return positions, needs, filtered_out, effective, needs_js_local, sitemap_jobs
+
+    # D22 — try candidates in tier-precedence order; a page that extracts
+    # positions but turns out to be a junior/student board (Trumpf's
+    # Workday "TRUMPF_Students") is never accepted — it's remembered
+    # (careers.junior_board_url) and excluded, and the NEXT candidate is
+    # tried instead, bounded so a pathological run of junior boards can't
+    # spend unlimited LLM calls.
+    url, tier = "", ""
+    original_url = ""
+    effective_url = ""
+    positions, needs, filtered_out, needs_js, sitemap_jobs = [], [], 0, False, []
+
+    for _attempt in range(_MAX_CAREERS_ATTEMPTS):
+        cand_url, cand_tier = await _pick_url()
+        if not cand_url:
+            url, tier = "", ""
+            break
+        url, tier = cand_url, cand_tier
+        original_url = url
+        positions, needs, filtered_out, effective_url, needs_js, sitemap_jobs = await _extract_from(url)
+
+        raw_count = filtered_out + len(positions)
+        if positions and raw_count > 0 and (filtered_out / raw_count) >= _JUNIOR_BOARD_MIN_RATIO \
+                and len(positions) < _JUNIOR_BOARD_MAX_REMAINING:
+            junior_boards_found.append(effective_url)
+            excluded_urls.add(url)
+            excluded_urls.add(effective_url)
+            if playbook is not None and domain:
+                try:
+                    await playbook.record(
+                        org_id, domain, {"careers": {"junior_board_url": effective_url}}, run_id=run_id,
+                    )
+                except Exception as exc:
+                    console.print(f"[yellow]playbook junior-board record failed for {name}: {exc}[/yellow]")
+            positions, needs, filtered_out = [], [], 0
+            continue
+        break
     else:
-        url, tier = await _discover_careers_url(org_id, client, pb)
+        # Exhausted every attempt without a single non-junior result.
+        url, tier = "", ""
 
     # D1/D7 — own-domain 403/4xx hit while probing for the careers page
     # (path-probe tier), smuggled back on the client dict since
@@ -4149,6 +4328,20 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         if no_positions_failure and url:
             careers_patch["last_tried_url"] = url
             careers_patch["last_tried_at"] = now_iso
+            # D21 — a metadata-cached URL that just 0-positioned must not
+            # keep winning the tier-precedence ladder forever: the metadata
+            # branch short-circuits PAST _careers_candidates entirely (see
+            # _pick_url above), so the last_tried_url skip there never even
+            # gets a chance to apply to it. Clearing clients.metadata.
+            # careers_url forces the NEXT scan to fall through past the
+            # metadata branch — to argument/discovery, where the skip (and,
+            # once 7 days pass, a genuine retry) actually takes effect.
+            if effective_tier == "metadata" and meta.get("careers_url"):
+                try:
+                    await db_module.update_client_metadata(org_id, name, {"careers_url": ""})
+                except Exception as exc:
+                    console.print(f"[yellow]playbook: could not clear stale careers_url "
+                                  f"for {name}: {exc}[/yellow]")
         elif url:
             # Omit "url" entirely when there's nothing to report (e.g. the
             # "no careers page found" path) — an empty string here would
@@ -4227,68 +4420,15 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                 f"careers page skipped for {_CAREERS_LAST_TRIED_SKIP_DAYS} days "
                 f"after a 0-position scan: {skip_suppressed_url}"
             )
+        if junior_boards_found:
+            # D22 — every candidate this scan tried turned out to be a
+            # junior/student board; distinct from "no careers page found"
+            # so an operator understands discovery DID find pages, just not
+            # a usable one, and that they're now excluded going forward.
+            return await _stamp_failure(
+                "only junior/student boards found: " + ", ".join(junior_boards_found[:3])
+            )
         return await _stamp_failure("no careers page found")
-
-    original_url = url  # the URL the scan started from, for tier reporting below
-    effective_url = url
-    positions: list = []
-    needs: list = []
-    filtered_out = 0
-    needs_js = False
-
-    # (1) Sitemap of actual postings — the JS-free ground truth. A JS-heavy careers
-    # page (own-domain or ATS-hosted) only exposes category filters to a fetch, but
-    # its sitemap lists every real opening (e.g. jobs.apleona.com — apleona's own
-    # domain, not an ATS host — → /offer/<slug>/<uuid>). A single hit is trusted
-    # (lowered from 3): the sitemap can't lie about what's posted.
-    # Reuse the crawl _careers_candidates already did during discovery instead
-    # of hitting the same sitemap a second time when the host matches.
-    sitemap_cache = client.pop("_sitemap_cache", None)
-    url_host = urlparse(url).netloc.lower().replace("www.", "")
-    if sitemap_cache and sitemap_cache.get("host") == url_host:
-        sitemap_jobs = sitemap_cache.get("jobs") or []
-    else:
-        sitemap_jobs = await _sitemap_job_urls(url)
-    if len(sitemap_jobs) >= 1:
-        listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
-        listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
-        listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
-        raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
-        positions = _filter_positions(raw_positions)
-        filtered_out = len(raw_positions) - len(positions)
-        # D10 — a title here is only ever as good as the sitemap URL's slug
-        # (e.g. "IT Solution Architect Customer Serv", cut mid-word); the
-        # per-job-URL match below tries to replace it with the real posting
-        # page's <title>/<h1>.
-        for p in positions:
-            p["title_source"] = "slug"
-
-    # (2) Careers-page text (good for sites that list roles inline).
-    if not positions:
-        text, html = await _fetch_page_raw(url, wait_ms=3500)
-        plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()) if html else 0
-        raw_positions, needs = await _extract_jobs(name, text, org_id)
-        positions = _filter_positions(raw_positions)
-        filtered_out = len(raw_positions) - len(positions)
-        for p in positions:
-            p["title_source"] = "page"  # from the actual page text, never a slug
-        if positions and plain_len < 500:
-            needs_js = True  # only the browser-rendered fallback found anything
-        # (3) Landing page with no roles → follow its job-listing links.
-        if not positions and html:
-            for link in _harvest_links(html, url, _JOB_LINK_KEYS, domain):
-                sub_text, sub_html = await _fetch_page_raw(link, wait_ms=5000)
-                sub_plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", sub_html)).strip()) if sub_html else 0
-                p2, n2 = await _extract_jobs(name, sub_text, org_id)
-                p2f = _filter_positions(p2)
-                if p2f:
-                    positions, needs, effective_url = p2f, n2, link
-                    filtered_out = len(p2) - len(p2f)
-                    if sub_plain_len < 500:
-                        needs_js = True
-                    for p in positions:
-                        p["title_source"] = "page"
-                    break
 
     # From here on `url` always means the URL actually used/found — both the
     # failure stamp below and the success write further down must persist

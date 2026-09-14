@@ -471,6 +471,17 @@ _CAREERS_CANDIDATE_HOST_RE = re.compile(
 )
 _CAREERS_CANDIDATE_MIN_CONTENT_CHARS = 200
 
+# D22 — a Workday-hosted board whose path names it a junior/student board
+# must never outrank a sibling "professionals" board seen in the SAME run
+# (e.g. TRUMPF's "TRUMPF_Students" vs "TRUMPF_Graduates_and_Professionals").
+# Scoped to Workday hosts specifically — these words are too generic to
+# safely bias every own-domain URL's ranking (an own-domain page titled
+# "careers" is the NORMAL case, not a signal).
+_WORKDAY_HOST_MARKER = "myworkdayjobs.com"
+_WORKDAY_JUNIOR_PATH_RE = re.compile(r"students?|graduates?_only|praktik|intern", re.IGNORECASE)
+_WORKDAY_PROFESSIONAL_PATH_RE = re.compile(r"professionals?|careers|jobs|external", re.IGNORECASE)
+_MAX_CAREERS_CANDIDATE_URLS = 3
+
 
 def _ats_match_safe(host: str) -> bool:
     """Lazy, best-effort import of routers.pipeline._ats_match — mirrors
@@ -577,12 +588,26 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
                     or bool(_CAREERS_CANDIDATE_HOST_RE.match(host))
                 )
                 if is_ats or is_careers_candidate:
-                    careers_candidates.append((2 if is_ats else 1, i, url))
+                    score = 2 if is_ats else 1
+                    # D22 — a Workday sibling-board nudge, only ever applied
+                    # on top of an otherwise-equal ATS score so it settles a
+                    # tie between "TRUMPF_Students" and
+                    # "TRUMPF_Graduates_and_Professionals", never promotes a
+                    # weaker (non-ATS) candidate above a real ATS hit.
+                    if _WORKDAY_HOST_MARKER in host:
+                        path = urlparse(url).path
+                        if _WORKDAY_PROFESSIONAL_PATH_RE.search(path):
+                            score += 1
+                        elif _WORKDAY_JUNIOR_PATH_RE.search(path):
+                            score -= 1
+                    careers_candidates.append((score, i, url))
 
     careers_candidate_url = ""
+    careers_candidate_urls: list = []
     if careers_candidates:
         careers_candidates.sort(key=lambda t: (-t[0], t[1]))
-        careers_candidate_url = careers_candidates[0][2]
+        careers_candidate_urls = [u for _, _, u in careers_candidates[:_MAX_CAREERS_CANDIDATE_URLS]]
+        careers_candidate_url = careers_candidate_urls[0]
 
     return {
         "blocked_urls": blocked_urls[-_MAX_BLOCKED_URLS:],
@@ -590,6 +615,11 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
         "failed_queries": failed_queries[:_MAX_QUERY_LIST],
         "needs_js": no_content_own_domain >= 2,
         "careers_candidate_url": careers_candidate_url,
+        # D22 — up to 3, ranked professional-board first for a Workday
+        # tenant with a junior/student sibling; routers/pipeline.py's
+        # _careers_candidates offers all of them as "pi-run" tier
+        # candidates, not just the top one.
+        "careers_candidate_urls": careers_candidate_urls,
     }
 
 
@@ -819,9 +849,12 @@ async def _reflect_on_run_body(org_id: int, db_run_id: int, subject: Optional[st
     # CANDIDATE only: careers.url/tier stay the scanner's (routers/pipeline.py
     # _scan_client_jobs) to write; _merge_dict_field's scalar-overwrite means
     # each new run's candidate simply replaces the last one (bounded to 1).
+    # D22 — candidate_urls carries up to 3, ranked professional-board first
+    # for a Workday tenant with a junior/student sibling.
     if classified.get("careers_candidate_url"):
         patch["careers"] = {
             "candidate_url": classified["careers_candidate_url"],
+            "candidate_urls": classified.get("careers_candidate_urls") or [classified["careers_candidate_url"]],
             "candidate_source": "pi-run",
             "candidate_at": _now_iso(),
         }

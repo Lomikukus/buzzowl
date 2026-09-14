@@ -344,6 +344,76 @@ def test_classify_tool_calls_ats_candidate_outranks_careers_path_candidate():
     assert result["careers_candidate_url"] == "https://acme.wd3.myworkdayjobs.com/en-US/Acme"
 
 
+# ---------------------------------------------------------------------------
+# D22 — Workday junior/student board vs. a sibling "professionals" board
+# ---------------------------------------------------------------------------
+
+def test_classify_tool_calls_prefers_workday_professional_board_over_student_board():
+    """A run that fetched BOTH TRUMPF's student board and its professional
+    board must rank the professional one first, regardless of visit order —
+    Trumpf got permanently stuck on the student board precisely because
+    nothing ever preferred the sibling."""
+    domain = "trumpf.com"
+    tool_calls = [
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"},
+         "result": _LONG_JOBS_TEXT, "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == \
+        "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"
+    assert result["careers_candidate_urls"][0] == \
+        "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"
+    assert "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students" in result["careers_candidate_urls"]
+
+
+def test_classify_tool_calls_prefers_workday_professional_even_when_visited_first():
+    domain = "trumpf.com"
+    tool_calls = [
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students"},
+         "result": _LONG_JOBS_TEXT, "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == \
+        "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"
+
+
+def test_classify_tool_calls_careers_candidate_urls_capped_at_three():
+    domain = "acme.com"
+    urls = [
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_A",
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_B",
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_C",
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_D",
+    ]
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": u}, "result": _LONG_JOBS_TEXT, "ts": f"t{i}"}
+        for i, u in enumerate(urls)
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert len(result["careers_candidate_urls"]) == 3
+
+
+def test_classify_tool_calls_non_workday_host_unaffected_by_student_word():
+    """The junior/professional nudge is scoped to Workday hosts — an
+    own-domain URL that happens to contain "students" must not be
+    penalized; it's still scored purely on the existing D12 rules."""
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere/students-program"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == "https://acme.com/karriere/students-program"
+
+
 async def test_reflect_on_run_records_pi_run_careers_candidate():
     tool_calls = [
         {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
