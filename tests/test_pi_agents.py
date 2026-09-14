@@ -498,19 +498,47 @@ class TestMatchSynthesisTypeCoercionBackstop:
     async def test_research_doc_promoted_to_match_report_when_no_match_report_exists(self):
         from routers.agents import _handle_match_synthesis_callback
 
-        # Sequence: (1) match_report by agent_run_id -> None, (2) match_report
-        # by content ILIKE -> None, (3) research doc by agent_run_id -> found.
-        pool, conn = _mock_pool_sequenced([None, None, {"id": 473}])
+        # Sequence (review reorder): (1) match_report by agent_run_id ->
+        # None, (2) research doc by agent_run_id -> found. The org-wide
+        # content-ILIKE fallback is never reached, since `doc` is already
+        # truthy after (2).
+        pool, conn = _mock_pool_sequenced([None, {"id": 473}])
 
         with patch("server.db_module._pool", pool), \
              patch("notifications.notify_org", new_callable=AsyncMock, create=True):
             await _handle_match_synthesis_callback(1, 220, "Festo")
 
+        assert conn.fetchrow.await_count == 2
         update_calls = [c for c in conn.execute.await_args_list
                         if "UPDATE documents" in c.args[0]]
         assert len(update_calls) == 1
         assert "type='match_report'" in update_calls[0].args[0]
+        assert "org_id=$2" in update_calls[0].args[0]
         assert update_calls[0].args[1] == 473
+        assert update_calls[0].args[2] == 1  # org_id — never cross-org
+
+    @pytest.mark.asyncio
+    async def test_stale_older_match_report_does_not_block_promoting_this_runs_research_doc(self):
+        """Review nit — the run-id-scoped research lookup must run BEFORE
+        the org-wide content-ILIKE fallback: a client with an OLDER
+        match_report from a PREVIOUS run would otherwise win that fallback
+        first (it isn't scoped to this run at all), and this run's
+        mis-typed research doc would never get promoted on a re-run."""
+        from routers.agents import _handle_match_synthesis_callback
+
+        pool, conn = _mock_pool_sequenced([None, {"id": 999}])
+
+        with patch("server.db_module._pool", pool), \
+             patch("notifications.notify_org", new_callable=AsyncMock, create=True):
+            await _handle_match_synthesis_callback(1, 221, "Festo")
+
+        # Only 2 fetchrow calls — the ILIKE fallback (which would have
+        # found the stale older match_report) is never even queried.
+        assert conn.fetchrow.await_count == 2
+        update_calls = [c for c in conn.execute.await_args_list
+                        if "UPDATE documents" in c.args[0]]
+        assert len(update_calls) == 1
+        assert update_calls[0].args[1] == 999
 
     @pytest.mark.asyncio
     async def test_no_coercion_when_a_match_report_doc_already_exists(self):

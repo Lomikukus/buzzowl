@@ -778,6 +778,39 @@ class TestClientNewsroomUrls:
         ]}}
         assert pipeline._client_newsroom_urls(client, None) == ["https://acme.com/press"]
 
+    def test_genuine_article_containing_contact_as_a_substring_is_kept(self):
+        """Review nit — _LEGAL_URL_PATH_RE must be anchored on a whole path
+        segment: an unanchored substring match dropped a genuine article
+        like /news/contact-tracing-launch just for containing "contact"."""
+        client = {"metadata": {}}
+        pb = {"newsroom": {"urls": [
+            "https://acme.com/news/contact-tracing-launch",
+            "https://acme.com/kontakt",
+        ]}}
+        assert pipeline._client_newsroom_urls(client, pb) == \
+            ["https://acme.com/news/contact-tracing-launch"]
+
+
+class TestIsLegalUrl:
+    """Review nit — _is_legal_url must match a whole path segment, not an
+    unanchored substring."""
+
+    def test_whole_segment_matches(self):
+        for url in (
+            "https://acme.com/impressum", "https://acme.com/kontakt/",
+            "https://acme.com/agb.html", "https://acme.com/ueber-uns/impressum",
+            "https://acme.com/en/legal", "https://acme.com/cookie",
+        ):
+            assert pipeline._is_legal_url(url), url
+
+    def test_substring_inside_a_longer_slug_word_is_not_matched(self):
+        for url in (
+            "https://acme.com/news/contact-tracing-launch",
+            "https://acme.com/press/agbau-modernisiert",  # "agb" inside "Agbau"-like slug
+            "https://acme.com/legalize-it-campaign",
+        ):
+            assert not pipeline._is_legal_url(url), url
+
 
 # ---------------------------------------------------------------------------
 # _newsroom_candidates — own-newsroom tier (WP9)
@@ -1426,6 +1459,26 @@ class TestMarketNewsScan:
         assert kwargs["agent_run_id"] == 9
         assert kwargs["doc_id"] == f"market-news-{hashlib.sha1(norm.encode()).hexdigest()[:10]}"
         db.link_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_engine_kept_in_written_signal_metadata(self):
+        """Review nit — the market-news write path dropped engine too."""
+        cand_url = "https://reuters.com/industry-update"
+        results = [{"url": cand_url, "title": "Industry update", "content": "c",
+                    "publishedDate": _RECENT_ISO, "engine": "startpage"}]
+        reply = json.dumps([{"i": 0, "relevance": 3, "signal_type": "risk",
+                              "headline": "Industry update", "why": "New regulation announced"}])
+
+        db = MagicMock()
+        db.list_signals = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=202)
+        db.link_document = AsyncMock()
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_searxng_query", AsyncMock(return_value=_qdata(results))), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            await pipeline._market_news_scan(1, "Automotive", "the Automotive sector", run_id=9)
+
+        assert db.index_document.await_args.kwargs["metadata"]["engine"] == "startpage"
 
     @pytest.mark.asyncio
     async def test_dedupes_against_existing_market_signals(self):

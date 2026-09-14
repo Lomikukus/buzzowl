@@ -927,11 +927,14 @@ def _normalize_source_url(url: str) -> str:
 # has_keyword/has_dates heuristic (a footer full of dated legal notices) or
 # get harvested off the homepage footer: never real news, and unlike a
 # genuine newsroom page they never change, so they'd be re-fetched every
-# single scan for nothing. Checked against the URL PATH only (a client whose
-# real newsroom happens to live at a path containing e.g. "contact" as a
-# substring is not a realistic concern next to how narrow these words are).
+# single scan for nothing. Checked against the URL PATH only, anchored on a
+# WHOLE path segment (review nit: an unanchored substring match dropped a
+# genuine article like /news/contact-tracing-launch just for containing
+# "contact") — "/impressum", "/kontakt/", "/agb.html" match; "contact" only
+# as part of a longer slug word does not.
 _LEGAL_URL_PATH_RE = re.compile(
-    r"impressum|datenschutz|privacy|agb|kontakt|contact|legal|cookie", re.IGNORECASE,
+    r"(^|/)(impressum|datenschutz|privacy|agb|kontakt|contact|legal|cookie)(/|$|\.)",
+    re.IGNORECASE,
 )
 
 
@@ -2922,6 +2925,9 @@ async def _market_news_scan(
                 "published_at": published,
                 "signal_type": signal_type,
                 "from_news_scan": True,
+                # D14 nit — this write path dropped engine too; see
+                # _client_news_scan for why it matters.
+                "engine": cand.get("engine") or "",
                 "service": "python",
             },
             embedding=[],
@@ -3588,6 +3594,14 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     if pb_url:
         fresh = _playbook_careers_fresh(careers_pb)
         if fresh:
+            # Review nit (documented, not changed): this short-circuit
+            # returns pb_url directly, bypassing _add and therefore the
+            # last_tried_url skip above — intentional, not an oversight: a
+            # fresh careers.url means a scan already SUCCEEDED here inside
+            # the last 60 days (_playbook_careers_fresh), which cannot be
+            # the same URL as last_tried_url (that field only ever holds a
+            # URL that yielded 0 positions, and a success wipes the skip's
+            # relevance for that URL going forward regardless).
             return [{"url": pb_url, "tier": "playbook", "title": ""}]
         _add(pb_url, "playbook")
 
@@ -4273,6 +4287,20 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     # Trumpf's SPA shell) must not be written to clients.metadata: that
     # would make the NEXT scan take the "metadata" branch above, skip
     # discovery entirely, and repeat this exact same failure forever.
+    #
+    # Review nit (documented, not changed): a needs-only scan (positions
+    # empty but needs non-empty) skips this metadata write — gated on
+    # `positions` — yet still falls through to the unconditional
+    # _record_playbook(success=True, ...) near the end of this function,
+    # which DOES write careers.url + last_success_at to the playbook. The
+    # asymmetry is deliberate-by-omission rather than deliberate-by-design:
+    # metadata.careers_url only ever meant "a page that listed positions",
+    # while the playbook's careers.url is reused more loosely (D5's tier
+    # precedence, D2's candidate ranking) and a page that at least yielded
+    # inferred needs is arguably still "worth going back to". Left as-is
+    # rather than widened, since a needs-only success is rare in practice
+    # (extract_jobs' needs are themselves derived FROM positions) and
+    # aligning the two would be a behavior change beyond this review's ask.
     if positions and effective_url and effective_url != meta.get("careers_url"):
         await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
 

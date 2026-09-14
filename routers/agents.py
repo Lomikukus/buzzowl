@@ -1547,13 +1547,6 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
                 "ORDER BY created_at DESC LIMIT 1",
                 org_id, int(svc_run_id),
             )
-            # If Pi didn't write it (older Pi version), create it from the agent run output
-            if not doc:
-                doc = await conn.fetchrow(
-                    "SELECT id FROM documents WHERE org_id=$1 AND type='match_report' "
-                    "AND content ILIKE $2 ORDER BY created_at DESC LIMIT 1",
-                    org_id, f"%{client_name}%",
-                )
             # D15 backstop — some Pi builds still write the match_synthesis
             # report as type='research' (the generic final-report type
             # every other agent uses) despite the prompt and the tools.ts-
@@ -1562,6 +1555,12 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
             # reported as done below. Recover it by run id and promote it
             # in place rather than leaving the client stuck on a "done"
             # match no page can find.
+            #
+            # Review nit — checked by run id BEFORE the org-wide content
+            # ILIKE fallback below, not after: a client with an OLDER
+            # match_report from a previous run would otherwise win that
+            # fallback first (it isn't scoped to this run at all) and this
+            # run's mis-typed research doc would never get promoted.
             if not doc:
                 research_doc = await conn.fetchrow(
                     "SELECT id FROM documents WHERE org_id=$1 AND agent_run_id=$2 AND type='research' "
@@ -1570,8 +1569,8 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
                 )
                 if research_doc:
                     await conn.execute(
-                        "UPDATE documents SET type='match_report' WHERE id=$1",
-                        research_doc["id"],
+                        "UPDATE documents SET type='match_report' WHERE id=$1 AND org_id=$2",
+                        research_doc["id"], org_id,
                     )
                     doc = research_doc
                     logger.warning(
@@ -1579,6 +1578,15 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
                         "'match_report' for run=%s client=%s org=%d",
                         research_doc["id"], svc_run_id, client_name, org_id,
                     )
+            # If Pi didn't write a match_report FOR THIS RUN at all (older
+            # Pi version, or a run that predates agent_run_id tracking),
+            # fall back to the org-wide content match as a last resort.
+            if not doc:
+                doc = await conn.fetchrow(
+                    "SELECT id FROM documents WHERE org_id=$1 AND type='match_report' "
+                    "AND content ILIKE $2 ORDER BY created_at DESC LIMIT 1",
+                    org_id, f"%{client_name}%",
+                )
 
         from datetime import datetime, timezone as _tz
         now_iso = datetime.now(_tz.utc).isoformat()
