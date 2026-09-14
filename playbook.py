@@ -428,6 +428,16 @@ def _is_own_domain(url: str, domain: str) -> bool:
 
 
 _CAREERS_CANDIDATE_PATH_RE = re.compile(r"karriere|career|jobs|stellen", re.IGNORECASE)
+# D12 — the same careers words also show up as the HOST's leading subdomain
+# label (jobs.festo.com, karriere.acme.de, bewerbung.acme.de), not just in
+# the path; a run that cleanly fetched e.g. jobs.festo.com/job/<slug> (own
+# domain, but a path with none of _CAREERS_CANDIDATE_PATH_RE's words) never
+# scored a candidate before this, leaving careers_candidate_url empty on
+# every playbook even after a Pi run visited the client's real ATS-on-a-
+# subdomain careers page.
+_CAREERS_CANDIDATE_HOST_RE = re.compile(
+    r"^(jobs|karriere|career|careers|stellen|bewerbung)\.", re.IGNORECASE,
+)
 _CAREERS_CANDIDATE_MIN_CONTENT_CHARS = 200
 
 
@@ -527,10 +537,15 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
             if len(result.strip()) >= _CAREERS_CANDIDATE_MIN_CONTENT_CHARS:
                 host = _host_of(url)
                 is_ats = _ats_match_safe(host)
-                is_careers_path = _is_own_domain(url, domain) and bool(
-                    _CAREERS_CANDIDATE_PATH_RE.search(urlparse(url).path)
+                own = _is_own_domain(url, domain)
+                # D12 — own-domain path keyword OR own-domain careers/jobs/
+                # bewerbung subdomain; either is enough to count as a
+                # careers-candidate host, an ATS hit still outranks both.
+                is_careers_candidate = own and (
+                    bool(_CAREERS_CANDIDATE_PATH_RE.search(urlparse(url).path))
+                    or bool(_CAREERS_CANDIDATE_HOST_RE.match(host))
                 )
-                if is_ats or is_careers_path:
+                if is_ats or is_careers_candidate:
                     careers_candidates.append((2 if is_ats else 1, i, url))
 
     careers_candidate_url = ""
