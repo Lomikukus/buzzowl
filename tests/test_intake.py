@@ -141,6 +141,16 @@ class _LiveIntakeDB:
         return []
 
 
+async def _drain_background_tasks():
+    """sweep() fires _maybe_finish via intake._spawn_background() (nit 2 —
+    so a slow _finish doesn't stall the sweep loop for every other client)
+    instead of awaiting it inline. Await whatever's still pending so a test
+    can observe the effects before asserting."""
+    tasks = list(intake._background_tasks)
+    if tasks:
+        await asyncio.gather(*tasks)
+
+
 # ---------------------------------------------------------------------------
 # Pure logic
 # ---------------------------------------------------------------------------
@@ -226,8 +236,12 @@ class TestPartDone:
         # instead of really interleaving — which would let this test pass even
         # if the CAS call weren't doing any real exclusion. Force a genuine
         # await point before each answer so all four tasks reach the CAS call
-        # before any of them gets its result back.
-        cas_results = iter([writing_meta, None, None, None])
+        # before any of them gets its result back. Five results: four initial
+        # waiting|partial->writing attempts (one wins), plus the winner's own
+        # second CAS from 'writing' to its decided target inside _finish
+        # (BLOCKER 1 pairing — guards against a manual brief closing the
+        # intake out mid-generation).
+        cas_results = iter([writing_meta, None, None, None, meta_all_done])
 
         async def fake_cas(*_args, **_kwargs):
             await asyncio.sleep(0)
@@ -252,7 +266,7 @@ class TestPartDone:
             ])
 
         mock_brief.assert_awaited_once()
-        assert db.cas_client_intake_brief.call_count == 4
+        assert db.cas_client_intake_brief.call_count == 5
 
     async def test_deadline_then_exactly_one_refresh(self):
         t0 = intake._now() - timedelta(minutes=40)
@@ -509,6 +523,7 @@ class TestPartDone:
             patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
         ):
             await intake.sweep()
+            await _drain_background_tasks()
 
         final_parts = db.metadata["intake"]["parts"]
         final_brief = db.metadata["intake"]["brief"]
@@ -550,6 +565,7 @@ class TestPartDone:
             patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
         ):
             await intake.sweep()
+            await _drain_background_tasks()
 
         mock_brief.assert_awaited_once()
 
@@ -659,6 +675,94 @@ class TestPartDone:
         assert final_brief["missing"] == []
         assert final_brief.get("refreshed_at") is not None
         mock_match.assert_called_once()
+
+    async def test_three_late_parts_trigger_exactly_one_refresh(self):
+        """BLOCKER 2: the one-time refresh was not one-time — refreshed_at
+        was only stamped once the post-generation recompute found everything
+        terminal, but a straggler finishing while OTHER parts were still
+        running landed as 'partial' with refreshed_at untouched AND
+        written_at bumped forward, so the NEXT straggler's completion again
+        looked like "something done after written_at" and bought another
+        full (up to 180s) regeneration — three late parts could trigger
+        three extra generations. Requiring became_done_since AND all_terminal
+        together fixes this: a straggler finishing while others are still
+        pending does nothing (silently absorbed — a stray part_done() with
+        nothing left to decide), and only the LAST one to land, with nothing
+        left pending, triggers the (one) real refresh."""
+        t0 = intake._now() - timedelta(minutes=30)
+        deadline = t0 + timedelta(minutes=25)
+        parts = _parts(osint="done", research="running", jobs="running", news="running")
+        parts["osint"]["done_at"] = intake._iso(t0 + timedelta(minutes=2))
+        state = _intake_state(parts=parts, deadline_at=intake._iso(deadline), started_at=intake._iso(t0))
+        db = _LiveIntakeDB({"intake": dict(state)})
+
+        mock_brief = AsyncMock(return_value=True)
+        mock_match = AsyncMock()
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
+        ):
+            # Phase 1: the deadline fires -> 'partial' (missing research/jobs/news).
+            await intake._maybe_finish(1, "Bosch AG", db.metadata)
+            assert db.metadata["intake"]["brief"]["status"] == "partial"
+            assert mock_brief.await_count == 1
+
+            # Phases 2 and 3: two stragglers finish while a third is still
+            # pending — neither may trigger a regeneration.
+            await intake.part_done(1, "Bosch AG", "research", "done")
+            assert db.metadata["intake"]["brief"]["status"] == "partial"
+            assert mock_brief.await_count == 1
+
+            await intake.part_done(1, "Bosch AG", "jobs", "done")
+            assert db.metadata["intake"]["brief"]["status"] == "partial"
+            assert mock_brief.await_count == 1
+
+            # Phase 4: the LAST straggler finishes -> exactly one refresh.
+            await intake.part_done(1, "Bosch AG", "news", "done")
+
+        final_brief = db.metadata["intake"]["brief"]
+        assert final_brief["status"] == "refreshed"
+        assert final_brief["missing"] == []
+        assert final_brief.get("refreshed_at") is not None
+        assert mock_brief.await_count == 2  # deadline partial + exactly one refresh
+
+    async def test_finish_loses_writing_cas_no_overwrite_no_double_match(self):
+        """BLOCKER 1 pairing: a manual brief (POST /api/clients/{name}/brief)
+        can CAS brief.status straight to 'written' WHILE _finish's own
+        _auto_generate_brief is still running. _finish's post-generation
+        write must itself be a CAS from 'writing' to its decided target —
+        losing that race (status is no longer 'writing') must leave the
+        brief exactly as the manual write left it (no overwrite back to
+        'partial'/'waiting'/etc) and must not fire the match-trigger step a
+        second time for the same client."""
+        parts = _parts(osint="done", research="done", jobs="done", news="running")
+        state = _intake_state(parts=parts)
+        writing_meta = {"intake": {**state, "brief": {**state["brief"], "status": "writing"}}}
+        # By the time _finish's OWN second CAS runs (writing -> target), the
+        # manual brief has already moved status away from 'writing'.
+        manual_closed_meta = {"id": 1, "org_id": 1,
+                               "metadata": {"intake": {**state, "brief": {"status": "written"}}}}
+        db = _fake_db(
+            cas_client_intake_brief=AsyncMock(side_effect=[writing_meta, None]),
+            set_client_intake_path=AsyncMock(return_value=None),
+            get_client=AsyncMock(return_value=manual_closed_meta),
+        )
+        mock_brief = AsyncMock(return_value=True)
+        mock_match = AsyncMock()
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
+        ):
+            await intake._finish(1, "Bosch AG", missing=["news"], refresh=False)
+
+        assert db.cas_client_intake_brief.call_count == 2
+        brief_writes = [c for c in db.set_client_intake_path.call_args_list if c.args[2] == ["intake", "brief"]]
+        assert brief_writes == []  # never overwrote the manual result
+        mock_match.assert_not_called()  # no second, redundant match trigger
 
 
 # ---------------------------------------------------------------------------
@@ -904,6 +1008,92 @@ class TestBriefThenMatch:
         mock_brief.assert_awaited_once_with(1, "Bosch AG")
         mock_jobs_scan.assert_awaited_once()
         mock_match.assert_awaited_once_with(1, "Bosch AG")
+
+
+# ---------------------------------------------------------------------------
+# Manual brief generation (POST /api/clients/{name}/brief) closes the intake
+# ---------------------------------------------------------------------------
+
+class TestManualBriefClosesIntake:
+    async def test_manual_brief_during_active_intake_closes_it(self):
+        """BLOCKER 1: generate_client_brief (the manual "regenerate brief"
+        endpoint) never touched metadata.intake at all — a manual brief left
+        the collection point open (is_active() stayed True: the client
+        page's strip polls forever, sweep() keeps sweeping), and the
+        collection point later wrote the SAME doc_id
+        (brief-<sha>-<today>), which index_document upserts — silently
+        replacing the rep's manual brief once it finished. A manual brief
+        must always be allowed and must always close the intake out:
+        'written', missing=[], inactive."""
+        from routers.knowledge import generate_client_brief
+
+        parts = _parts(osint="done", research="running", jobs="queued", news="queued")
+        partial_brief = {
+            "status": "partial", "written_at": intake._iso(intake._now() - timedelta(minutes=5)),
+            "missing": ["research", "jobs", "news"], "refreshed_at": None, "error": None,
+        }
+        meta = {"intake": _intake_state(parts=parts, brief=partial_brief)}
+        client = {"id": 10, "name": "Bosch AG", "metadata": meta}
+        # Mirrors what a real cas_client_intake_brief call would return: only
+        # the status sub-field flips, the rest of the brief is untouched.
+        cas_return = {"intake": {**meta["intake"], "brief": {**partial_brief, "status": "written"}}}
+
+        db = _fake_db(
+            get_client=AsyncMock(return_value=client),
+            embed_text=AsyncMock(return_value=[0.1]),
+            index_document=AsyncMock(return_value=99),
+            link_document=AsyncMock(return_value=None),
+            cas_client_intake_brief=AsyncMock(return_value=cas_return),
+        )
+
+        with (
+            patch("routers.knowledge.DB_AVAILABLE", True),
+            patch("routers.knowledge.db_module", db),
+            patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
+            patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
+        ):
+            result = await generate_client_brief("Bosch AG", user=FAKE_USER)
+
+        assert result["doc_id"] == 99
+        db.cas_client_intake_brief.assert_awaited_once_with(
+            FAKE_USER["org_id"], "Bosch AG", ["waiting", "writing", "partial"], "written",
+        )
+        brief_call = next(c for c in db.set_client_intake_path.call_args_list if c.args[2] == ["intake", "brief"])
+        patched_brief = brief_call.args[3]
+        assert patched_brief["status"] == "written"
+        assert patched_brief["missing"] == []
+        assert patched_brief["refreshed_at"] is None
+        assert patched_brief.get("closed_at") is not None
+
+        final_meta = {"intake": {**meta["intake"], "brief": patched_brief}}
+        assert intake.is_active(final_meta) is False
+
+    async def test_manual_brief_without_open_intake_is_a_no_op(self):
+        """No open intake (already terminal, or none at all) -> the CAS's
+        WHERE never matches, so generate_client_brief must not write
+        anything into metadata.intake."""
+        from routers.knowledge import generate_client_brief
+
+        client = {"id": 10, "name": "Bosch AG", "metadata": {}}
+        db = _fake_db(
+            get_client=AsyncMock(return_value=client),
+            embed_text=AsyncMock(return_value=[0.1]),
+            index_document=AsyncMock(return_value=99),
+            link_document=AsyncMock(return_value=None),
+            cas_client_intake_brief=AsyncMock(return_value=None),
+        )
+
+        with (
+            patch("routers.knowledge.DB_AVAILABLE", True),
+            patch("routers.knowledge.db_module", db),
+            patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
+            patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
+        ):
+            result = await generate_client_brief("Bosch AG", user=FAKE_USER)
+
+        assert result["doc_id"] == 99
+        intake_writes = [c for c in db.set_client_intake_path.call_args_list if c.args[2] == ["intake", "brief"]]
+        assert intake_writes == []
 
 
 # ---------------------------------------------------------------------------
