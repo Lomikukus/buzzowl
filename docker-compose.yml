@@ -213,7 +213,9 @@ services:
       # truncated Camoufox archive still "builds") ran for two weeks reporting
       # healthy while every launch failed. With no idle shutdown, browserRunning
       # below is a truthful signal. Costs a few hundred MB of resident memory.
-      - BROWSER_IDLE_TIMEOUT_MS=0
+      # Not 0: the pinned upstream commit predates "0 = never" and shuts the
+      # browser down immediately; 7 days stays under setTimeout's 24.8-day cap.
+      - BROWSER_IDLE_TIMEOUT_MS=604800000
     # Cap the biggest memory hog so it can't take the whole box, but leave enough
     # headroom (peak ~1.0 GB) that it keeps rendering pages. OOM-kills a tab, not the DB.
     mem_limit: 1200m
