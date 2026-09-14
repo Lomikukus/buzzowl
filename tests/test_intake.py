@@ -901,6 +901,30 @@ class TestAutoGenerateBriefBanners:
         assert "Partial brief" not in doc["content"]
         assert "Not collected" not in doc["content"]
 
+    async def test_both_partial_and_failed_render_both_banners(self):
+        """WP10 D4 nit 1: partial_missing and failed_parts are independent —
+        a part can still be open WHILE another has already failed for good.
+        Both banners must render (the failed one used to only survive in
+        metadata.failed_parts, invisible in the document body itself)."""
+        ok, doc = await self._generate(
+            partial_missing=["news (still running)"],
+            failed_parts=["jobs (failed: no careers page found)"],
+        )
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == ["news (still running)"]
+        assert doc["metadata"]["failed_parts"] == ["jobs (failed: no careers page found)"]
+        assert "Partial brief — missing: news (still running)" in doc["content"]
+        assert "refreshes automatically" in doc["content"]
+        assert "Not collected" in doc["content"]
+        assert "jobs (no careers page found)" in doc["content"]
+        assert "## Executive Summary" in doc["content"]  # generated body preserved
+        # Partial banner first, "Not collected" note beneath it, then content.
+        partial_idx = doc["content"].index("Partial brief")
+        not_collected_idx = doc["content"].index("Not collected")
+        body_idx = doc["content"].index("## Executive Summary")
+        assert partial_idx < not_collected_idx < body_idx
+
 
 class TestRewriteBriefCloseOut:
     """routers.knowledge._rewrite_brief_close_out — the no-LLM-call document
@@ -950,6 +974,94 @@ class TestRewriteBriefCloseOut:
         with patch("routers.knowledge.db_module._pool", pool):
             result = await knowledge._rewrite_brief_close_out(1, "Nobody", failed_parts=[])
         assert result is False
+
+    async def test_clears_partial_at_on_close_out(self):
+        """WP10 D4 nit 4: metadata.partial_at (stamped when the original
+        partial banner was written) must be cleared to None on close-out —
+        otherwise metadata.partial == [] would carry a stale timestamp."""
+        old_content = (
+            "> **Partial brief — missing: jobs (failed: no careers page found)**. "
+            "It refreshes automatically when the missing parts arrive.\n\n"
+            "## Executive Summary\nTRUMPF is a manufacturing-tech company."
+        )
+        row = {
+            "doc_id": "brief-abc123-2026-09-14",
+            "content": old_content,
+            "metadata": {"subject": "Trumpf", "partial": ["jobs (failed: no careers page found)"],
+                         "partial_at": "2026-09-14T10:00:00+00:00"},
+        }
+        pool = _mock_pool(fetchrow_return=row)
+        update_mock = AsyncMock(return_value=None)
+
+        with (
+            patch("routers.knowledge.db_module._pool", pool),
+            patch("routers.knowledge.db_module.update_document", update_mock),
+        ):
+            await knowledge._rewrite_brief_close_out(
+                1, "Trumpf", failed_parts=["jobs (failed: no careers page found)"],
+            )
+
+        _, _, patch_arg = update_mock.call_args.args
+        assert patch_arg["metadata"]["partial"] == []
+        assert patch_arg["metadata"]["partial_at"] is None
+
+    async def test_uses_exact_case_insensitive_trimmed_match_not_like_wildcards(self):
+        """WP10 D9 nit 2: this runs on a WRITE path — an ILIKE match would
+        treat '_'/'%' in a client name as LIKE wildcards, risking a patch
+        landing on a DIFFERENT client's brief document. The query must
+        compare normalised (lower+trim) equality instead."""
+        pool = _mock_pool(fetchrow_return=None)
+        with patch("routers.knowledge.db_module._pool", pool):
+            await knowledge._rewrite_brief_close_out(1, "Acme_GmbH", failed_parts=[])
+
+        conn = pool.__aenter__.return_value
+        query, org_id, name_arg = conn.fetchrow.call_args.args
+        assert "ILIKE" not in query
+        assert "lower(trim(c.name)) = lower(trim($2))" in query
+        assert org_id == 1
+        assert name_arg == "Acme_GmbH"
+
+    async def test_dual_leading_banners_consolidated_into_one(self):
+        """WP10 D4 nit 1 follow-through: a document written while BOTH a part
+        was still open and another had already failed carries two leading
+        banner lines. Closing out (every remaining part now terminal too)
+        must consolidate them into a single, freshly-recomputed 'Not
+        collected' note — not leave the stale extra line behind."""
+        old_content = (
+            "> **Partial brief — missing: news**. "
+            "It refreshes automatically when the missing parts arrive.\n\n"
+            "> **Not collected:** jobs (no careers page found). "
+            "Re-run from the client page (Jobs → Scan now) to add it.\n\n"
+            "## Executive Summary\nTRUMPF is a manufacturing-tech company."
+        )
+        row = {
+            "doc_id": "brief-abc123-2026-09-14",
+            "content": old_content,
+            "metadata": {"subject": "Trumpf", "partial": ["news"],
+                         "failed_parts": ["jobs (failed: no careers page found)"]},
+        }
+        pool = _mock_pool(fetchrow_return=row)
+        update_mock = AsyncMock(return_value=None)
+
+        with (
+            patch("routers.knowledge.db_module._pool", pool),
+            patch("routers.knowledge.db_module.update_document", update_mock),
+        ):
+            await knowledge._rewrite_brief_close_out(
+                1, "Trumpf",
+                failed_parts=["jobs (failed: no careers page found)", "news (failed: timeout)"],
+            )
+
+        _, _, patch_arg = update_mock.call_args.args
+        content = patch_arg["content"]
+        assert content.count("> **") == 1  # exactly one leading banner left
+        assert "Not collected" in content
+        assert "jobs (no careers page found)" in content
+        assert "news (timeout)" in content
+        assert "Partial brief" not in content
+        assert "## Executive Summary" in content
+        assert patch_arg["metadata"]["partial"] == []
+        assert patch_arg["metadata"]["partial_at"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1481,3 +1593,19 @@ class TestIntakeAPI:
             resp = app_client.post("/api/clients/Vorwerk%20Test/jobs/scan",
                                     headers={"Authorization": "Bearer fake"})
         assert resp.status_code == 404
+
+    def test_exact_name_match_endpoints_503_on_db_error(self, app_client):
+        """WP10 D9 nit 3: playbook.resolve_client_exact no longer swallows a
+        transient DB error as "no such client" — a get_client failure on any
+        of the four exact-name endpoints must surface as 503, not a
+        misleading 404."""
+        boom = AsyncMock(side_effect=RuntimeError("db connection lost"))
+        with patch("server.db_module.get_client", boom):
+            for method, path in (
+                ("get", "/api/clients/Vorwerk/intake"),
+                ("post", "/api/clients/Vorwerk/brief"),
+                ("post", "/api/clients/Vorwerk/news/scan"),
+                ("post", "/api/clients/Vorwerk/jobs/scan"),
+            ):
+                resp = getattr(app_client, method)(path, headers={"Authorization": "Bearer fake"})
+                assert resp.status_code == 503, f"{method.upper()} {path} -> {resp.status_code}"

@@ -156,6 +156,13 @@ immediately, intake open or not, and a manual brief closes an open intake
 (`written`, `missing` empty) so the collection point never overwrites it
 later.
 
+`{name}` resolution differs by endpoint (WP10 D9): `POST /api/clients/{name}/brief`,
+`GET /api/clients/{name}/intake`, `POST /api/clients/{name}/jobs/scan` and
+`POST /api/clients/{name}/news/scan` require an exact (case-insensitive,
+trimmed) match and 404 otherwise, while `GET /api/clients/{name}/brief` and
+the client page keep `db.get_client`'s fuzzy (trigram) match for human
+search-as-you-type.
+
 ## Autonomy levels
 
 Per organisation, in Settings → Agent Autonomy (`orgs.settings.autonomy_level`):

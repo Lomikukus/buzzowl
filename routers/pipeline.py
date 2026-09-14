@@ -5610,7 +5610,14 @@ async def scan_client_jobs(name: str, body: dict = None, user: dict = Depends(cu
     if not DB_AVAILABLE:
         raise HTTPException(503, "DB unavailable")
     import playbook  # lazy: avoid an import cycle at module load
-    client = await playbook.resolve_client_exact(user["org_id"], name)
+    try:
+        client = await playbook.resolve_client_exact(user["org_id"], name)
+    except Exception as exc:
+        # WP10 D9 nit 3: resolve_client_exact lets a transient DB error
+        # propagate rather than swallowing it as "no such client" — surface
+        # it as a 503, not a misleading 404.
+        logger.warning("scan_client_jobs: exact client lookup failed for '%s': %s", name, exc)
+        raise HTTPException(503, "client lookup failed") from exc
     if not client:
         raise HTTPException(404, "client not found (exact name required)")
     careers_url = (body or {}).get("careers_url", "") if isinstance(body, dict) else ""

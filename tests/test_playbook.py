@@ -610,6 +610,44 @@ async def test_resolve_client_exact_rejects_a_fuzzy_only_match():
     assert fuzzy is None
 
 
+async def test_resolve_client_exact_propagates_a_db_error(monkeypatch):
+    """WP10 D9 nit 3: a transient get_client failure must NOT be swallowed
+    as "no such client" — only a genuine miss (or fuzzy-only match) may
+    return None. Callers that need fail-open behaviour catch this
+    themselves (see the two tests below)."""
+    db = MagicMock()
+    db.get_client = AsyncMock(side_effect=RuntimeError("db connection lost"))
+    with patch.object(playbook, "db_module", db):
+        with pytest.raises(RuntimeError, match="db connection lost"):
+            await playbook.resolve_client_exact(1, "Acme GmbH")
+
+
+async def test_resolve_reflection_domain_falls_back_when_resolve_client_exact_errors():
+    """_resolve_reflection_domain is best-effort — a DB hiccup while
+    resolving the exact client must fall through to the _infer_domain
+    fallback, not abort the whole reflect_on_run."""
+    db = MagicMock()
+    db.get_client = AsyncMock(side_effect=RuntimeError("db connection lost"))
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/a"}, "result": "content", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/b"}, "result": "content", "ts": "t1"},
+    ]
+    with patch.object(playbook, "db_module", db):
+        domain = await playbook._resolve_reflection_domain(1, "Acme GmbH", tool_calls)
+    assert domain == "acme.com"  # recovered via _infer_domain, not raised
+
+
+async def test_enrich_task_returns_task_unchanged_when_resolve_client_exact_errors():
+    """enrich_task's enrichment is a nice-to-have — a DB hiccup while
+    resolving the exact client must return the task unchanged, not raise."""
+    db = MagicMock()
+    db.get_client = AsyncMock(side_effect=RuntimeError("db connection lost"))
+    with patch.object(playbook, "db_module", db):
+        task, needs_js = await playbook.enrich_task(1, "Acme GmbH", "Research Acme GmbH", "research")
+    assert task == "Research Acme GmbH"
+    assert needs_js is False
+
+
 def _pb_and_lessons_db(client, pb_meta, lessons):
     db = MagicMock()
     db.get_client = AsyncMock(return_value=client)
