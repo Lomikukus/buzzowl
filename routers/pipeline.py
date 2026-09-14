@@ -2372,11 +2372,35 @@ async def _monitor_client(org_id: int, client: dict, fire_research: bool = True)
     had_news_fp = meta.get("news_fp") is not None
     if await _client_news_changed(org_id, client, fail_open=False) and had_news_fp:
         summary["changed"].append("news search")
+        # Mirror _run_market_monitor's _fire(): a real agent_run per scan, so
+        # a degraded backend shows up as a failed run (agent history, the
+        # "no API key"/tracebacks log watch) instead of only living inside
+        # this sweep's own in-memory summary, which the caller folds into
+        # ONE update_agent_run for the whole multi-client sweep.
+        news_run_id = await db_module.create_agent_run(
+            org_id=org_id, agent_type="news_scan",
+            task=f"Source-monitor news scan: {client['name']}", trigger_type="heartbeat",
+        )
         try:
-            news_scan = await _client_news_scan(org_id, client)
+            news_scan = await _client_news_scan(org_id, client, run_id=news_run_id)
             summary["news_written"] = news_scan.get("written", 0)
+            if news_scan.get("error"):
+                summary["news_error"] = news_scan["error"]
+            if news_scan.get("warning"):
+                summary["news_warning"] = news_scan["warning"]
+            if news_scan.get("unresponsive"):
+                summary["news_unresponsive"] = news_scan["unresponsive"]
+            status = "failed" if news_scan.get("error") else "done"
+            await db_module.update_agent_run(
+                news_run_id, status, output=news_scan, error=news_scan.get("error"),
+            )
         except Exception as exc:
             console.print(f"[yellow]source monitor: news scan failed for '{client['name']}': {exc}[/yellow]")
+            summary["news_error"] = str(exc)
+            try:
+                await db_module.update_agent_run(news_run_id, "failed", error=str(exc))
+            except Exception:
+                pass
 
     now_iso = datetime.now(timezone.utc).isoformat()
     for src in sources:
@@ -4646,13 +4670,15 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             researched = [s for s in summaries if s["researched"]]
             escalated = [s for s in summaries if s["escalated"]]
             flagged = [s for s in summaries if s["flagged"]]
+            news_errors = [s for s in summaries if s.get("news_error")]
             discovered = sum(s["discovered"] for s in summaries)
             console.print(
                 f"[dim]Source monitor: {len(summaries)} clients checked, "
                 f"{len(researched)} researched, {len(escalated)} escalated, "
-                f"{len(flagged)} flagged, {discovered} sources discovered[/dim]"
+                f"{len(flagged)} flagged, {len(news_errors)} news scans degraded, "
+                f"{discovered} sources discovered[/dim]"
             )
-            if researched or flagged:
+            if researched or flagged or news_errors:
                 lines = ["📡 *Source monitor*"]
                 if researched:
                     lines.append(
@@ -4663,6 +4689,12 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                     lines.append(
                         "New info (research manually): " + ", ".join(s["client"] for s in flagged)
                     )
+                if news_errors:
+                    lines.append(
+                        "News scan degraded: " + ", ".join(
+                            f"{s['client']} ({s['news_error']})" for s in news_errors
+                        )
+                    )
                 await _notify.notify_org(org_id, "\n".join(lines), "signals")
             await db_module.update_agent_run(
                 run_id, "done",
@@ -4672,6 +4704,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                     "escalated": [s["client"] for s in escalated],
                     "flagged": [s["client"] for s in flagged],
                     "sources_discovered": discovered,
+                    "news_errors": [{"client": s["client"], "error": s["news_error"]} for s in news_errors],
                 },
             )
 

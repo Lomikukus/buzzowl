@@ -269,14 +269,83 @@ class TestMonitorClient:
         scan.assert_not_awaited()   # no baseline → not a change → no news scan either
 
         client2 = _client(sources_discovered_at="x", news_fp="had-one")
-        db_patch2, _ = _patch_db()
+        db_patch2, db2 = _patch_db()
         with db_patch2, _patch_config():
             ps = self._common_patches(news_changed=True, news_scan_written=3)
             with ps[0], ps[1], ps[2], ps[3], ps[4] as scan2:
                 summary2 = await pipeline._monitor_client(1, client2)
         assert "news search" in summary2["changed"]
-        scan2.assert_awaited_once_with(1, client2)
+        # A per-scan agent_run is created (mirroring _run_market_monitor's
+        # _fire()) and its id is threaded through — see BLOCKER 2 below.
+        scan2.assert_awaited_once_with(1, client2, run_id=42)
         assert summary2["news_written"] == 3
+        db2.update_agent_run.assert_any_await(42, "done", output=scan2.return_value, error=None)
+
+    # -- WP9 review BLOCKER 2: a degraded news scan must not look "healthy" --
+
+    @pytest.mark.asyncio
+    async def test_degraded_news_scan_fails_its_own_agent_run_and_flags_summary(self):
+        """A live test drive found this exact path (the heartbeat/source-
+        monitor sweep) reporting a degraded news backend as if nothing had
+        gone wrong: written=0 with no error anywhere. _client_news_scan's
+        error must now (a) fail a real per-client agent_run — mirroring how
+        _run_market_monitor's _fire() sets status='failed' from
+        scan.get('error') — and (b) land in the summary the sweep-level
+        caller folds into its own notification/update_agent_run."""
+        db_patch, db = _patch_db()
+        client = _client(sources_discovered_at="x", news_fp="had-one")
+        degraded = {
+            "found": 0, "scored": 0, "written": 0, "max_relevance": 0,
+            "error": "search degraded: 2 engines unresponsive (brave: down, startpage: down)",
+        }
+        with db_patch, _patch_config():
+            ps = self._common_patches(news_changed=True)
+            with ps[0], ps[1], ps[2], ps[3], \
+                 patch.object(pipeline, "_client_news_scan", AsyncMock(return_value=degraded)):
+                summary = await pipeline._monitor_client(1, client)
+
+        assert summary["news_error"] == degraded["error"]
+        db.create_agent_run.assert_any_await(
+            org_id=1, agent_type="news_scan",
+            task=f"Source-monitor news scan: {client['name']}", trigger_type="heartbeat",
+        )
+        failed_calls = [c for c in db.update_agent_run.await_args_list if c.args[1] == "failed"]
+        assert any(c.kwargs.get("error") == degraded["error"] and c.kwargs.get("output") == degraded
+                   for c in failed_calls)
+
+    @pytest.mark.asyncio
+    async def test_newsroom_rescued_scan_propagates_warning_and_unresponsive(self):
+        db_patch, db = _patch_db()
+        client = _client(sources_discovered_at="x", news_fp="had-one")
+        rescued = {
+            "found": 3, "scored": 3, "written": 3, "max_relevance": 3, "error": None,
+            "warning": "search degraded: 1 engines unresponsive (brave: down)",
+            "unresponsive": [["brave", "down"]], "newsroom_found": 3,
+        }
+        with db_patch, _patch_config():
+            ps = self._common_patches(news_changed=True)
+            with ps[0], ps[1], ps[2], ps[3], \
+                 patch.object(pipeline, "_client_news_scan", AsyncMock(return_value=rescued)):
+                summary = await pipeline._monitor_client(1, client)
+
+        assert summary.get("news_error") is None
+        assert summary["news_warning"] == rescued["warning"]
+        assert summary["news_unresponsive"] == rescued["unresponsive"]
+        done_calls = [c for c in db.update_agent_run.await_args_list if c.args[1] == "done"]
+        assert any(c.kwargs.get("output") == rescued for c in done_calls)
+
+    @pytest.mark.asyncio
+    async def test_scan_exception_fails_the_agent_run_too(self):
+        db_patch, db = _patch_db()
+        client = _client(sources_discovered_at="x", news_fp="had-one")
+        with db_patch, _patch_config():
+            ps = self._common_patches(news_changed=True)
+            with ps[0], ps[1], ps[2], ps[3], \
+                 patch.object(pipeline, "_client_news_scan", AsyncMock(side_effect=RuntimeError("boom"))):
+                summary = await pipeline._monitor_client(1, client)
+        assert summary["news_error"] == "boom"
+        failed_calls = [c for c in db.update_agent_run.await_args_list if c.args[1] == "failed"]
+        assert any(c.kwargs.get("error") == "boom" for c in failed_calls)
 
 
 # ---------------------------------------------------------------------------
