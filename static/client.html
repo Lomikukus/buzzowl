@@ -1158,6 +1158,10 @@ const INTAKE_STRIP_LINGER_MS = 60 * 60 * 1000; // 1 hour
 function _intakeShouldShow(data) {
     if (!data || !data.trigger) return false;
     if (data.active) return true;
+    // A brief that failed after 3 attempts has no written_at (see _finish's
+    // failure branch) — without this it would never show at all, since the
+    // written_at check below always finds nothing and returns false.
+    if (data.brief && data.brief.status === 'failed') return true;
     const writtenAt = (data.brief || {}).written_at;
     if (!writtenAt) return false;
     const writtenMs = new Date(writtenAt).getTime();
