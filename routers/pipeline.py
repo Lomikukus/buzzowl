@@ -922,6 +922,22 @@ def _normalize_source_url(url: str) -> str:
     return (url or "").strip().rstrip("/").lower()
 
 
+# D13 — legal/boilerplate pages that occasionally pass _probe_newsroom_paths'
+# has_keyword/has_dates heuristic (a footer full of dated legal notices) or
+# get harvested off the homepage footer: never real news, and unlike a
+# genuine newsroom page they never change, so they'd be re-fetched every
+# single scan for nothing. Checked against the URL PATH only (a client whose
+# real newsroom happens to live at a path containing e.g. "contact" as a
+# substring is not a realistic concern next to how narrow these words are).
+_LEGAL_URL_PATH_RE = re.compile(
+    r"impressum|datenschutz|privacy|agb|kontakt|contact|legal|cookie", re.IGNORECASE,
+)
+
+
+def _is_legal_url(url: str) -> bool:
+    return bool(_LEGAL_URL_PATH_RE.search(urlparse(url or "").path))
+
+
 def _client_domain(client: dict) -> str:
     website = ((client.get("metadata") or {}).get("website") or "").strip()
     if not website:
@@ -1313,6 +1329,12 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
         if norm in seen:
             continue
         seen.add(norm)
+        # D13 — an Impressum/Datenschutz/AGB page is never real news; without
+        # this, one that happened to pass a probe/harvest heuristic gets
+        # recorded once and then re-fetched by the own-newsroom tier on
+        # every subsequent scan forever.
+        if _is_legal_url(url):
+            continue
         added.append({"url": url, "label": title or urlparse(url).netloc, "added": now_iso})
         if len(added) >= 4 or len(existing) + len(added) >= _MAX_MONITORED_SOURCES:
             break
@@ -1994,18 +2016,22 @@ def _client_newsroom_urls(client: dict, pb: Optional[dict]) -> list[str]:
     """Newsroom URLs already known for this client: playbook.newsroom.urls
     first (org-wide, written by _discover_client_sources' playbook.record
     call), then client.metadata.monitored_sources (per-client, same origin —
-    see _discover_client_sources). Order preserved, deduped."""
+    see _discover_client_sources). Order preserved, deduped.
+
+    D13 — also drops any legal/boilerplate URL (Impressum, Datenschutz, ...)
+    on read, not just at write time: a source recorded before this fix
+    shipped, or added by hand, must stop being re-fetched too."""
     urls: list[str] = []
     seen: set = set()
     for u in ((pb or {}).get("newsroom") or {}).get("urls") or []:
         u = (u or "").strip()
-        if u and u not in seen:
+        if u and u not in seen and not _is_legal_url(u):
             seen.add(u)
             urls.append(u)
     meta = client.get("metadata") or {}
     for src in meta.get("monitored_sources") or []:
         u = (src.get("url") or "").strip()
-        if u and u not in seen:
+        if u and u not in seen and not _is_legal_url(u):
             seen.add(u)
             urls.append(u)
     return urls

@@ -698,6 +698,49 @@ class TestNewsCandidates:
 # _client_newsroom_urls (pure helper)
 # ---------------------------------------------------------------------------
 
+class TestDiscoverSourcesDropsLegalUrls:
+    """D13 — writer side: an Impressum/Datenschutz/AGB page occasionally
+    passes _probe_newsroom_paths' has_keyword/has_dates heuristic (a footer
+    full of dated legal-notice boilerplate) or gets harvested off the
+    homepage footer. Measured regression: site-playbook-datev.de.newsroom.
+    urls held DATEV's real Presse page AND its Impressum, and the own-
+    newsroom tier re-fetched both on every scan. Full _discover_client_
+    sources coverage otherwise lives in
+    tests/test_source_monitor.py::TestDiscoverSources."""
+
+    @pytest.mark.asyncio
+    async def test_impressum_probe_hit_never_recorded(self):
+        db_patch, db = _patch_db()
+        client = _client(website="https://www.datev.de")
+        probe_hits = [
+            {"url": "https://datev.de/presse", "label": "Presse"},
+            {"url": "https://datev.de/ueber-datev/impressum", "label": "Impressum"},
+        ]
+        with db_patch, _patch_config(), \
+             patch.object(pipeline, "_probe_newsroom_paths", AsyncMock(return_value=probe_hits)), \
+             patch.object(pipeline, "_harvest_links_news", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])):
+            sources = await pipeline._discover_client_sources(1, client)
+        urls = [s["url"] for s in sources]
+        assert urls == ["https://datev.de/presse"]
+
+    @pytest.mark.asyncio
+    async def test_datenschutz_harvested_link_never_recorded(self):
+        db_patch, db = _patch_db()
+        client = _client(website="https://www.acme.com")
+        harvested = [
+            {"url": "https://acme.com/press", "label": "Press"},
+            {"url": "https://acme.com/datenschutz", "label": "Datenschutz"},
+        ]
+        with db_patch, _patch_config(), \
+             patch.object(pipeline, "_probe_newsroom_paths", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_harvest_links_news", AsyncMock(return_value=harvested)), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])):
+            sources = await pipeline._discover_client_sources(1, client)
+        urls = [s["url"] for s in sources]
+        assert urls == ["https://acme.com/press"]
+
+
 class TestClientNewsroomUrls:
     def test_playbook_first_then_monitored_sources_deduped(self):
         client = {"metadata": {"monitored_sources": [
@@ -714,6 +757,26 @@ class TestClientNewsroomUrls:
 
     def test_neither_returns_empty(self):
         assert pipeline._client_newsroom_urls({"metadata": {}}, None) == []
+
+    def test_impressum_url_dropped_even_if_already_recorded(self):
+        """D13 — dropped on READ too, not just at write time: a legal URL
+        recorded before this fix shipped (or added by hand) must stop being
+        re-fetched, exactly DATEV's regression (playbook.newsroom.urls held
+        its Impressum alongside its real Presse page)."""
+        client = {"metadata": {}}
+        pb = {"newsroom": {"urls": [
+            "https://datev.de/presse",
+            "https://datev.de/ueber-datev/impressum?utm_source=x",
+        ]}}
+        assert pipeline._client_newsroom_urls(client, pb) == ["https://datev.de/presse"]
+
+    def test_datenschutz_and_agb_urls_dropped_from_monitored_sources_too(self):
+        client = {"metadata": {"monitored_sources": [
+            {"url": "https://acme.com/press"},
+            {"url": "https://acme.com/datenschutz"},
+            {"url": "https://acme.com/agb"},
+        ]}}
+        assert pipeline._client_newsroom_urls(client, None) == ["https://acme.com/press"]
 
 
 # ---------------------------------------------------------------------------
