@@ -801,15 +801,24 @@ async def _trigger_osint(client_name: str, org_id: int, run_id: Optional[int] = 
 # Heartbeat scheduler
 # ---------------------------------------------------------------------------
 
-async def _searxng_results(
+async def _searxng_query(
     query: str, limit: int = 10, *,
     categories: str | None = None, time_range: str | None = None, language: str | None = None,
-) -> list[dict]:
-    """Raw SearXNG JSON results — shared by news gate + source discovery. [] on failure.
+) -> dict:
+    """Raw SearXNG JSON query, degraded-backend-aware. Raises on a transport
+    failure (timeout, DNS, non-2xx) — callers decide whether that's fatal.
 
-    Each result dict keeps whatever SearXNG returns (url/title/content/engine/
-    publishedDate); categories/time_range/language are only added to the request
-    when the caller passes them, so existing callers see no behavior change."""
+    Returns {"results": [...] (capped to `limit`), "unresponsive": [[engine,
+    reason], ...], "engines_ok": n}. SearXNG's own JSON carries
+    `unresponsive_engines` as [engine, reason] pairs whenever an engine was
+    suspended/rate-limited/CAPTCHA'd/timed out for this query — the WP7 field
+    drive found brave/startpage/qwant/mojeek suspended while only bing news
+    kept answering, with `error: null` on every scan. `engines_ok` is the
+    count of distinct engines that actually contributed a result, so a caller
+    can tell "every engine that ran was suspended" from "some engines
+    worked, this particular query just had no hits". categories/time_range/
+    language are only added to the request when the caller passes them, so
+    every existing caller sees no behavior change."""
     searxng_url = context.config.get("searxng_url", "http://localhost:8080").rstrip("/")
     params = {"q": query, "format": "json", "safesearch": 0}
     if categories:
@@ -821,7 +830,50 @@ async def _searxng_results(
     async with httpx.AsyncClient(timeout=10.0) as http:
         resp = await http.get(f"{searxng_url}/search", params=params)
         resp.raise_for_status()
-        return (resp.json().get("results") or [])[:limit]
+        data = resp.json()
+    results = (data.get("results") or [])[:limit]
+    unresponsive = [
+        [str(item[0]), str(item[1])] for item in (data.get("unresponsive_engines") or [])
+        if isinstance(item, (list, tuple)) and len(item) >= 2
+    ]
+    engines_ok = len({
+        e for r in results
+        for e in ([r["engine"]] if r.get("engine") else []) + list(r.get("engines") or [])
+    })
+    return {"results": results, "unresponsive": unresponsive, "engines_ok": engines_ok}
+
+
+async def _searxng_results(
+    query: str, limit: int = 10, *,
+    categories: str | None = None, time_range: str | None = None, language: str | None = None,
+) -> list[dict]:
+    """Thin wrapper over _searxng_query for callers that only need the plain
+    results list (source discovery, careers-URL discovery, the news change
+    gate) — every existing caller/mock of this name keeps working unchanged.
+    Each result dict keeps whatever SearXNG returns (url/title/content/engine/
+    publishedDate)."""
+    data = await _searxng_query(
+        query, limit=limit, categories=categories, time_range=time_range, language=language,
+    )
+    return data["results"]
+
+
+def _dedupe_unresponsive(pairs: list) -> list:
+    """First-seen-wins dedupe of [engine, reason] pairs by engine name — the
+    same engine is typically reported unresponsive on every query in a scan
+    (brave/startpage/qwant stay suspended for the whole run), and callers
+    want one line per engine, not N repeats of the same pair."""
+    seen: set = set()
+    out: list = []
+    for pair in pairs or []:
+        if not (isinstance(pair, (list, tuple)) and len(pair) >= 2):
+            continue
+        engine = str(pair[0])
+        if engine in seen:
+            continue
+        seen.add(engine)
+        out.append([engine, str(pair[1])])
+    return out
 
 
 async def _client_news_changed(org_id: int, client: dict, fail_open: bool = True) -> bool:
@@ -1688,6 +1740,362 @@ def _parse_published(r: dict) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Date recovery (step 3) — for SearXNG results with neither a publishedDate
+# nor a URL date, and for dating <a href> items harvested straight off a
+# client's own newsroom page (own-newsroom tier, below).
+# ---------------------------------------------------------------------------
+
+_TIME_TAG_RE = re.compile(r'<time\b[^>]*\bdatetime=["\']([^"\']+)["\']', re.I)
+_TEXT_ISO_DATE_RE = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b")
+_TEXT_DE_DATE_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(20\d\d)\b")
+_META_PUBLISHED_RE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|date)["\'][^>]*content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_PUBLISHED_RE_REV = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\'](?:article:published_time|date)["\']',
+    re.I,
+)
+_JSONLD_DATE_RE = re.compile(r'"datePublished"\s*:\s*"([^"]+)"', re.I)
+
+
+def _coerce_iso_date(raw: str) -> Optional[str]:
+    """'YYYY-MM-DD' from an arbitrary date string (full ISO datetime, bare
+    ISO date, or an embedded YYYY[/-]MM[/-]DD) — None if nothing parses."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except (ValueError, TypeError):
+        pass
+    m = _URL_DATE_RE.search(raw)
+    if m:
+        y, mo, d = (int(g) for g in m.groups())
+        try:
+            return date(y, mo, d).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_published_from_html(html: str) -> Optional[str]:
+    """A single article page's own publish date: `<meta
+    property="article:published_time">`, `<meta name="date">`, `<time
+    datetime>`, then JSON-LD `datePublished` — first match wins. Used by the
+    bounded page-header probe (step 3) for SearXNG results with no
+    publishedDate/URL date."""
+    for pattern in (_META_PUBLISHED_RE, _META_PUBLISHED_RE_REV, _TIME_TAG_RE, _JSONLD_DATE_RE):
+        m = pattern.search(html or "")
+        if m:
+            iso = _coerce_iso_date(m.group(1))
+            if iso:
+                return iso
+    return None
+
+
+async def _probe_published_date(url: str) -> Optional[str]:
+    """Bounded page-header probe (step 3): plain GET, 8s. None on any
+    failure or when nothing parses — callers must drop the candidate, never
+    guess a date."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=8.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+        ) as http:
+            resp = await http.get(url)
+            if resp.status_code != 200:
+                return None
+            html = resp.text
+    except Exception:
+        return None
+    return _extract_published_from_html(html)
+
+
+_ANCHOR_OPEN_RE = re.compile(r"<a\b", re.I)
+_ANCHOR_CLOSE_RE = re.compile(r"</a>", re.I)
+_BR_TAG_RE = re.compile(r"<br\b", re.I)
+
+# The tags real listings wrap one item in — <li>/<article>/<tr>/<section>/
+# <div> — used to bound _extract_date_near's search to THIS item's own
+# markup. Neighbouring-anchor bounds (below) are only a fallback for
+# markup with no such wrapper at all: a real listing's item boundary is
+# this tag, not merely "wherever the next/previous <a> happens to be".
+_CONTAINER_CLOSE_RE = re.compile(r"</(?:li|article|tr|section|div)\b", re.I)
+_CONTAINER_OPEN_RE = re.compile(r"<(?:li|article|tr|section|div)\b", re.I)
+
+# WP9 re-review: forward-only search (the first fix) was wrong for a "date
+# BEFORE the title link" convention (e.g. German <span>12.09.2026</span>
+# <a>Titel</a> listings) — every anchor's forward region ran up to the NEXT
+# `<a`, exactly where the next item's own leading date sits, so each item
+# silently inherited its successor's date. Bounding both directions by the
+# neighbouring <a> (the second fix) still let an UNDATED item inherit a
+# neighbour's marker whenever that neighbour's own container was smaller
+# than the (generous, unbounded-by-markup) 120-char cap — a plain compact
+# `<li>` item is well under 120 chars end to end. Bounding by the enclosing
+# item CONTAINER instead of just the neighbouring anchor fixes this
+# properly: an item's own container never includes a NEIGHBOUR's marker,
+# so there is nothing left to leak regardless of the cap's exact value.
+# The cap stays as a last-resort guard for markup with no container tags at
+# all (the neighbouring-anchor fallback below).
+_DATE_NEAR_MAX_DISTANCE = 120
+
+
+def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Optional[str]:
+    """The date belonging to ONE <a> match on a listing page (a newsroom
+    index lists many items, each with its own date) — unlike
+    _extract_published_from_html (a whole single-article page), this
+    handles BOTH a trailing-marker convention (title link, then its own
+    date) and a date-before convention (date, then the title link).
+
+    Searches a forward region and a backward region, each bounded first by
+    this item's own enclosing container tag (the first `</li|</article|
+    </tr|</section|</div` after the anchor forward; the last matching open
+    tag before it backward) — never a neighbour's, since a container never
+    contains another item's markup. Only when no such tag exists on that
+    side at all does it fall back to the neighbouring anchor (`<a` forward,
+    `</a>` backward, WP9's first two fixes) AND the nearest bare `<br>`
+    line-break on that side, if any (a wrapper-less listing like `<a>1</a>
+    date<br><a>2</a> date<br><a>3</a>` still separates items even with no
+    <li>/<article>/... at all) — further capped at _DATE_NEAR_MAX_DISTANCE
+    chars, a last resort for markup with no separator whatsoever, where
+    "far away" is the only signal left that a match belongs to some OTHER
+    item.
+
+    Every `<time datetime>` / ISO / German (dd.mm.yyyy) match found in
+    EITHER region is a candidate; the NEAREST one to the anchor (by
+    character distance) wins, not whichever direction or pattern is tried
+    first. When nothing qualifies, returns None — an item with no marker
+    of its own must never inherit a neighbour's; a dropped date is better
+    than a wrong one."""
+    window_fwd_limit = min(len(html), end + window)
+    container_close = _CONTAINER_CLOSE_RE.search(html, end, window_fwd_limit)
+    if container_close:
+        fwd_limit = container_close.start()
+    else:
+        fwd_limit = window_fwd_limit
+        next_anchor = _ANCHOR_OPEN_RE.search(html, end)
+        if next_anchor:
+            fwd_limit = min(fwd_limit, next_anchor.start())
+        # No <li>/<article>/... wrapper at all — a bare <br> is the only
+        # other common item separator (e.g. <a>1</a> date<br><a>2</a>...);
+        # without this, an anchor-only bound still lets a wrapper-less
+        # listing's last (undated) item reach backward past the <br> into
+        # its predecessor's trailing date.
+        br = _BR_TAG_RE.search(html, end, fwd_limit)
+        if br:
+            fwd_limit = min(fwd_limit, br.start())
+
+    window_back_limit = max(0, start - window)
+    container_open = None
+    for m in _CONTAINER_OPEN_RE.finditer(html, window_back_limit, start):
+        container_open = m
+    if container_open:
+        back_limit = container_open.start()
+    else:
+        back_limit = window_back_limit
+        prev_close = None
+        for m in _ANCHOR_CLOSE_RE.finditer(html, window_back_limit, start):
+            prev_close = m
+        if prev_close is not None:
+            back_limit = max(back_limit, prev_close.end())
+        br = None
+        for m in _BR_TAG_RE.finditer(html, back_limit, start):
+            br = m
+        if br is not None:
+            back_limit = max(back_limit, br.end())
+
+    candidates: list[tuple[int, str]] = []
+
+    def _collect(segment: str, base_offset: int, anchor_pos: int) -> None:
+        for m in _TIME_TAG_RE.finditer(segment):
+            iso = _coerce_iso_date(m.group(1))
+            if iso:
+                candidates.append((abs(base_offset + m.start() - anchor_pos), iso))
+        # Length-preserving tag strip (spaces equal to each tag's own
+        # length, not a single space) so a text-pattern match's offset
+        # inside `text_seg` still lines up with its real position in
+        # `segment`/`html` — _DATE_NEAR_MAX_DISTANCE only means anything
+        # if distances are actual character counts, not stripped-text ones.
+        text_seg = _HTML_TAG_RE.sub(lambda tm: " " * len(tm.group(0)), segment)
+        for m in _TEXT_ISO_DATE_RE.finditer(text_seg):
+            y, mo, d = (int(g) for g in m.groups())
+            try:
+                iso = date(y, mo, d).isoformat()
+            except ValueError:
+                continue
+            candidates.append((abs(base_offset + m.start() - anchor_pos), iso))
+        for m in _TEXT_DE_DATE_RE.finditer(text_seg):
+            d, mo, y = (int(g) for g in m.groups())
+            try:
+                iso = date(y, mo, d).isoformat()
+            except ValueError:
+                continue
+            candidates.append((abs(base_offset + m.start() - anchor_pos), iso))
+
+    _collect(html[end:fwd_limit], end, end)
+    _collect(html[back_limit:start], back_limit, start)
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0])
+    best_distance, best_iso = candidates[0]
+    if best_distance > _DATE_NEAR_MAX_DISTANCE:
+        return None
+    return best_iso
+
+
+# ---------------------------------------------------------------------------
+# Own-newsroom tier (WP9) — backend-independent of SearXNG: harvest dated
+# items straight off the client's own known newsroom/press pages, so a
+# working newsroom still yields signals when every search engine is blocked.
+# ---------------------------------------------------------------------------
+
+_NEWSROOM_MAX_PAGES = 3
+_NEWSROOM_CAP = 10
+_ANCHOR_RE = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+
+
+def _client_newsroom_urls(client: dict, pb: Optional[dict]) -> list[str]:
+    """Newsroom URLs already known for this client: playbook.newsroom.urls
+    first (org-wide, written by _discover_client_sources' playbook.record
+    call), then client.metadata.monitored_sources (per-client, same origin —
+    see _discover_client_sources). Order preserved, deduped."""
+    urls: list[str] = []
+    seen: set = set()
+    for u in ((pb or {}).get("newsroom") or {}).get("urls") or []:
+        u = (u or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    meta = client.get("metadata") or {}
+    for src in meta.get("monitored_sources") or []:
+        u = (src.get("url") or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    return urls
+
+
+async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], list[dict]]:
+    """Fetch up to _NEWSROOM_MAX_PAGES of the client's own newsroom pages and
+    harvest same-domain, dated <a href> items — plain GET, 12s, _SOURCE_UA;
+    on 403/503, and only for the first page, falls back to the shared
+    browser-service -> Camofox tier (_fetch_rendered_tier, the same one
+    _fetch_page_text/_fetch_page_raw use) with text_so_far="" — it already
+    knows not to re-GET a URL that just failed. Only Camofox's links_html
+    is usable here: it rebuilds real <a href> markup from the
+    accessibility snapshot (harvestable by _ANCHOR_RE below), whereas the
+    browser-service tier alone returns plain innerText with no anchors at
+    all. Dates come from _parse_published (URL), then _extract_date_near
+    (a <time> tag or ISO/German date near the anchor). Dedupes by
+    _norm_news_url, drops anything older than 90 days, caps at
+    _NEWSROOM_CAP.
+
+    Returns (candidates, blocked) — candidates are shaped like a SearXNG
+    result (url/title/content/_norm_url/_published/query/engine) so they
+    slot straight into _client_news_scan's candidate list; blocked is
+    {"url", "kind", "at"} entries (kind one of "403"/"4xx"/"fetch_error"/
+    "no_content") for the playbook.record(...) blocked_urls patch the news
+    scan already makes.
+    """
+    domain = _client_domain(client)
+    if not domain:
+        return [], []
+
+    try:
+        import playbook  # type: ignore
+    except ImportError:
+        playbook = None
+    pb = None
+    if playbook is not None:
+        try:
+            pb = await playbook.load(org_id, domain)
+        except Exception:
+            pb = None
+
+    urls = _client_newsroom_urls(client, pb)
+    if not urls:
+        return [], []
+
+    today = datetime.now(timezone.utc).date()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    candidates: list[dict] = []
+    blocked: list[dict] = []
+    norm_seen: set = set()
+
+    for i, page_url in enumerate(urls[:_NEWSROOM_MAX_PAGES]):
+        html = ""
+        status_code: Optional[int] = None
+        fetch_failed = False
+        try:
+            async with httpx.AsyncClient(
+                timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+            ) as http:
+                resp = await http.get(page_url)
+                status_code = resp.status_code
+                if status_code == 200:
+                    html = resp.text
+        except Exception:
+            fetch_failed = True
+
+        if not html and not fetch_failed and status_code in (403, 503) and i == 0:
+            try:
+                _rendered_text, _tier, links_html = await _fetch_rendered_tier(
+                    page_url, "", 18000, 1500,
+                )
+                html = links_html
+            except Exception:
+                pass
+
+        if not html:
+            if fetch_failed:
+                kind = "fetch_error"
+            elif status_code == 403:
+                kind = "403"
+            elif status_code is not None and status_code >= 400:
+                kind = "4xx"
+            else:
+                kind = "no_content"
+            blocked.append({"url": page_url, "kind": kind, "at": now_iso})
+            continue
+
+        for m in _ANCHOR_RE.finditer(html):
+            href, inner = m.group(1).strip(), m.group(2)
+            if href.startswith(("#", "mailto:", "javascript:", "tel:")):
+                continue
+            full = urljoin(page_url, href)
+            if not full.startswith("http"):
+                continue
+            host = _result_domain(full)
+            if not (host == domain or host.endswith("." + domain)):
+                continue
+            norm = _norm_news_url(full)
+            if not norm or norm in norm_seen:
+                continue
+
+            published = _parse_published({"url": full}) or _extract_date_near(html, m.start(), m.end())
+            if not published:
+                continue
+            try:
+                if (today - date.fromisoformat(published)).days > 90:
+                    continue
+            except ValueError:
+                continue
+
+            norm_seen.add(norm)
+            title = _HTML_TAG_RE.sub(" ", inner).strip()[:120] or urlparse(full).path
+            candidates.append({
+                "url": full, "title": title, "content": "",
+                "_norm_url": norm, "_published": published, "query": "",
+                "engine": "newsroom",
+            })
+            if len(candidates) >= _NEWSROOM_CAP:
+                return candidates, blocked
+
+    return candidates, blocked
+
+
 async def _existing_signal_urls(org_id: int, client_id: int) -> set[str]:
     """Normalized source_url of every type='signal' document already linked to
     this client — so a news scan never re-scores (and re-writes) the same
@@ -1724,19 +2132,30 @@ def _news_result_allowed(url: str) -> tuple[bool, str]:
     return True, host
 
 
-async def _news_candidates(org_id: int, client: dict) -> list[dict]:
+async def _news_candidates(org_id: int, client: dict) -> dict:
     """Gather candidate news articles for a client via SearXNG: exact-name
     news search, name+industry, own-domain site search, and (only when those
     come up thin) a generic name+news fallback. Drops skip-host results,
     dedupes by normalized URL, and requires a resolvable published date
-    within the last 90 days — any result without a publishedDate gets one
-    more chance via a date embedded in its URL (_parse_published applies
-    this fallback uniformly, not just to own-domain results), but is
-    dropped like everything else if that also comes up empty. Caps at 15.
+    within the last 90 days: publishedDate or a date embedded in the URL
+    (_parse_published applies both), then — for up to 5 results still
+    undated — a bounded page-header probe (step 3, _probe_published_date).
+    Anything still undated after all three is dropped. Caps at 15.
+
+    Uses _searxng_query (not _searxng_results) so degraded-backend signals
+    survive to the caller. Returns {"candidates": [...], "unresponsive":
+    [[engine, reason], ...], "undated_total": n, "news_zero_all": bool}:
+    undated_total counts results that passed the host/dedup filter but never
+    got a date, even after the page probe; news_zero_all is True iff every
+    categories="news" query in this call came back with zero raw results —
+    the WP7 pattern (brave/startpage/qwant/mojeek suspended, only bing news
+    answering, and bing news carries no publishedDate) lands in one or both
+    of these, not silently as found=0/error=None.
 
     Raises when every SearXNG query in this call failed (a real outage) so
-    _client_news_scan can distinguish "SearXNG is down" from "no news found";
-    a partial failure (some queries ok) is not treated as an error.
+    _client_news_scan can distinguish "SearXNG is down" from "degraded/no
+    news found"; a partial failure (some queries ok) is not treated as an
+    error.
     """
     from routers.agents import _ascii_name
 
@@ -1754,21 +2173,29 @@ async def _news_candidates(org_id: int, client: dict) -> list[dict]:
         queries.append((f"site:{domain}", "general", "month"))
 
     candidates: list[dict] = []
+    undated_pending: list[dict] = []
     seen: set[str] = set()
+    unresponsive_all: list = []
     today = datetime.now(timezone.utc).date()
     attempted = 0
     failed = 0
+    news_query_count = 0
+    news_zero_count = 0
 
     async def _collect(query: str, categories: str, time_range: str) -> None:
-        nonlocal attempted, failed
+        nonlocal attempted, failed, news_query_count, news_zero_count
         attempted += 1
         try:
-            results = await _searxng_results(
-                query, limit=15, categories=categories, time_range=time_range,
-            )
+            data = await _searxng_query(query, limit=15, categories=categories, time_range=time_range)
         except Exception:
             failed += 1
             return
+        results = data.get("results") or []
+        unresponsive_all.extend(data.get("unresponsive") or [])
+        if categories == "news":
+            news_query_count += 1
+            if not results:
+                news_zero_count += 1
         for r in results:
             url = (r.get("url") or "").strip()
             allowed, _host = _news_result_allowed(url)
@@ -1777,16 +2204,18 @@ async def _news_candidates(org_id: int, client: dict) -> list[dict]:
             norm = _norm_news_url(url)
             if not norm or norm in seen:
                 continue
+            seen.add(norm)
             published = _parse_published(r)
+            entry = {**r, "_norm_url": norm, "_published": published, "query": query}
             if not published:
+                undated_pending.append(entry)
                 continue
             try:
                 if (today - date.fromisoformat(published)).days > 90:
                     continue
             except ValueError:
                 continue
-            seen.add(norm)
-            candidates.append({**r, "_norm_url": norm, "_published": published, "query": query})
+            candidates.append(entry)
 
     for q, cat, tr in queries:
         await _collect(q, cat, tr)
@@ -1797,7 +2226,36 @@ async def _news_candidates(org_id: int, client: dict) -> list[dict]:
     if attempted and failed == attempted:
         raise ConnectionError("searxng unreachable")
 
-    return candidates[:15]
+    undated_total = len(undated_pending)
+    probe_targets = undated_pending[:5]
+    if probe_targets:
+        # Concurrent, bounded to 3 in flight: sequential 8s-timeout probes
+        # would cost up to 5*8s=40s worst case; a semaphore(3) caps it at
+        # ceil(5/3)*8s ~= 16s. candidates.append() from each task is safe —
+        # asyncio has no real parallelism, only interleaving.
+        probe_sem = asyncio.Semaphore(3)
+
+        async def _probe_one(entry: dict) -> None:
+            async with probe_sem:
+                published = await _probe_published_date(entry["url"])
+            if not published:
+                return
+            try:
+                if (today - date.fromisoformat(published)).days > 90:
+                    return
+            except ValueError:
+                return
+            entry["_published"] = published
+            candidates.append(entry)
+
+        await asyncio.gather(*(_probe_one(e) for e in probe_targets))
+
+    return {
+        "candidates": candidates[:15],
+        "unresponsive": _dedupe_unresponsive(unresponsive_all),
+        "undated_total": undated_total,
+        "news_zero_all": bool(news_query_count) and news_zero_count == news_query_count,
+    }
 
 
 def _news_listing(candidates: list[dict]) -> str:
@@ -1818,32 +2276,99 @@ async def _client_news_scan(
     """Score fresh news candidates for one client with a single text LLM call
     and write the relevant ones as client-linked type='signal' documents.
 
-    Flow: candidates minus already-known signal URLs → one llm.acomplete call
-    → keep relevance ≥2 → index_document + link_document for each (capped at
-    max_write). A SearXNG outage is retried once after 20s before giving up;
-    an LLM failure writes nothing. Returns
-    {found, scored, written, max_relevance, error}."""
+    Flow: SearXNG candidates (_news_candidates) plus the client's own-
+    newsroom tier (_newsroom_candidates, backend-independent of SearXNG)
+    minus already-known signal URLs → one llm.acomplete call → keep
+    relevance ≥2 → index_document + link_document for each (capped at
+    max_write).
+
+    Before scoring, a degraded SearXNG backend is detected and reported
+    instead of silently returning found=0/error=None: either every
+    news-category query came back with zero raw results while ≥1 engine was
+    unresponsive, or SearXNG results came back but 100% stayed undated even
+    after the page-header probe (step 3). Either sets result["error"] and
+    writes nothing — UNLESS the newsroom tier alone found ≥3 candidates, in
+    which case there is real news regardless of the search backend and the
+    scan proceeds with result["warning"] set instead of failing the part.
+    A total SearXNG outage (every query raised) is retried once after 20s
+    before giving up as before; an LLM failure writes nothing. Returns
+    {found, scored, written, max_relevance, error}, plus warning/
+    unresponsive/newsroom_found when relevant."""
     name = client["name"]
     client_id = client["id"]
     result: dict = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0, "error": None}
 
-    candidates: Optional[list[dict]] = None
+    data: Optional[dict] = None
     last_exc: Optional[Exception] = None
     for attempt in range(2):
         try:
-            candidates = await _news_candidates(org_id, client)
+            data = await _news_candidates(org_id, client)
             break
         except Exception as exc:
             last_exc = exc
             if attempt == 0:
                 await asyncio.sleep(20)
-    if candidates is None:
+    if data is None:
         console.print(f"[yellow]news scan: SearXNG unreachable for '{name}': {last_exc}[/yellow]")
         result["error"] = "searxng unreachable"
         return result
 
+    candidates = data.get("candidates") or []
+    unresponsive = data.get("unresponsive") or []
+    undated_total = data.get("undated_total", 0)
+    news_zero_all = data.get("news_zero_all", False)
+
+    try:
+        newsroom_candidates, newsroom_blocked = await _newsroom_candidates(org_id, client)
+    except Exception as exc:
+        console.print(f"[yellow]news scan: newsroom tier failed for '{name}': {exc}[/yellow]")
+        newsroom_candidates, newsroom_blocked = [], []
+
+    if newsroom_candidates:
+        result["newsroom_found"] = len(newsroom_candidates)
+
+    if newsroom_blocked:
+        domain = _client_domain(client)
+        if domain:
+            try:
+                import playbook  # type: ignore
+                await playbook.record(org_id, domain, {"blocked_urls": newsroom_blocked}, run_id=run_id)
+            except Exception as exc:
+                console.print(f"[yellow]news scan: playbook blocked_urls record failed for '{name}': {exc}[/yellow]")
+
+    degraded_reason = None
+    if not candidates and unresponsive and news_zero_all:
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        degraded_reason = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+    elif not candidates and undated_total > 0:
+        degraded_reason = "search results undated"
+
+    newsroom_saves_it = len(newsroom_candidates) >= 3
+
+    if degraded_reason and not newsroom_saves_it:
+        result["error"] = degraded_reason
+        if unresponsive:
+            result["unresponsive"] = unresponsive
+        return result
+
+    if degraded_reason and newsroom_saves_it:
+        # News exists (the newsroom tier alone found enough) — don't fail
+        # the part, but still say the search backend was degraded.
+        result["warning"] = degraded_reason
+    elif news_zero_all and unresponsive:
+        # Nit: candidates can be non-empty here (e.g. the site: domain
+        # query still worked) even though every news-category query was
+        # degraded — that reads as healthy unless flagged explicitly.
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        result["warning"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+
+    if unresponsive:
+        result["unresponsive"] = unresponsive
+
+    all_candidates = candidates + newsroom_candidates
+
     existing = await _existing_signal_urls(org_id, client_id)
-    fresh = [c for c in candidates if c["_norm_url"] not in existing]
+    fresh = [c for c in all_candidates if c["_norm_url"] not in existing]
     result["found"] = len(fresh)
     if not fresh:
         return result
@@ -1979,11 +2504,35 @@ async def _monitor_client(org_id: int, client: dict, fire_research: bool = True)
     had_news_fp = meta.get("news_fp") is not None
     if await _client_news_changed(org_id, client, fail_open=False) and had_news_fp:
         summary["changed"].append("news search")
+        # Mirror _run_market_monitor's _fire(): a real agent_run per scan, so
+        # a degraded backend shows up as a failed run (agent history, the
+        # "no API key"/tracebacks log watch) instead of only living inside
+        # this sweep's own in-memory summary, which the caller folds into
+        # ONE update_agent_run for the whole multi-client sweep.
+        news_run_id = await db_module.create_agent_run(
+            org_id=org_id, agent_type="news_scan",
+            task=f"Source-monitor news scan: {client['name']}", trigger_type="heartbeat",
+        )
         try:
-            news_scan = await _client_news_scan(org_id, client)
+            news_scan = await _client_news_scan(org_id, client, run_id=news_run_id)
             summary["news_written"] = news_scan.get("written", 0)
+            if news_scan.get("error"):
+                summary["news_error"] = news_scan["error"]
+            if news_scan.get("warning"):
+                summary["news_warning"] = news_scan["warning"]
+            if news_scan.get("unresponsive"):
+                summary["news_unresponsive"] = news_scan["unresponsive"]
+            status = "failed" if news_scan.get("error") else "done"
+            await db_module.update_agent_run(
+                news_run_id, status, output=news_scan, error=news_scan.get("error"),
+            )
         except Exception as exc:
             console.print(f"[yellow]source monitor: news scan failed for '{client['name']}': {exc}[/yellow]")
+            summary["news_error"] = str(exc)
+            try:
+                await db_module.update_agent_run(news_run_id, "failed", error=str(exc))
+            except Exception:
+                pass
 
     now_iso = datetime.now(timezone.utc).isoformat()
     for src in sources:
@@ -2181,8 +2730,13 @@ async def _market_news_scan(
     the last 30 days. `industry` drives the search terms when set; for a
     source-change-triggered scan (no specific industry) `focus`'s free-text
     description is used instead. Writes are capped at max_write, like
-    _client_news_scan. Returns
-    {found, scored, written, max_relevance, error}."""
+    _client_news_scan. Gets the same degraded-backend detection as the
+    client scan (WP9): if every one of these (categories="news") queries
+    comes back with zero raw results while ≥1 engine was unresponsive,
+    result["error"] is set and nothing is written instead of a silent
+    found=0/error=None. Returns
+    {found, scored, written, max_relevance, error}, plus unresponsive when
+    relevant."""
     result: dict = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0, "error": None}
     term = (industry or focus or "market").strip()
     queries = [
@@ -2192,12 +2746,17 @@ async def _market_news_scan(
 
     candidates: list[dict] = []
     seen: set[str] = set()
+    unresponsive_all: list = []
+    raw_result_count = 0
     for q, cat, tr in queries:
         try:
-            results = await _searxng_results(q, limit=15, categories=cat, time_range=tr)
+            data = await _searxng_query(q, limit=15, categories=cat, time_range=tr)
         except Exception as exc:
             console.print(f"[yellow]market news scan: SearXNG failed for '{term}': {exc}[/yellow]")
             continue
+        results = data.get("results") or []
+        unresponsive_all.extend(data.get("unresponsive") or [])
+        raw_result_count += len(results)
         for r in results:
             url = (r.get("url") or "").strip()
             allowed, _host = _news_result_allowed(url)
@@ -2208,6 +2767,15 @@ async def _market_news_scan(
                 continue
             seen.add(norm)
             candidates.append({**r, "_norm_url": norm, "_published": _parse_published(r), "query": q})
+
+    unresponsive = _dedupe_unresponsive(unresponsive_all)
+    if raw_result_count == 0 and unresponsive:
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        result["error"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+        result["unresponsive"] = unresponsive
+        return result
+    if unresponsive:
+        result["unresponsive"] = unresponsive
 
     if not candidates:
         return result
@@ -4234,13 +4802,15 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
             researched = [s for s in summaries if s["researched"]]
             escalated = [s for s in summaries if s["escalated"]]
             flagged = [s for s in summaries if s["flagged"]]
+            news_errors = [s for s in summaries if s.get("news_error")]
             discovered = sum(s["discovered"] for s in summaries)
             console.print(
                 f"[dim]Source monitor: {len(summaries)} clients checked, "
                 f"{len(researched)} researched, {len(escalated)} escalated, "
-                f"{len(flagged)} flagged, {discovered} sources discovered[/dim]"
+                f"{len(flagged)} flagged, {len(news_errors)} news scans degraded, "
+                f"{discovered} sources discovered[/dim]"
             )
-            if researched or flagged:
+            if researched or flagged or news_errors:
                 lines = ["📡 *Source monitor*"]
                 if researched:
                     lines.append(
@@ -4251,6 +4821,12 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                     lines.append(
                         "New info (research manually): " + ", ".join(s["client"] for s in flagged)
                     )
+                if news_errors:
+                    lines.append(
+                        "News scan degraded: " + ", ".join(
+                            f"{s['client']} ({s['news_error']})" for s in news_errors
+                        )
+                    )
                 await _notify.notify_org(org_id, "\n".join(lines), "signals")
             await db_module.update_agent_run(
                 run_id, "done",
@@ -4260,6 +4836,7 @@ async def _run_heartbeat_job(hb_id: int, org_id: int, agent_type: str, task: str
                     "escalated": [s["client"] for s in escalated],
                     "flagged": [s["client"] for s in flagged],
                     "sources_discovered": discovered,
+                    "news_errors": [{"client": s["client"], "error": s["news_error"]} for s in news_errors],
                 },
             )
 

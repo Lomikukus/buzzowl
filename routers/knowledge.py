@@ -779,7 +779,7 @@ async def scan_client_news_endpoint(name: str, user: dict = Depends(current_user
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     result = await _client_news_scan(user["org_id"], client)
-    return {"ok": True, **result}
+    return {"ok": not result.get("error"), **result}
 
 
 @router.get("/api/clients/{name}")
