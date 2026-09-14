@@ -13,11 +13,11 @@ surface. Nothing here ever auto-approves.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import playbook
 from context import DB_AVAILABLE, cache_clear
-from routers.auth import current_user
+from routers.auth import _limit, current_user
 
 logger = logging.getLogger("wk.lessons")
 router = APIRouter()
@@ -55,8 +55,13 @@ async def decide_lesson(lesson_id: str, body: dict, user: dict = Depends(current
 
 
 @router.post("/api/agents/lessons/review")
-async def review_now(user: dict = Depends(current_user)):
-    """Run the weekly proposal pass immediately — admin only."""
+@_limit("3/minute")
+async def review_now(request: Request, user: dict = Depends(current_user)):
+    """Run the weekly proposal pass immediately — admin only. Rate-limited
+    like today.py's /api/next-actions/refresh: an on-demand LLM pass over
+    every site playbook + this week's failed runs is expensive enough that
+    an admin mashing the button (or a compromised admin session) shouldn't
+    be able to fire it without bound."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     if not DB_AVAILABLE:
