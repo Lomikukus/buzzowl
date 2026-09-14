@@ -474,7 +474,16 @@ async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh:
     terminal (only relevant for a forced/refresh call) — that can't be final
     either. Only when nothing new landed during this call AND everything is
     genuinely terminal now does the simple rule apply: 'refreshed' if this
-    call was itself the one-time refresh, else 'written'."""
+    call was itself the one-time refresh, else 'written'.
+
+    A manual brief (POST /api/clients/{name}/brief) can also close the
+    collection point out from under a call already in flight here — it CASes
+    brief.status straight to 'written' regardless of what this call is doing.
+    Both the success and failure paths below re-CAS from 'writing' to their
+    decided target *before* patching the rest of the brief, so a call that
+    loses that race (status is no longer 'writing') does not clobber the
+    manual result back to 'partial'/'waiting'/etc, and does not fire the
+    match-trigger step a second time for the same client."""
     updated = await db_module.cas_client_intake_brief(org_id, client_name, ["waiting", "partial"], "writing")
     if updated is None:
         return  # lost the race — another caller is already handling this
@@ -512,6 +521,9 @@ async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh:
             target = "refreshed" if refresh else "written"
             refreshed_at = now if refresh else prior_brief.get("refreshed_at")
 
+        cas_result = await db_module.cas_client_intake_brief(org_id, client_name, ["writing"], target)
+        if cas_result is None:
+            return  # lost the race — a manual brief already closed this out
         brief_patch = {
             "status": target,
             "written_at": now,
@@ -534,6 +546,10 @@ async def _finish(org_id: int, client_name: str, *, missing: list[str], refresh:
         return
 
     new_attempt = attempt + 1
+    fail_status = "failed" if new_attempt > 3 else ("partial" if refresh else "waiting")
+    cas_result = await db_module.cas_client_intake_brief(org_id, client_name, ["writing"], fail_status)
+    if cas_result is None:
+        return  # lost the race — a manual brief already closed this out
     if new_attempt > 3:
         brief_patch = {
             "status": "failed",
