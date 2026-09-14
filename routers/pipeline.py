@@ -1380,9 +1380,12 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
 # routers/knowledge.py's _fetch_event_for_mail.
 _CAMOFOX_USER_ID = "server"
 
-# Bounded ring of the last 50 page fetches, for diagnostics (which tier is
+# Bounded ring of the last 200 page fetches, for diagnostics (which tier is
 # actually working on a given deployment). Not persisted; process-local.
-_FETCH_TIER_LOG: deque = deque(maxlen=50)
+# D19 — raised from 50: once the path-probe and posting-title-fetch tiers
+# started recording here too, a single jobs scan alone (~10 probes + up to
+# 20 title fetches) could fill more than half of a 50-entry ring.
+_FETCH_TIER_LOG: deque = deque(maxlen=200)
 
 
 def _record_fetch_tier(url: str, tier: str, chars: int) -> None:
@@ -3351,8 +3354,15 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list, http: ht
     except Exception:
         # D7 — a fetch that raised (timeout, connection refused, ...) is as
         # much an own-domain failure as an explicit 403/4xx.
+        # D19 — this tier fetches through its own httpx client (not
+        # _fetch_page_text/_fetch_page_raw), so it must record its own
+        # ring-log entry or the whole path-probe tier stays invisible to
+        # /api/agents/fetch-log.
+        _record_fetch_tier(url, "none", 0)
         return {"url": url, "status": None, "accepted": None,
                 "blocked": {"url": url, "kind": "fetch_error", "at": now_iso}, "title_h1": None}
+
+    _record_fetch_tier(url, "http" if html else "none", len(html))
 
     final_host = urlparse(final_url).netloc.lower().replace("www.", "")
     if final_url != url and _ats_match(final_host):
@@ -3461,6 +3471,11 @@ async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional
                 r["url"], "", 18000, 3000, prefer_camofox=prefer_camofox,
             )
             text = re.sub(r"\s+", " ", text).strip()
+            # D19 — called directly rather than through _fetch_page_text/
+            # _fetch_page_raw (the two callers that already record this),
+            # so this browser/Camofox fallback attempt would otherwise
+            # never show up in the fetch-tier ring log either.
+            _record_fetch_tier(r["url"], _tier if text else "none", len(text))
             if len(text) < 500:
                 continue
             # Neither tier _fetch_rendered_tier can land on ever returns real

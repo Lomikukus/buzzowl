@@ -406,15 +406,17 @@ class TestFetchPageTextTiers:
         assert pipeline._FETCH_TIER_LOG[-1]["tier"] == "camofox"
 
     @pytest.mark.asyncio
-    async def test_ring_log_is_bounded_to_50_entries(self, monkeypatch):
+    async def test_ring_log_is_bounded_to_200_entries(self, monkeypatch):
+        """D19: raised from 50 -> 200 once the path-probe and posting-title-
+        fetch tiers started recording here too."""
         monkeypatch.setenv("CAMOFOX_URL", "http://camofox-test:9377")
         html = "<html>" + "content " * 100 + "</html>"
         httpx_patch, client, _calls = _patch_httpx(get_status=200, get_text=html)
         with httpx_patch:
-            for i in range(55):
+            for i in range(205):
                 await pipeline._fetch_page_text(f"https://example.com/{i}")
-        assert len(pipeline._FETCH_TIER_LOG) == 50
-        assert pipeline._FETCH_TIER_LOG[-1]["url"] == "https://example.com/54"
+        assert len(pipeline._FETCH_TIER_LOG) == 200
+        assert pipeline._FETCH_TIER_LOG[-1]["url"] == "https://example.com/204"
 
 
 # ---------------------------------------------------------------------------
@@ -540,17 +542,17 @@ class TestFetchLogEndpoint:
 
     def test_admin_returns_bounded_entries_with_expected_fields(self, admin_client):
         pipeline._FETCH_TIER_LOG.clear()
-        for i in range(55):
+        for i in range(205):
             pipeline._record_fetch_tier(f"https://example.com/{i}", "http", 600 + i)
         try:
             r = admin_client.get("/api/agents/fetch-log")
             assert r.status_code == 200
             body = r.json()
-            assert body["count"] == 50
-            assert len(body["entries"]) == 50
+            assert body["count"] == 200
+            assert len(body["entries"]) == 200
             entry = body["entries"][-1]
             assert set(entry.keys()) == {"url", "tier", "chars", "at"}
-            assert entry["url"] == "https://example.com/54"
+            assert entry["url"] == "https://example.com/204"
             assert entry["tier"] == "http"
         finally:
             pipeline._FETCH_TIER_LOG.clear()

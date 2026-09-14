@@ -2258,8 +2258,10 @@ async def get_research_log(
 @router.get("/api/agents/fetch-log")
 async def get_fetch_log(user: dict = Depends(current_user)):
     """Which tier (plain http / browser-service / camofox) served each of
-    the last 50 page fetches — admin only. Lets an operator confirm which
-    tier is actually working on a given deployment (WP11)."""
+    the last 200 page fetches — admin only. Lets an operator confirm which
+    tier is actually working on a given deployment (WP11). D19: covers the
+    path-probe and posting-title-fetch tiers too, not just
+    _fetch_page_text/_fetch_page_raw."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     from routers.pipeline import _FETCH_TIER_LOG  # lazy import — avoid circular at module load
