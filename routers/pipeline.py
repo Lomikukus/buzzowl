@@ -3116,6 +3116,40 @@ async def _map_needs_to_products(org_id: int, client_name: str, needs: list) -> 
     return [{"need": n, "products": by_need.get(n.strip().lower(), [])} for n in needs]
 
 
+_POSTING_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+_POSTING_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.I | re.S)
+
+
+async def _fetch_posting_title(url: str) -> str:
+    """D10: plain-GET a single job-posting page and return a cleaned
+    <title>/<h1> (company suffix after ' - '/' | ' stripped) — used to
+    replace a sitemap-slug-derived title, which is only ever as good as the
+    URL's slug and gets truncated mid-word for a longer role name. '' on any
+    failure (no response, no title/h1, or an empty one after cleanup) — the
+    caller falls back to the slug title in that case."""
+    html = ""
+    try:
+        async with httpx.AsyncClient(
+            timeout=8.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+        ) as http:
+            resp = await http.get(url)
+            if resp.status_code == 200:
+                html = resp.text
+    except Exception:
+        return ""
+    for pattern in (_POSTING_TITLE_RE, _POSTING_H1_RE):
+        m = pattern.search(html or "")
+        if not m:
+            continue
+        raw = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", m.group(1))).strip()
+        for sep in (" - ", " | "):
+            if sep in raw:
+                raw = raw.split(sep)[0].strip()
+        if raw:
+            return raw
+    return ""
+
+
 async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                              run_id: Optional[int] = None) -> dict:
     """Fetch a client's careers page, extract open positions + inferred needs,
@@ -3251,6 +3285,12 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
         positions = _filter_positions(raw_positions)
         filtered_out = len(raw_positions) - len(positions)
+        # D10 — a title here is only ever as good as the sitemap URL's slug
+        # (e.g. "IT Solution Architect Customer Serv", cut mid-word); the
+        # per-job-URL match below tries to replace it with the real posting
+        # page's <title>/<h1>.
+        for p in positions:
+            p["title_source"] = "slug"
 
     # (2) Careers-page text (good for sites that list roles inline).
     if not positions:
@@ -3259,6 +3299,8 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         raw_positions, needs = await _extract_jobs(name, text, org_id)
         positions = _filter_positions(raw_positions)
         filtered_out = len(raw_positions) - len(positions)
+        for p in positions:
+            p["title_source"] = "page"  # from the actual page text, never a slug
         if positions and plain_len < 500:
             needs_js = True  # only the browser-rendered fallback found anything
         # (3) Landing page with no roles → follow its job-listing links.
@@ -3273,6 +3315,8 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                     filtered_out = len(p2) - len(p2f)
                     if sub_plain_len < 500:
                         needs_js = True
+                    for p in positions:
+                        p["title_source"] = "page"
                     break
 
     if effective_url and effective_url != meta.get("careers_url"):
@@ -3313,6 +3357,20 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                     best, best_score = surl, score
             if best and best_score >= 0.5:
                 p["url"] = best
+
+        # D10 — replace a slug-derived title with the real posting page's
+        # <title>/<h1> for the (at most 8) positions that got a posting URL
+        # above; a fetch that fails or turns up nothing leaves the slug title
+        # in place (title_source stays "slug").
+        slug_positions = [p for p in positions if p.get("title_source") == "slug" and p.get("url")][:8]
+        if slug_positions:
+            page_titles = await asyncio.gather(
+                *[_fetch_posting_title(p["url"]) for p in slug_positions]
+            )
+            for p, page_title in zip(slug_positions, page_titles):
+                if page_title:
+                    p["title"] = page_title
+                    p["title_source"] = "page"
 
     # Map each inferred need to the seller's products, with a one-line justification.
     needs_mapped = await _map_needs_to_products(org_id, name, needs)

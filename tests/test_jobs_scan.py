@@ -569,6 +569,7 @@ class TestScanClientJobsSuccess:
              patch.object(pipeline, "_sitemap_job_urls",
                            AsyncMock(return_value=[("Backend Engineer",
                                                      "https://acme.com/jobs/backend-engineer-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
              patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
             summary = await pipeline._scan_client_jobs(1, client)
         assert summary["found"] is True
@@ -590,6 +591,7 @@ class TestScanClientJobsSuccess:
         with db_patch, \
              patch.object(pipeline, "_sitemap_job_urls",
                            AsyncMock(return_value=[("Data Engineer", "https://acme.com/jobs/data-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
              patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
             await pipeline._scan_client_jobs(1, client, run_id=99)
         for call in db.index_document.await_args_list:
@@ -629,6 +631,7 @@ class TestPlaybookIntegration:
         with db_patch, \
              patch.object(pipeline, "_sitemap_job_urls",
                            AsyncMock(return_value=[("Cloud Engineer", "https://acme.com/jobs/cloud-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
              patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
             summary = await pipeline._scan_client_jobs(1, client, run_id=7)
         assert summary["found"] is True
@@ -729,6 +732,190 @@ class TestFailureStamping:
         assert summary["found"] is False
         db.index_document.assert_not_awaited()
         db.update_document.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# D10 — sitemap-slug titles are replaced by the real posting page's title
+# ---------------------------------------------------------------------------
+
+class TestFetchPostingTitle:
+    @pytest.mark.asyncio
+    async def test_strips_company_suffix_after_dash(self):
+        html = "<html><head><title>Senior Backend Engineer - Acme GmbH</title></head></html>"
+        with _patch_httpx_dynamic(lambda u: _fake_response(200, html, url=u)):
+            title = await pipeline._fetch_posting_title("https://acme.com/jobs/x")
+        assert title == "Senior Backend Engineer"
+
+    @pytest.mark.asyncio
+    async def test_strips_company_suffix_after_pipe(self):
+        html = "<html><head><title>Data Engineer | Acme</title></head></html>"
+        with _patch_httpx_dynamic(lambda u: _fake_response(200, html, url=u)):
+            title = await pipeline._fetch_posting_title("https://acme.com/jobs/y")
+        assert title == "Data Engineer"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_h1_when_title_missing(self):
+        html = "<html><body><h1>Platform Engineer (w/m/d)</h1></body></html>"
+        with _patch_httpx_dynamic(lambda u: _fake_response(200, html, url=u)):
+            title = await pipeline._fetch_posting_title("https://acme.com/jobs/z")
+        assert title == "Platform Engineer (w/m/d)"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_non_200(self):
+        with _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            title = await pipeline._fetch_posting_title("https://acme.com/jobs/gone")
+        assert title == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_connection_error(self):
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=RuntimeError("boom"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(pipeline.httpx, "AsyncClient", return_value=ctx):
+            title = await pipeline._fetch_posting_title("https://acme.com/jobs/down")
+        assert title == ""
+
+
+class TestSlugTitleReplacedByPageTitle:
+    @pytest.mark.asyncio
+    async def test_slug_title_replaced_by_real_posting_page_title(self):
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        reply = json.dumps({"positions": [{"title": "IT Solution Architect Customer Serv"}],
+                             "inferred_needs": []})
+        posting_url = "https://acme.com/jobs/it-solution-architect-customer-service-123"
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("IT Solution Architect Customer Serv", posting_url)])), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)), \
+             patch.object(pipeline, "_fetch_posting_title",
+                           AsyncMock(return_value="IT Solution Architect Customer Service")):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["positions"] == 1
+        _, kwargs = db.index_document.await_args_list[0]
+        position = kwargs["metadata"]["positions"][0]
+        assert position["title"] == "IT Solution Architect Customer Service"
+        assert position["title_source"] == "page"
+        assert position["url"] == posting_url
+
+    @pytest.mark.asyncio
+    async def test_slug_title_kept_when_posting_page_fetch_finds_nothing(self):
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        reply = json.dumps({"positions": [{"title": "Backend Engineer"}], "inferred_needs": []})
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("Backend Engineer", "https://acme.com/jobs/backend-1")])), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["positions"] == 1
+        _, kwargs = db.index_document.await_args_list[0]
+        position = kwargs["metadata"]["positions"][0]
+        assert position["title"] == "Backend Engineer"
+        assert position["title_source"] == "slug"
+
+    @pytest.mark.asyncio
+    async def test_at_most_eight_posting_pages_fetched(self):
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/jobs/")
+        titles = [f"Engineer Number {i}" for i in range(12)]
+        sitemap = [(t, f"https://acme.com/jobs/eng-{i}") for i, t in enumerate(titles)]
+        reply = json.dumps({"positions": [{"title": t} for t in titles], "inferred_needs": []})
+        fetch_title = AsyncMock(return_value="")
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=sitemap)), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)), \
+             patch.object(pipeline, "_fetch_posting_title", fetch_title):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["positions"] == 12
+        assert fetch_title.await_count <= 8
+
+
+# ---------------------------------------------------------------------------
+# D2 — _run_jobs_monitor's rotation prefers a fresh Pi-run candidate
+# ---------------------------------------------------------------------------
+
+class TestJobsMonitorRotationPrefersPiCandidates:
+    @pytest.mark.asyncio
+    async def test_client_with_fresh_pi_candidate_jumps_the_lru_queue(self, monkeypatch):
+        clients = [
+            {"id": 1, "name": "Stale Co", "metadata": {"website": "https://stale.com"}},
+            {"id": 2, "name": "Candidate Co", "metadata": {"website": "https://candidate.com"}},
+            {"id": 3, "name": "Other Co", "metadata": {"website": "https://other.com"}},
+        ]
+        db = MagicMock()
+        db.list_clients = AsyncMock(return_value=clients)
+        db._pool = None  # no LRU timestamps -> original (id) order absent prioritization
+
+        fake_playbook = MagicMock()
+        pb_by_domain = {
+            "candidate.com": {"careers": {"candidate_at": datetime.now(timezone.utc).isoformat()}},
+        }
+
+        async def _load(_org_id, domain):
+            return pb_by_domain.get(domain)
+
+        fake_playbook.load = AsyncMock(side_effect=_load)
+        monkeypatch.setitem(sys.modules, "playbook", fake_playbook)
+
+        scanned_order: list = []
+
+        async def _fake_scan(_org_id, c, **_kw):
+            scanned_order.append(c["name"])
+            return {"client": c["name"], "found": False, "positions": 0, "needs": 0}
+
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_scan_client_jobs", AsyncMock(side_effect=_fake_scan)), \
+             patch.object(pipeline.context, "config", {"jobs_max_per_run": 1}):
+            await pipeline._run_jobs_monitor(1)
+
+        # Only 1 "other" slot (jobs_max_per_run=1) and no focus clients — the
+        # client with the fresh pi-run candidate must win it over "Stale Co",
+        # which would otherwise be first (stable sort, no LRU data at all).
+        assert scanned_order == ["Candidate Co"]
+
+    @pytest.mark.asyncio
+    async def test_candidate_with_confirmed_success_does_not_jump_queue(self, monkeypatch):
+        clients = [
+            {"id": 1, "name": "Stale Co", "metadata": {"website": "https://stale.com"}},
+            {"id": 2, "name": "Already Working Co", "metadata": {"website": "https://working.com"}},
+        ]
+        db = MagicMock()
+        db.list_clients = AsyncMock(return_value=clients)
+        db._pool = None
+
+        fake_playbook = MagicMock()
+        pb_by_domain = {
+            # candidate_at is fresh, but last_success_at is already set -> not
+            # a rotation-jumping candidate, it's already confirmed working.
+            "working.com": {"careers": {"candidate_at": datetime.now(timezone.utc).isoformat(),
+                                          "last_success_at": datetime.now(timezone.utc).isoformat()}},
+        }
+
+        async def _load(_org_id, domain):
+            return pb_by_domain.get(domain)
+
+        fake_playbook.load = AsyncMock(side_effect=_load)
+        monkeypatch.setitem(sys.modules, "playbook", fake_playbook)
+
+        scanned_order: list = []
+
+        async def _fake_scan(_org_id, c, **_kw):
+            scanned_order.append(c["name"])
+            return {"client": c["name"], "found": False, "positions": 0, "needs": 0}
+
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_scan_client_jobs", AsyncMock(side_effect=_fake_scan)), \
+             patch.object(pipeline.context, "config", {"jobs_max_per_run": 1}):
+            await pipeline._run_jobs_monitor(1)
+
+        assert scanned_order == ["Stale Co"]
 
 
 # ---------------------------------------------------------------------------
