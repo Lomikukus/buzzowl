@@ -119,9 +119,12 @@ its FIFO slot, not merely dispatched), and only then stamps
 Starting the clock at row creation would hand a merely queued client a bogus
 partial brief before its research had even begun.
 
-**One-time refresh.** A `partial` brief refreshes automatically, exactly
-once, the next time any part finishes after it was written. After that
-(`brief.refreshed_at` set), nothing reopens it automatically again.
+**One-time refresh.** A `partial` brief is regenerated automatically,
+exactly once, when a part finishes successfully after it was written and no
+part is still open. A late part that only fails does not trigger a
+regeneration: the brief is closed out as `written` with the failed part named
+in `intake.brief.missing`. After the refresh (`brief.refreshed_at` set),
+nothing reopens it automatically again.
 
 **Absolute cap.** `intake_absolute_cap_min` (`config.yaml`, default 90)
 counts from `intake.started_at` and force-finishes the intake regardless of
@@ -139,7 +142,9 @@ refresh condition has now been met.
 `GET /api/clients/{name}/intake` returns the live state for the client
 page's intake strip (a chip per part plus a brief-status chip). None of this
 gates the manual regenerate button: `POST /api/clients/{name}/brief` always
-runs immediately, intake open or not.
+runs immediately, intake open or not, and a manual brief closes an open
+intake (`written`, `missing` empty) so the collection point never overwrites
+it later.
 
 ## Autonomy levels
 
