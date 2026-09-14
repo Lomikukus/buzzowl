@@ -379,38 +379,49 @@ async def _maybe_finish(org_id: int, client_name: str, meta: dict, *, force: boo
             return  # the one-time refresh already happened
         written_at = _parse_iso(brief.get("written_at"))
         became_done_since = any(_part_done_after(parts.get(p) or {}, written_at) for p in PARTS)
-        if became_done_since:
-            # A part genuinely finished (successfully) since the partial
-            # brief was written — this is "the" one-time refresh, a nicer
-            # regeneration triggered by real new information.
+        if became_done_since and all_terminal:
+            # The LAST outstanding part just finished successfully, and
+            # nothing is left pending — a genuine, final regeneration with
+            # complete information. Requiring all_terminal here (not just
+            # became_done_since) matters: without it, each straggler
+            # finishing one at a time each independently looked like "the"
+            # refresh (written_at kept getting bumped forward, so the NEXT
+            # straggler's done_at was again "after written_at"), so three
+            # late parts could trigger three extra regenerations instead of
+            # one. A straggler still pending is left alone here — the
+            # absolute cap force-fails it and the all_terminal branch below
+            # closes things out once nothing is left to wait for.
             await _finish(org_id, client_name, missing=_missing_parts(parts), refresh=True)
             return
         if all_terminal:
-            # Nothing became done since written_at (that's the branch above)
-            # but every part is now terminal anyway — so whatever got us here
-            # was a late FAILURE on the last part still pending. There's
-            # nothing new to regenerate the brief text over (see
-            # _part_done_after's docstring), but the brief still needs
-            # closing out: is_active() treats every 'partial' as active, so
-            # leaving it 'partial' forever would keep this client swept every
-            # 60s until the 90-minute absolute cap and the client page
-            # polling /intake every 5s the whole time, with `missing` stuck
-            # on stale "still running"/"queued" wording instead of the real
-            # "(failed: ...)" reason. Patch the brief in place — no LLM call —
-            # and close it out.
+            # Either nothing became done since written_at at all (a late
+            # FAILURE on the last pending part), or something did but a
+            # straggler is/was still out — either way there's no fresh
+            # successful completion paired with "nothing left to wait for"
+            # right now, so this isn't "the" refresh. But every part being
+            # terminal still means the brief needs closing out: is_active()
+            # treats every 'partial' as active, so leaving it 'partial'
+            # forever would keep this client swept every 60s until the
+            # 90-minute absolute cap and the client page polling /intake
+            # every 5s the whole time, with `missing` stuck on stale "still
+            # running"/"queued" wording instead of the real reason. Patch the
+            # brief in place — no LLM call — and close it out.
             updated = await db_module.cas_client_intake_brief(org_id, client_name, ["partial"], "written")
             if updated is not None:
                 await db_module.set_client_intake_path(
                     org_id, client_name, ["intake", "brief"],
                     {**brief, "status": "written", "missing": _missing_parts(parts), "closed_at": _iso(_now())},
                 )
-                # Same post-finish step a normal (non-refresh) _finish call
-                # does, so the match report still happens off this brief.
-                try:
-                    from routers.agents import _maybe_trigger_pain_point_research
-                    await _maybe_trigger_pain_point_research(org_id, client_name)
-                except Exception as exc:
-                    logger.warning("intake._maybe_finish: match trigger failed for '%s': %s", client_name, exc)
+                # Mirror _finish's own match-trigger guard (skip if a match
+                # report already exists): the original partial write already
+                # triggered one (see _finish, refresh=False always triggers),
+                # so this close-out must not fire a redundant second one.
+                if not await _has_match_report(org_id, client_name):
+                    try:
+                        from routers.agents import _maybe_trigger_pain_point_research
+                        await _maybe_trigger_pain_point_research(org_id, client_name)
+                    except Exception as exc:
+                        logger.warning("intake._maybe_finish: match trigger failed for '%s': %s", client_name, exc)
             return
         if force:
             # Fallback for the absolute cap forcing this while all_terminal
