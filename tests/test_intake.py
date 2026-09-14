@@ -23,6 +23,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import intake
+import routers.knowledge as knowledge
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -183,6 +184,25 @@ class TestPureLogic:
     def test_is_active_false_without_intake(self):
         assert intake.is_active({}) is False
         assert intake.is_active(None) is False
+
+    def test_summary_present_false_without_intake(self):
+        """WP10 D8: a client that never had an intake run (meta.intake
+        absent) must not be reported as four bogus 'queued' parts waiting on
+        a brief — summary() now says so explicitly via `present: False`,
+        distinct from a real intake that just hasn't started any part yet."""
+        for meta in ({}, None, {"intake": {}}):
+            data = intake.summary(meta)
+            assert data["present"] is False
+            assert data["active"] is False
+            assert data["parts"] == {}
+            assert data["brief"] is None
+            assert data["percent"] is None
+
+    def test_summary_present_true_with_intake(self):
+        meta = {"intake": _intake_state()}
+        data = intake.summary(meta)
+        assert data["present"] is True
+        assert set(data["parts"].keys()) == set(intake.PARTS)
 
     def test_missing_lists_failed_and_pending(self):
         parts = {
@@ -426,10 +446,12 @@ class TestPartDone:
 
         mock_brief = AsyncMock(return_value=True)
         mock_match = AsyncMock()
+        mock_rewrite = AsyncMock(return_value=True)
 
         with (
             patch("intake.db_module", db),
             patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.knowledge._rewrite_brief_close_out", mock_rewrite),
             patch("routers.agents._maybe_trigger_pain_point_research", mock_match),
         ):
             # Phase 1: the deadline fires with news still running -> 'partial'.
@@ -448,6 +470,10 @@ class TestPartDone:
         assert intake.is_active(db.metadata) is False
         mock_brief.assert_awaited_once()  # unchanged since phase 1 — no regeneration
         mock_match.assert_called_once()  # the close-out still runs the match gate
+        # WP10 D4: the close-out must also patch the stored document's own
+        # banner/metadata (still saying "Partial ... refreshes automatically"
+        # from phase 1's write) — without a second LLM call.
+        mock_rewrite.assert_awaited_once_with(1, "Bosch AG", failed_parts=["news (failed: boom)"])
 
     async def test_finish_failure_resets_status_and_increments_attempt(self):
         state = _intake_state(parts=_parts(osint="done", research="done", jobs="done", news="done"))
@@ -763,6 +789,279 @@ class TestPartDone:
         brief_writes = [c for c in db.set_client_intake_path.call_args_list if c.args[2] == ["intake", "brief"]]
         assert brief_writes == []  # never overwrote the manual result
         mock_match.assert_not_called()  # no second, redundant match trigger
+
+
+# ---------------------------------------------------------------------------
+# WP10 D4 — a brief whose only missing part FAILED must not be stamped
+# "Partial" (that promises an automatic refresh that will never come).
+# ---------------------------------------------------------------------------
+
+class TestFinishSplitsPartialFromFailed:
+    async def test_all_terminal_one_failed_calls_auto_generate_brief_as_failed_only(self):
+        """_finish must not pass a terminal failure through `partial_missing`
+        (the old bug: intake._finish forwarded the same `missing` list — open
+        AND failed parts together — as `partial_missing` regardless of
+        outcome). When every part is terminal and the only "missing" one
+        FAILED, _auto_generate_brief must be called with `failed_parts` only,
+        `partial_missing` falsy."""
+        state = _intake_state(parts=_parts(osint="done", research="done", jobs="failed", news="done"))
+        db = _fake_db(cas_client_intake_brief=AsyncMock(return_value={"intake": state}),
+                       get_client=AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": {"intake": state}}))
+        mock_brief = AsyncMock(return_value=True)
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", mock_brief),
+            patch("routers.agents._maybe_trigger_pain_point_research", new_callable=AsyncMock),
+        ):
+            await intake._finish(1, "Bosch AG", missing=["jobs (failed: no careers page found)"], refresh=False)
+
+        assert mock_brief.await_count == 1
+        kwargs = mock_brief.call_args.kwargs
+        assert not kwargs.get("partial_missing")
+        assert kwargs.get("failed_parts") == ["jobs (failed: no careers page found)"]
+
+    async def test_open_part_still_uses_partial_missing_only(self):
+        """The ordinary 'still open' case is unchanged: a bare part name (no
+        '(failed: ' tag) goes to `partial_missing`, and `failed_parts` is
+        never passed at all (mirrors today's call shape exactly, so a caller
+        with a narrow `partial_missing=None`-only signature — see
+        test_finish_recomputes_when_parts_land_during_generation — still
+        works)."""
+        state = _intake_state(parts=_parts(osint="done", research="done", jobs="done", news="running"))
+        db = _fake_db(cas_client_intake_brief=AsyncMock(return_value={"intake": state}),
+                       get_client=AsyncMock(return_value={"id": 1, "org_id": 1, "metadata": {"intake": state}}))
+
+        async def fake_generate(org_id, client_name, *, partial_missing=None):
+            fake_generate.kwargs = {"partial_missing": partial_missing}
+            return True
+
+        with (
+            patch("intake.db_module", db),
+            patch("routers.knowledge._auto_generate_brief", fake_generate),
+            patch("routers.agents._maybe_trigger_pain_point_research", new_callable=AsyncMock),
+        ):
+            await intake._finish(1, "Bosch AG", missing=["news"], refresh=False)
+
+        assert fake_generate.kwargs == {"partial_missing": ["news"]}
+
+
+class TestAutoGenerateBriefBanners:
+    """routers.knowledge._auto_generate_brief renders (and records) the two
+    outcomes distinctly (WP10 D4): a still-open part keeps the "Partial
+    brief ... refreshes automatically" promise, a permanently failed one
+    gets a "Not collected" note that makes no such promise."""
+
+    async def _generate(self, **kwargs):
+        fake_client = {"id": 5, "org_id": 1, "metadata": {}}
+        captured = {}
+
+        async def fake_index_document(**call_kwargs):
+            captured.update(call_kwargs)
+            return 42
+
+        with (
+            patch("routers.knowledge.db_module.get_client", AsyncMock(return_value=fake_client)),
+            patch("routers.knowledge._build_brief_context", AsyncMock(return_value="context")),
+            patch("routers.knowledge.llm.acomplete", AsyncMock(return_value="## Executive Summary\nBody text")),
+            patch("routers.knowledge.db_module.embed_text", AsyncMock(return_value=[0.1])),
+            patch("routers.knowledge.db_module.index_document", AsyncMock(side_effect=fake_index_document)),
+            patch("routers.knowledge.db_module.link_document", AsyncMock(return_value=None)),
+        ):
+            ok = await knowledge._auto_generate_brief(1, "Trumpf", **kwargs)
+        return ok, captured
+
+    async def test_failed_parts_only_renders_not_collected_no_refresh_promise(self):
+        ok, doc = await self._generate(failed_parts=["jobs (failed: no careers page found)"])
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == []
+        assert doc["metadata"]["failed_parts"] == ["jobs (failed: no careers page found)"]
+        assert "Not collected" in doc["content"]
+        assert "jobs (no careers page found)" in doc["content"]
+        assert "refreshes automatically" not in doc["content"]
+        assert "## Executive Summary" in doc["content"]  # generated body preserved
+
+    async def test_partial_missing_only_keeps_todays_banner(self):
+        ok, doc = await self._generate(partial_missing=["news"])
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == ["news"]
+        assert doc["metadata"]["failed_parts"] == []
+        assert "Partial brief — missing: news" in doc["content"]
+        assert "refreshes automatically" in doc["content"]
+        assert "Not collected" not in doc["content"]
+
+    async def test_neither_missing_nor_failed_has_no_banner(self):
+        ok, doc = await self._generate()
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == []
+        assert doc["metadata"]["failed_parts"] == []
+        assert "Partial brief" not in doc["content"]
+        assert "Not collected" not in doc["content"]
+
+    async def test_both_partial_and_failed_render_both_banners(self):
+        """WP10 D4 nit 1: partial_missing and failed_parts are independent —
+        a part can still be open WHILE another has already failed for good.
+        Both banners must render (the failed one used to only survive in
+        metadata.failed_parts, invisible in the document body itself)."""
+        ok, doc = await self._generate(
+            partial_missing=["news (still running)"],
+            failed_parts=["jobs (failed: no careers page found)"],
+        )
+
+        assert ok is True
+        assert doc["metadata"]["partial"] == ["news (still running)"]
+        assert doc["metadata"]["failed_parts"] == ["jobs (failed: no careers page found)"]
+        assert "Partial brief — missing: news (still running)" in doc["content"]
+        assert "refreshes automatically" in doc["content"]
+        assert "Not collected" in doc["content"]
+        assert "jobs (no careers page found)" in doc["content"]
+        assert "## Executive Summary" in doc["content"]  # generated body preserved
+        # Partial banner first, "Not collected" note beneath it, then content.
+        partial_idx = doc["content"].index("Partial brief")
+        not_collected_idx = doc["content"].index("Not collected")
+        body_idx = doc["content"].index("## Executive Summary")
+        assert partial_idx < not_collected_idx < body_idx
+
+
+class TestRewriteBriefCloseOut:
+    """routers.knowledge._rewrite_brief_close_out — the no-LLM-call document
+    patch used by intake._maybe_finish's 'partial' -> all_terminal close-out
+    (WP10 D4)."""
+
+    async def test_rewrites_partial_banner_in_place_without_llm(self):
+        old_content = (
+            "> **Partial brief — missing: jobs (failed: no careers page found)**. "
+            "It refreshes automatically when the missing parts arrive.\n\n"
+            "## Executive Summary\nTRUMPF is a manufacturing-tech company."
+        )
+        row = {
+            "doc_id": "brief-abc123-2026-09-14",
+            "content": old_content,
+            "metadata": {"subject": "Trumpf", "partial": ["jobs (failed: no careers page found)"]},
+        }
+        pool = _mock_pool(fetchrow_return=row)
+        update_mock = AsyncMock(return_value=None)
+        llm_mock = AsyncMock()
+
+        with (
+            patch("routers.knowledge.db_module._pool", pool),
+            patch("routers.knowledge.db_module.update_document", update_mock),
+            patch("llm.acomplete", llm_mock),
+        ):
+            result = await knowledge._rewrite_brief_close_out(
+                1, "Trumpf", failed_parts=["jobs (failed: no careers page found)"],
+            )
+
+        assert result is True
+        llm_mock.assert_not_called()
+        update_mock.assert_awaited_once()
+        org_id, doc_id, patch_arg = update_mock.call_args.args
+        assert org_id == 1
+        assert doc_id == "brief-abc123-2026-09-14"
+        assert "Not collected" in patch_arg["content"]
+        assert "jobs (no careers page found)" in patch_arg["content"]
+        assert "refreshes automatically" not in patch_arg["content"]
+        assert "## Executive Summary" in patch_arg["content"]  # body untouched
+        assert patch_arg["metadata"]["partial"] == []
+        assert patch_arg["metadata"]["failed_parts"] == ["jobs (failed: no careers page found)"]
+        assert patch_arg["metadata"]["subject"] == "Trumpf"  # other metadata preserved
+
+    async def test_no_document_is_a_no_op(self):
+        pool = _mock_pool(fetchrow_return=None)
+        with patch("routers.knowledge.db_module._pool", pool):
+            result = await knowledge._rewrite_brief_close_out(1, "Nobody", failed_parts=[])
+        assert result is False
+
+    async def test_clears_partial_at_on_close_out(self):
+        """WP10 D4 nit 4: metadata.partial_at (stamped when the original
+        partial banner was written) must be cleared to None on close-out —
+        otherwise metadata.partial == [] would carry a stale timestamp."""
+        old_content = (
+            "> **Partial brief — missing: jobs (failed: no careers page found)**. "
+            "It refreshes automatically when the missing parts arrive.\n\n"
+            "## Executive Summary\nTRUMPF is a manufacturing-tech company."
+        )
+        row = {
+            "doc_id": "brief-abc123-2026-09-14",
+            "content": old_content,
+            "metadata": {"subject": "Trumpf", "partial": ["jobs (failed: no careers page found)"],
+                         "partial_at": "2026-09-14T10:00:00+00:00"},
+        }
+        pool = _mock_pool(fetchrow_return=row)
+        update_mock = AsyncMock(return_value=None)
+
+        with (
+            patch("routers.knowledge.db_module._pool", pool),
+            patch("routers.knowledge.db_module.update_document", update_mock),
+        ):
+            await knowledge._rewrite_brief_close_out(
+                1, "Trumpf", failed_parts=["jobs (failed: no careers page found)"],
+            )
+
+        _, _, patch_arg = update_mock.call_args.args
+        assert patch_arg["metadata"]["partial"] == []
+        assert patch_arg["metadata"]["partial_at"] is None
+
+    async def test_uses_exact_case_insensitive_trimmed_match_not_like_wildcards(self):
+        """WP10 D9 nit 2: this runs on a WRITE path — an ILIKE match would
+        treat '_'/'%' in a client name as LIKE wildcards, risking a patch
+        landing on a DIFFERENT client's brief document. The query must
+        compare normalised (lower+trim) equality instead."""
+        pool = _mock_pool(fetchrow_return=None)
+        with patch("routers.knowledge.db_module._pool", pool):
+            await knowledge._rewrite_brief_close_out(1, "Acme_GmbH", failed_parts=[])
+
+        conn = pool.__aenter__.return_value
+        query, org_id, name_arg = conn.fetchrow.call_args.args
+        assert "ILIKE" not in query
+        assert "lower(trim(c.name)) = lower(trim($2))" in query
+        assert org_id == 1
+        assert name_arg == "Acme_GmbH"
+
+    async def test_dual_leading_banners_consolidated_into_one(self):
+        """WP10 D4 nit 1 follow-through: a document written while BOTH a part
+        was still open and another had already failed carries two leading
+        banner lines. Closing out (every remaining part now terminal too)
+        must consolidate them into a single, freshly-recomputed 'Not
+        collected' note — not leave the stale extra line behind."""
+        old_content = (
+            "> **Partial brief — missing: news**. "
+            "It refreshes automatically when the missing parts arrive.\n\n"
+            "> **Not collected:** jobs (no careers page found). "
+            "Re-run from the client page (Jobs → Scan now) to add it.\n\n"
+            "## Executive Summary\nTRUMPF is a manufacturing-tech company."
+        )
+        row = {
+            "doc_id": "brief-abc123-2026-09-14",
+            "content": old_content,
+            "metadata": {"subject": "Trumpf", "partial": ["news"],
+                         "failed_parts": ["jobs (failed: no careers page found)"]},
+        }
+        pool = _mock_pool(fetchrow_return=row)
+        update_mock = AsyncMock(return_value=None)
+
+        with (
+            patch("routers.knowledge.db_module._pool", pool),
+            patch("routers.knowledge.db_module.update_document", update_mock),
+        ):
+            await knowledge._rewrite_brief_close_out(
+                1, "Trumpf",
+                failed_parts=["jobs (failed: no careers page found)", "news (failed: timeout)"],
+            )
+
+        _, _, patch_arg = update_mock.call_args.args
+        content = patch_arg["content"]
+        assert content.count("> **") == 1  # exactly one leading banner left
+        assert "Not collected" in content
+        assert "jobs (no careers page found)" in content
+        assert "news (timeout)" in content
+        assert "Partial brief" not in content
+        assert "## Executive Summary" in content
+        assert patch_arg["metadata"]["partial"] == []
+        assert patch_arg["metadata"]["partial_at"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1134,6 +1433,10 @@ class TestManualBriefClosesIntake:
         with (
             patch("routers.knowledge.DB_AVAILABLE", True),
             patch("routers.knowledge.db_module", db),
+            # generate_client_brief now resolves {name} via
+            # playbook.resolve_client_exact (WP10 D9), which uses playbook's
+            # own db_module reference — point it at the same fake.
+            patch("playbook.db_module", db),
             patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
             patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
         ):
@@ -1171,6 +1474,7 @@ class TestManualBriefClosesIntake:
         with (
             patch("routers.knowledge.DB_AVAILABLE", True),
             patch("routers.knowledge.db_module", db),
+            patch("playbook.db_module", db),
             patch("routers.knowledge._build_brief_context", new_callable=AsyncMock, return_value="context"),
             patch("routers.knowledge._call_brain_sync", return_value="manual brief text"),
         ):
@@ -1232,3 +1536,76 @@ class TestIntakeAPI:
         assert data["percent"] == 100
         assert data["brief"]["status"] == "written"
         assert "brief_generated_at" in data
+
+    def test_get_client_intake_present_false_without_intake(self, app_client):
+        """WP10 D8, over HTTP: a client with no metadata.intake at all gets
+        `present: False`, not four bogus 'queued' chips."""
+        fake_client = {"id": 11, "name": "OBI", "metadata": {}}
+        pool = _mock_pool(fetchrow_return=None)
+        with (
+            patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fake_client),
+            patch("server.db_module._pool", pool),
+        ):
+            resp = app_client.get("/api/clients/OBI/intake", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["present"] is False
+        assert data["active"] is False
+        assert data["parts"] == {}
+        assert data["brief"] is None
+
+    def test_get_client_intake_requires_exact_name_match(self, app_client):
+        """WP10 D9: db_module.get_client is FUZZY (trigram similarity) — a
+        scripted /intake call for a name that only fuzzy-matches a different
+        client (e.g. "Vorwerk Test" matching "Vorwerk") must 404, not
+        silently return that other client's intake."""
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.get("/api/clients/Vorwerk%20Test/intake", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404
+
+        exact_hit = {"id": 3, "name": "Vorwerk Test", "metadata": {}}
+        pool = _mock_pool(fetchrow_return=None)
+        with (
+            patch("server.db_module.get_client", new_callable=AsyncMock, return_value=exact_hit),
+            patch("server.db_module._pool", pool),
+        ):
+            resp = app_client.get("/api/clients/Vorwerk%20Test/intake", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200
+        assert resp.json()["present"] is False
+
+    def test_post_brief_requires_exact_name_match(self, app_client):
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.post("/api/clients/Vorwerk%20Test/brief", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404
+
+    def test_post_news_scan_requires_exact_name_match(self, app_client):
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.post("/api/clients/Vorwerk%20Test/news/scan",
+                                    headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404
+
+    def test_post_jobs_scan_requires_exact_name_match(self, app_client):
+        fuzzy_hit = {"id": 3, "name": "Vorwerk", "metadata": {}}
+        with patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fuzzy_hit):
+            resp = app_client.post("/api/clients/Vorwerk%20Test/jobs/scan",
+                                    headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 404
+
+    def test_exact_name_match_endpoints_503_on_db_error(self, app_client):
+        """WP10 D9 nit 3: playbook.resolve_client_exact no longer swallows a
+        transient DB error as "no such client" — a get_client failure on any
+        of the four exact-name endpoints must surface as 503, not a
+        misleading 404."""
+        boom = AsyncMock(side_effect=RuntimeError("db connection lost"))
+        with patch("server.db_module.get_client", boom):
+            for method, path in (
+                ("get", "/api/clients/Vorwerk/intake"),
+                ("post", "/api/clients/Vorwerk/brief"),
+                ("post", "/api/clients/Vorwerk/news/scan"),
+                ("post", "/api/clients/Vorwerk/jobs/scan"),
+            ):
+                resp = getattr(app_client, method)(path, headers={"Authorization": "Bearer fake"})
+                assert resp.status_code == 503, f"{method.upper()} {path} -> {resp.status_code}"

@@ -5601,12 +5601,25 @@ async def get_client_jobs(name: str, user: dict = Depends(current_user)):
 @router.post("/api/clients/{name}/jobs/scan")
 async def scan_client_jobs(name: str, body: dict = None, user: dict = Depends(current_user)):
     """Scan this client's careers page now (fetch + extract + infer needs).
-    Optional body {careers_url} sets/overrides the page."""
+    Optional body {careers_url} sets/overrides the page.
+
+    WP10 D9: requires an EXACT (case-insensitive, trimmed) name match —
+    db_module.get_client's trigram-fuzzy fallback is for human
+    search-as-you-type, not a scripted call, and would otherwise silently
+    scan the wrong client's careers page."""
     if not DB_AVAILABLE:
         raise HTTPException(503, "DB unavailable")
-    client = await db_module.get_client(user["org_id"], name)
+    import playbook  # lazy: avoid an import cycle at module load
+    try:
+        client = await playbook.resolve_client_exact(user["org_id"], name)
+    except Exception as exc:
+        # WP10 D9 nit 3: resolve_client_exact lets a transient DB error
+        # propagate rather than swallowing it as "no such client" — surface
+        # it as a 503, not a misleading 404.
+        logger.warning("scan_client_jobs: exact client lookup failed for '%s': %s", name, exc)
+        raise HTTPException(503, "client lookup failed") from exc
     if not client:
-        raise HTTPException(404, "Client not found")
+        raise HTTPException(404, "client not found (exact name required)")
     careers_url = (body or {}).get("careers_url", "") if isinstance(body, dict) else ""
     summary = await _scan_client_jobs(user["org_id"], client, careers_url=careers_url)
     return {"ok": True, **summary}

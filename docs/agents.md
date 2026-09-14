@@ -126,6 +126,13 @@ regeneration: the brief is closed out as `written` with the failed part named
 in `intake.brief.missing`. After the refresh (`brief.refreshed_at` set),
 nothing reopens it automatically again.
 
+The brief document itself keeps `metadata.partial`/`metadata.failed_parts`
+separate (WP10 D4): `partial` (and the "Partial brief — missing: …" banner
+that promises an automatic refresh) is only ever set while parts are
+genuinely still open, while `failed_parts` names parts that reached a
+terminal failure — rendered as a muted "Not collected: …" note with no
+refresh promise, since none is coming.
+
 **Absolute cap.** `intake_absolute_cap_min` (`config.yaml`, default 90)
 counts from `intake.started_at` and force-finishes the intake regardless of
 the deadline, e.g. when a part never leaves `queued` at all.
@@ -140,11 +147,21 @@ otherwise re-checks whether the deadline, the absolute cap, or the one-time
 refresh condition has now been met.
 
 `GET /api/clients/{name}/intake` returns the live state for the client
-page's intake strip (a chip per part plus a brief-status chip). None of this
-gates the manual regenerate button: `POST /api/clients/{name}/brief` always
-runs immediately, intake open or not, and a manual brief closes an open
-intake (`written`, `missing` empty) so the collection point never overwrites
-it later.
+page's intake strip (a chip per part plus a brief-status chip). For a client
+that never had an intake run at all, it returns `present: false` (empty
+`parts`, `brief: null`) instead of four bogus `queued` chips (WP10 D8), and
+the client page hides the strip entirely in that case. None of this gates
+the manual regenerate button: `POST /api/clients/{name}/brief` always runs
+immediately, intake open or not, and a manual brief closes an open intake
+(`written`, `missing` empty) so the collection point never overwrites it
+later.
+
+`{name}` resolution differs by endpoint (WP10 D9): `POST /api/clients/{name}/brief`,
+`GET /api/clients/{name}/intake`, `POST /api/clients/{name}/jobs/scan` and
+`POST /api/clients/{name}/news/scan` require an exact (case-insensitive,
+trimmed) match and 404 otherwise, while `GET /api/clients/{name}/brief` and
+the client page keep `db.get_client`'s fuzzy (trigram) match for human
+search-as-you-type.
 
 ## Autonomy levels
 

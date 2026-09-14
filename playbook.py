@@ -106,14 +106,18 @@ async def resolve_client_exact(org_id: int, subject: str) -> Optional[dict]:
     it directly here would let e.g. subject="org" (the system/monitor agent's
     placeholder subject) silently match a real client and leak its playbook
     into an unrelated run.
+
+    WP10 D9 nit 3: a `get_client` failure (a transient DB error) is deliberately
+    NOT caught here and propagates to the caller — only a genuine miss (no
+    row, or a fuzzy-only match) returns None. Swallowing it used to make a
+    transient DB error indistinguishable from "no such client" on the four
+    exact-name endpoints (a 404 instead of a 503). Callers that need the old
+    fail-open behaviour (e.g. reflect_on_run's best-effort domain resolution)
+    catch it themselves around this call.
     """
     if not subject or db_module is None:
         return None
-    try:
-        client = await db_module.get_client(org_id, subject)
-    except Exception:
-        logger.debug("playbook.resolve_client_exact: get_client failed", exc_info=True)
-        return None
+    client = await db_module.get_client(org_id, subject)
     if not client:
         return None
     if (client.get("name") or "").strip().lower() != subject.strip().lower():
@@ -677,7 +681,15 @@ async def _resolve_reflection_domain(org_id: int, subject: Optional[str], tool_c
     some OTHER client's domain is rejected rather than risking misattribution.
     Returns "" when no domain can be determined either way."""
     if subject:
-        client = await resolve_client_exact(org_id, subject)
+        try:
+            client = await resolve_client_exact(org_id, subject)
+        except Exception:
+            # WP10 D9 nit 3: resolve_client_exact no longer swallows a
+            # transient DB error itself — this is best-effort reflection, so
+            # fall through to the _infer_domain fallback below rather than
+            # letting one client's DB hiccup abort the whole reflect_on_run.
+            logger.debug("playbook._resolve_reflection_domain: resolve_client_exact failed", exc_info=True)
+            client = None
         if client:
             domain = domain_of(client)
             if domain:
@@ -832,7 +844,14 @@ async def enrich_task(org_id: int, subject: str, task: str, agent_type: str) -> 
     pull in another client's playbook or org-wide lessons — so the task comes
     back unchanged in that case. Returns (task, needs_js)."""
     needs_js = False
-    client = await resolve_client_exact(org_id, subject)
+    try:
+        client = await resolve_client_exact(org_id, subject)
+    except Exception:
+        # WP10 D9 nit 3: resolve_client_exact no longer swallows a transient
+        # DB error itself — enrichment is a nice-to-have, so fall back to the
+        # task unchanged rather than aborting the run it's attached to.
+        logger.debug("playbook.enrich_task: resolve_client_exact failed", exc_info=True)
+        client = None
     if not client:
         return task, needs_js
 

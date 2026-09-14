@@ -47,6 +47,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
 .intake-chip.partial, .intake-chip.writing, .intake-chip.waiting { background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); border-color: var(--c-orange, #ce9178); }
 .intake-chip-brief { font-weight: 600; }
 .brief-partial-badge { display: inline-block; margin-top: 0.3rem; font-size: 0.66rem; padding: 0.1rem 0.5rem; border-radius: 8px; background: var(--c-orangetint, #2e2a1a); color: var(--c-orange, #ce9178); border: 1px solid var(--c-orange, #ce9178); }
+.brief-failed-badge { display: inline-block; margin-top: 0.3rem; margin-left: 0.3rem; font-size: 0.66rem; padding: 0.1rem 0.5rem; border-radius: 8px; background: var(--c-hover, #2a2a2a); color: var(--c-muted2, #666); border: 1px solid var(--c-line, #2a2a2a); }
 
 .contact-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--c-line, #2a2a2a); }
 .contact-row:last-child { border-bottom: none; }
@@ -459,6 +460,7 @@ body { background: var(--c-bg, #1e1e1e); color: var(--c-text, #d4d4d4); font-fam
               <h2 style="font-size:0.9rem;color:var(--c-text, #d4d4d4);margin-bottom:0.15rem">Account Intelligence Brief</h2>
               <div class="brief-meta" id="briefMeta">No brief generated yet</div>
               <div class="brief-partial-badge" id="briefPartialBadge" style="display:none"></div>
+              <div class="brief-failed-badge" id="briefFailedBadge" style="display:none"></div>
             </div>
             <div style="display:flex;gap:0.5rem">
               <button class="btn" id="briefPdfBtn" style="display:none" onclick="downloadBriefPdf()"
@@ -1156,7 +1158,9 @@ const INTAKE_SYMBOLS = { queued: '○', running: '⟳', done: '✓', failed: '�
 const INTAKE_STRIP_LINGER_MS = 60 * 60 * 1000; // 1 hour
 
 function _intakeShouldShow(data) {
-    if (!data || !data.trigger) return false;
+    // present === false: this client never had an intake run at all (WP10
+    // D8) — nothing to show, not even a "queued" placeholder strip.
+    if (!data || data.present === false || !data.trigger) return false;
     if (data.active) return true;
     // A brief that failed after 3 attempts has no written_at (see _finish's
     // failure branch) — without this it would never show at all, since the
@@ -1267,6 +1271,15 @@ async function loadBrief() {
         const missing = data.partial || [];
         badge.style.display = missing.length ? '' : 'none';
         badge.textContent = missing.length ? `Partial — missing: ${missing.join(', ')}` : '';
+    }
+    // Muted "Not collected" note for parts that failed for good (WP10 D4) —
+    // distinct from the orange "Partial" badge above, which only applies
+    // while a part is still open and the brief will auto-refresh.
+    const failedBadge = document.getElementById('briefFailedBadge');
+    if (failedBadge) {
+        const failedParts = data.failed_parts || [];
+        failedBadge.style.display = failedParts.length ? '' : 'none';
+        failedBadge.textContent = failedParts.length ? `Not collected: ${failedParts.join(', ')}` : '';
     }
 }
 

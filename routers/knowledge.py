@@ -768,16 +768,36 @@ async def check_client_sources_endpoint(name: str, user: dict = Depends(current_
     return {"ok": True, **summary}
 
 
+async def _resolve_client_exact_or_404(org_id: int, name: str) -> dict:
+    """Shared lookup for the exact-name-match endpoints (WP10 D9): resolves
+    `name` via playbook.resolve_client_exact and raises the right
+    HTTPException — 404 for a genuine miss (or fuzzy-only match), or 503 if
+    the lookup itself failed. resolve_client_exact deliberately lets a
+    transient DB error propagate (nit 3) rather than swallowing it as "no
+    such client", so that error is distinguished here rather than silently
+    read as a 404."""
+    import playbook  # lazy: avoid an import cycle at module load
+    try:
+        client = await playbook.resolve_client_exact(org_id, name)
+    except Exception as exc:
+        logger.warning("_resolve_client_exact_or_404: lookup failed for '%s': %s", name, exc)
+        raise HTTPException(status_code=503, detail="client lookup failed") from exc
+    if not client:
+        raise HTTPException(status_code=404, detail="client not found (exact name required)")
+    return client
+
+
 @router.post("/api/clients/{name}/news/scan")
 async def scan_client_news_endpoint(name: str, user: dict = Depends(current_user)):
     """Run the news pipeline scan for this client right now (one text LLM
-    call, no Pi slot) and write any relevant fresh articles as signals."""
+    call, no Pi slot) and write any relevant fresh articles as signals.
+
+    WP10 D9: requires an EXACT (case-insensitive, trimmed) name match — see
+    get_client_intake's docstring above."""
     cache_clear(user["org_id"])
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
-    client = await db_module.get_client(user["org_id"], name)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = await _resolve_client_exact_or_404(user["org_id"], name)
     result = await _client_news_scan(user["org_id"], client)
     return {"ok": not result.get("error"), **result}
 
@@ -1501,13 +1521,14 @@ async def get_client_brief(name: str, user: dict = Depends(current_user)):
             user["org_id"], client["id"],
         )
     if not row:
-        return {"brief": None, "generated_at": None, "partial": []}
+        return {"brief": None, "generated_at": None, "partial": [], "failed_parts": []}
     row_meta = row["metadata"] or {}
     return {
         "brief": row["content"],
         "generated_at": str(row["created_at"])[:19],
         "doc_id": row["id"],
         "partial": row_meta.get("partial") or [],
+        "failed_parts": row_meta.get("failed_parts") or [],
     }
 
 
@@ -1515,12 +1536,15 @@ async def get_client_brief(name: str, user: dict = Depends(current_user)):
 async def get_client_intake(name: str, user: dict = Depends(current_user)):
     """Live intake-collection status for static/client.html's #intakeStrip.
     Always reads straight from the DB (no caching) so polling reflects the
-    true current state of the four parts + the brief gate."""
+    true current state of the four parts + the brief gate.
+
+    WP10 D9: an EXACT (case-insensitive, trimmed) name match is required here
+    — db_module.get_client's trigram-fuzzy fallback is for human
+    search-as-you-type, not a scripted status check, and would otherwise
+    silently hand e.g. "Vorwerk Test" back Vorwerk's own intake."""
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
-    client = await db_module.get_client(user["org_id"], name)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = await _resolve_client_exact_or_404(user["org_id"], name)
 
     data = intake.summary(client.get("metadata") or {})
     brief_generated_at = None
@@ -1541,7 +1565,31 @@ async def get_client_intake(name: str, user: dict = Depends(current_user)):
     return data
 
 
-async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing: Optional[list] = None) -> bool:
+# One-click rescan hint per Python-driven intake part, used by
+# _failed_parts_banner() below — osint/research are Pi-agent runs with no
+# equivalent one-off "scan now" control, so they fall back to a generic hint.
+_RESCAN_HINT = {"jobs": "Jobs → Scan now", "news": "News → Scan now"}
+_NOT_COLLECTED_PREFIX = "> **Not collected:**"
+
+
+def _failed_parts_banner(failed_parts: list) -> str:
+    """Render the `> **Not collected:** …` blockquote line for one or more
+    permanently-FAILED intake parts (WP10 D4). `failed_parts` entries look
+    like `"jobs (failed: no careers page found)"` (intake._missing_parts's
+    format for a failed part) — this strips the `(failed: …)` tag down to a
+    plain `(…)` reason for the human-facing note and appends a re-run hint
+    (the client page's "Jobs → Scan now" / "News → Scan now" button for a
+    single jobs/news failure; a generic pointer otherwise)."""
+    notes = [fp.replace(" (failed: ", " (", 1) for fp in failed_parts]
+    names = [fp.split(" (", 1)[0] for fp in failed_parts]
+    if len(names) == 1 and names[0] in _RESCAN_HINT:
+        return (f"{_NOT_COLLECTED_PREFIX} {notes[0]}. Re-run from the client page "
+                f"({_RESCAN_HINT[names[0]]}) to add it.")
+    return f"{_NOT_COLLECTED_PREFIX} {', '.join(notes)}. Re-run from the client page to add it."
+
+
+async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing: Optional[list] = None,
+                                failed_parts: Optional[list] = None) -> bool:
     """Generate a brief from an internal call (no HTTP context). Returns True on success.
 
     partial_missing: set by intake.py when the 25-minute collection window ran
@@ -1549,6 +1597,13 @@ async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing
     parts are named up front in the brief text itself, and recorded on the
     document's metadata so the UI can show a badge; intake.py writes the same
     doc_id again (a refresh) once the missing part arrives.
+
+    failed_parts: set by intake.py (WP10 D4) for parts that reached a
+    TERMINAL failure instead — e.g. jobs scan found no careers page. Unlike
+    partial_missing, a failed part will never "arrive" on its own, so it gets
+    its own "Not collected" note with no refresh promise, and is recorded
+    separately in metadata.failed_parts rather than folded into
+    metadata.partial (which stays [] whenever nothing is still open).
     """
     try:
         client = await db_module.get_client(org_id, client_name)
@@ -1560,19 +1615,29 @@ async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing
         brief_content = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
         if not brief_content:
             return False
+        # WP10 D4 nit 1: these are independent conditions, not alternatives —
+        # a part can still be open (partial_missing) WHILE another part has
+        # already reached a terminal failure (failed_parts). Both banners
+        # render when both apply, partial first, so the failed one isn't
+        # silently dropped from the document body (it would otherwise only
+        # survive in metadata.failed_parts, invisible in the rendered brief).
+        banners = []
         if partial_missing:
-            brief_content = (
+            banners.append(
                 f"> **Partial brief — missing: {', '.join(partial_missing)}**. "
-                "It refreshes automatically when the missing parts arrive.\n\n" + brief_content
+                "It refreshes automatically when the missing parts arrive."
             )
+        if failed_parts:
+            banners.append(_failed_parts_banner(failed_parts))
+        if banners:
+            brief_content = "\n\n".join(banners) + "\n\n" + brief_content
         doc_id_str = f"brief-{hashlib.sha256(client_name.encode()).hexdigest()[:12]}-{today}"
         embedding = await db_module.embed_text(brief_content[:512])
         metadata = {"subject": client_name, "generated_date": today}
+        metadata["partial"] = list(partial_missing) if partial_missing else []
+        metadata["failed_parts"] = list(failed_parts) if failed_parts else []
         if partial_missing:
-            metadata["partial"] = list(partial_missing)
             metadata["partial_at"] = datetime.now(timezone.utc).isoformat()
-        else:
-            metadata["partial"] = []
         doc_id = await db_module.index_document(
             org_id=org_id,
             doc_id=doc_id_str,
@@ -1586,21 +1651,100 @@ async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing
         if doc_id > 0:
             await db_module.link_document(doc_id, "client", client["id"])
         logger.info("_auto_generate_brief: brief generated for '%s'%s", client_name,
-                    " (partial)" if partial_missing else "")
+                    " (partial)" if partial_missing else (" (not collected)" if failed_parts else ""))
         return True
     except Exception as exc:
         logger.warning("_auto_generate_brief: failed for '%s': %s", client_name, exc)
         return False
 
 
+_PARTIAL_BANNER_PREFIX = "> **Partial brief"
+
+
+def _strip_leading_banners(content: str) -> tuple[bool, str]:
+    """Peel the leading WP10 D4 banner block off `content` — 0, 1, or 2
+    single-line blockquotes ('> **Partial brief …**' and/or '> **Not
+    collected: …**', each followed by a blank line, per _auto_generate_brief
+    nit 1's dual-banner case) — from the real generated brief content
+    beneath them. Bounded: only ever inspects the leading banner-shaped
+    chunks, never touches anything once a non-banner chunk is hit. Returns
+    (had_a_banner, rest)."""
+    had_banner = False
+    rest = content
+    while True:
+        first_chunk, sep, remainder = rest.partition("\n\n")
+        if sep and "\n" not in first_chunk and (
+            first_chunk.startswith(_PARTIAL_BANNER_PREFIX) or first_chunk.startswith(_NOT_COLLECTED_PREFIX)
+        ):
+            had_banner = True
+            rest = remainder
+            continue
+        break
+    return had_banner, rest
+
+
+async def _rewrite_brief_close_out(org_id: int, client_name: str, *, failed_parts: list) -> bool:
+    """WP10 D4 close-out path: intake._maybe_finish's 'partial' -> all_terminal
+    branch closes a client's collection point as 'written' WITHOUT calling
+    _auto_generate_brief again (no new content to fold in — everything still
+    open when the partial brief was written has since FAILED, not finished).
+    But that partial brief's document already has a "> **Partial brief —
+    missing: …**. It refreshes automatically…" banner (optionally followed by
+    a "> **Not collected: …**" one, if some other part had already failed at
+    that original write time — nit 1) baked into its content, and the
+    "refreshes automatically" promise is now false. Patch the stored document
+    in place instead of running the LLM a second time: a bounded
+    string-replace of the leading banner block only (the generated brief
+    content beneath it is never touched) with a single, freshly-recomputed
+    "Not collected" note covering every currently-failed part, and clear
+    metadata.partial (and its metadata.partial_at timestamp — nit 4) in
+    favour of metadata.failed_parts.
+
+    Returns True if a document was found and patched, False otherwise (e.g.
+    no brief was ever written for this client, or the DB is unavailable) —
+    the caller treats either as non-fatal.
+    """
+    if not db_module._pool:
+        return False
+    async with db_module._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT d.doc_id, d.content, d.metadata
+            FROM documents d
+            JOIN document_links dl ON dl.document_id = d.id AND dl.entity_type = 'client'
+            JOIN clients c ON c.id = dl.entity_id
+            WHERE d.org_id = $1 AND lower(trim(c.name)) = lower(trim($2)) AND d.type = 'client_brief'
+            ORDER BY d.created_at DESC LIMIT 1
+            """,
+            org_id, client_name,
+        )
+    if not row:
+        return False
+    content = row["content"] or ""
+    had_banner, rest = _strip_leading_banners(content)
+    if had_banner:
+        # Nothing actually failed either (a rare edge case — see
+        # _maybe_finish's 'all_terminal' branch docstring): no promise still
+        # applies at all, so drop the banner entirely rather than leave a
+        # stale one behind.
+        content = (_failed_parts_banner(failed_parts) + "\n\n" + rest) if failed_parts else rest
+    metadata = dict(row["metadata"] or {})
+    metadata["partial"] = []
+    metadata["partial_at"] = None
+    metadata["failed_parts"] = list(failed_parts) if failed_parts else []
+    await db_module.update_document(org_id, row["doc_id"], {"content": content, "metadata": metadata})
+    return True
+
+
 @router.post("/api/clients/{name}/brief")
 async def generate_client_brief(name: str, user: dict = Depends(current_user)):
-    """Generate (or regenerate) the intelligence brief for a client. Runs the cloud model."""
+    """Generate (or regenerate) the intelligence brief for a client. Runs the cloud model.
+
+    WP10 D9: requires an EXACT (case-insensitive, trimmed) name match — see
+    get_client_intake's docstring above."""
     if not DB_AVAILABLE:
         raise HTTPException(status_code=503, detail="DB unavailable")
-    client = await db_module.get_client(user["org_id"], name)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = await _resolve_client_exact_or_404(user["org_id"], name)
 
     db_module.log_prompt(user["org_id"], user["id"], "brief", name, {"client": name})
 

@@ -1629,6 +1629,7 @@ class TestNewsScanEndpointOkFlag:
         db.get_client = AsyncMock(return_value=client)
         with patch.object(knowledge_router, "db_module", db), \
              patch.object(knowledge_router, "DB_AVAILABLE", True), \
+             patch.object(playbook, "db_module", db), \
              patch.object(knowledge_router, "_client_news_scan", AsyncMock(return_value=degraded)):
             result = await knowledge_router.scan_client_news_endpoint("Acme GmbH", user={"org_id": 1})
         assert result["ok"] is False
@@ -1643,6 +1644,7 @@ class TestNewsScanEndpointOkFlag:
         db.get_client = AsyncMock(return_value=client)
         with patch.object(knowledge_router, "db_module", db), \
              patch.object(knowledge_router, "DB_AVAILABLE", True), \
+             patch.object(playbook, "db_module", db), \
              patch.object(knowledge_router, "_client_news_scan", AsyncMock(return_value=ok_result)):
             result = await knowledge_router.scan_client_news_endpoint("Acme GmbH", user={"org_id": 1})
         assert result["ok"] is True
@@ -1658,6 +1660,7 @@ class TestNewsScanEndpointOkFlag:
         db.get_client = AsyncMock(return_value=client)
         with patch.object(knowledge_router, "db_module", db), \
              patch.object(knowledge_router, "DB_AVAILABLE", True), \
+             patch.object(playbook, "db_module", db), \
              patch.object(knowledge_router, "_client_news_scan", AsyncMock(return_value=warned)):
             result = await knowledge_router.scan_client_news_endpoint("Acme GmbH", user={"org_id": 1})
         assert result["ok"] is True
