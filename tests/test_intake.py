@@ -892,6 +892,91 @@ class TestCallbackAndWatcher:
         assert call.args == (7, "Bosch AG", "research", "done")
         assert call.kwargs.get("run_id") == 1
 
+    async def test_watcher_terminal_schedules_playbook_reflection(self):
+        """WP4: the watcher terminal branch is the second, idempotent
+        scheduler for playbook.reflect_on_run (alongside the
+        /api/agents/callback dispatch) — safe because tool_calls was already
+        persisted via update_agent_run before this point, and reflect_on_run
+        is idempotent via output.reflected."""
+        from routers import agents as agents_mod
+
+        fake_resp = MagicMock(status_code=200)
+        fake_resp.json.return_value = {"status": "done", "tool_calls": [], "output": {}}
+        fake_resp.raise_for_status = MagicMock()
+
+        fake_intake = MagicMock()
+        fake_intake.part_done = AsyncMock()
+        run_info = {"id": 1, "org_id": 7, "agent_type": "research"}
+        reflect_mock = AsyncMock()
+
+        with (
+            patch("routers.agents.DB_AVAILABLE", True),
+            patch("routers.agents.db_module.get_agent_run", new_callable=AsyncMock,
+                  side_effect=[None, run_info]),
+            patch("routers.agents.db_module.update_agent_run", new_callable=AsyncMock),
+            patch("routers.agents.config") as mock_cfg,
+            patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=fake_resp),
+            patch("routers.agents.asyncio.sleep", new_callable=AsyncMock),
+            patch.dict("sys.modules", {"intake": fake_intake}),
+            patch.object(agents_mod.playbook, "reflect_on_run", reflect_mock),
+        ):
+            mock_cfg.get = lambda key, default=None: {"agent_service_token": ""}.get(key, default)
+            await agents_mod._watch_agent_service_run(1, "http://svc", 100, subject="Bosch AG")
+
+        reflect_mock.assert_called_once_with(7, 1, subject="Bosch AG")
+
+    async def test_watcher_terminal_schedules_playbook_reflection_for_pain_point_research(self):
+        """pain_point_research is outside intake's research/osint dispatch but
+        must still get a playbook reflection from the watcher."""
+        from routers import agents as agents_mod
+
+        fake_resp = MagicMock(status_code=200)
+        fake_resp.json.return_value = {"status": "done", "tool_calls": [], "output": {}}
+        fake_resp.raise_for_status = MagicMock()
+
+        run_info = {"id": 1, "org_id": 7, "agent_type": "pain_point_research"}
+        reflect_mock = AsyncMock()
+
+        with (
+            patch("routers.agents.DB_AVAILABLE", True),
+            patch("routers.agents.db_module.get_agent_run", new_callable=AsyncMock,
+                  side_effect=[None, run_info]),
+            patch("routers.agents.db_module.update_agent_run", new_callable=AsyncMock),
+            patch("routers.agents.config") as mock_cfg,
+            patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=fake_resp),
+            patch("routers.agents.asyncio.sleep", new_callable=AsyncMock),
+            patch.object(agents_mod.playbook, "reflect_on_run", reflect_mock),
+        ):
+            mock_cfg.get = lambda key, default=None: {"agent_service_token": ""}.get(key, default)
+            await agents_mod._watch_agent_service_run(1, "http://svc", 100, subject="Bosch AG")
+
+        reflect_mock.assert_called_once_with(7, 1, subject="Bosch AG")
+
+    async def test_watcher_terminal_skips_playbook_reflection_without_subject(self):
+        from routers import agents as agents_mod
+
+        fake_resp = MagicMock(status_code=200)
+        fake_resp.json.return_value = {"status": "done", "tool_calls": [], "output": {}}
+        fake_resp.raise_for_status = MagicMock()
+
+        run_info = {"id": 1, "org_id": 7, "agent_type": "research"}
+        reflect_mock = AsyncMock()
+
+        with (
+            patch("routers.agents.DB_AVAILABLE", True),
+            patch("routers.agents.db_module.get_agent_run", new_callable=AsyncMock,
+                  side_effect=[None, run_info]),
+            patch("routers.agents.db_module.update_agent_run", new_callable=AsyncMock),
+            patch("routers.agents.config") as mock_cfg,
+            patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=fake_resp),
+            patch("routers.agents.asyncio.sleep", new_callable=AsyncMock),
+            patch.object(agents_mod.playbook, "reflect_on_run", reflect_mock),
+        ):
+            mock_cfg.get = lambda key, default=None: {"agent_service_token": ""}.get(key, default)
+            await agents_mod._watch_agent_service_run(1, "http://svc", 100)
+
+        reflect_mock.assert_not_called()
+
     async def test_watcher_queued_poll_does_not_start_deadline_clock(self):
         """BLOCKER 2 regression: agent-pi reports 'queued' while a run waits
         for a FIFO slot (runner.ts:21, index.ts:75) — that must NOT start the

@@ -482,6 +482,20 @@ async def _watch_agent_service_run(
                         )
                     except Exception as ix_err:
                         logger.warning("intake.part_done from watcher failed: %s", ix_err)
+                # Self-improving playbook (WP4): second, idempotent scheduler —
+                # both the callback (routers/agents.py's agent_service_callback)
+                # and this watcher terminal branch may schedule reflect_on_run
+                # for the same run; output.reflected makes that safe, whichever
+                # lands first wins. Safe to run here specifically because
+                # tool_calls was already persisted via update_agent_run above.
+                if run_info and run_info.get("agent_type") in ("research", "osint", "pain_point_research") and subject:
+                    try:
+                        asyncio.create_task(
+                            playbook.reflect_on_run(run_info["org_id"], db_run_id, subject=subject)
+                        )
+                    except Exception as pb_err:
+                        logger.warning("playbook.reflect_on_run scheduling failed (watcher) for run=%s: %s",
+                                        db_run_id, pb_err)
                 break
             else:
                 # agent-pi reports 'queued' while a run waits for one of its two
