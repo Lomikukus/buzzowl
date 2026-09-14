@@ -1633,6 +1633,29 @@ async def generate_client_brief(name: str, user: dict = Depends(current_user)):
     if doc_id > 0:
         await db_module.link_document(doc_id, "client", client["id"])
 
+    # WP5: a manually-generated brief always wins and closes the client's
+    # intake collection point, if one is still open — otherwise
+    # metadata.intake stays active (the client page's strip polls forever,
+    # sweep() keeps sweeping every 60s) and the collection point later
+    # writes the SAME doc_id (brief-<sha>-<today>), which index_document
+    # upserts — silently replacing this manual brief once it finishes.
+    # cas_client_intake_brief's WHERE only matches waiting/writing/partial,
+    # so this is a no-op when there's no open intake (or none at all).
+    try:
+        intake_updated = await db_module.cas_client_intake_brief(
+            org_id, name, ["waiting", "writing", "partial"], "written",
+        )
+        if intake_updated is not None:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            prior_brief = (intake_updated.get("intake") or {}).get("brief") or {}
+            await db_module.set_client_intake_path(
+                org_id, name, ["intake", "brief"],
+                {**prior_brief, "status": "written", "written_at": now_iso, "missing": [],
+                 "refreshed_at": None, "error": None, "closed_at": now_iso},
+            )
+    except Exception as exc:
+        logger.warning("generate_client_brief: intake close-out failed for '%s': %s", name, exc)
+
     return {
         "brief": brief_content,
         "generated_at": today,
