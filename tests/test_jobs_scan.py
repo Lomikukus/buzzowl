@@ -658,13 +658,16 @@ class TestVorwerkCanonicalDomainDiscovery:
 
     @pytest.mark.asyncio
     async def test_probe_hit_on_alias_domain_survives_own_domain_filter(self, monkeypatch):
+        """Review nit 3 — once the alias is resolved, path-probes target it
+        DIRECTLY (https://vorwerk.com/de/karriere), not the stale
+        vorwerk.de (which would just redirect there anyway)."""
         fake_pb = MagicMock()
         fake_pb.record = AsyncMock()
+        fake_pb._domain_belongs_to_a_client = AsyncMock(return_value=False)
         monkeypatch.setitem(sys.modules, "playbook", fake_pb)
 
         client = _client(website="https://vorwerk.de")
-        probed_url = "https://vorwerk.de/de/karriere"  # one of _CAREERS_PATHS
-        hit_url = "https://www.vorwerk.com/de/karriere"
+        hit_url = "https://vorwerk.com/de/karriere"  # one of _CAREERS_PATHS, probed against the alias base
         hit_html = ("<html><head><title>Karriere bei Vorwerk</title></head><body>"
                     + ("Aktuelle Stellenangebote und Karrieremoeglichkeiten. " * 20)
                     + "</body></html>")
@@ -672,11 +675,9 @@ class TestVorwerkCanonicalDomainDiscovery:
         def _resolver(u):
             if u == "https://vorwerk.de":
                 # _resolve_site_domain's own homepage GET redirects to
-                # vorwerk.com.
+                # vorwerk.com, establishing the alias.
                 return _fake_response(200, "<html></html>", url="https://www.vorwerk.com/de/de")
-            if u == probed_url:
-                # This particular own-domain PATH PROBE redirects to a real
-                # careers page — on the alias domain, not vorwerk.de.
+            if u == hit_url:
                 return _fake_response(200, hit_html, url=hit_url)
             return _fake_response(404, "", url=u)
 
@@ -1856,14 +1857,32 @@ class TestLastTriedUrlSkippedAsCandidate:
 class TestJuniorBoardCandidateExclusion:
     @pytest.mark.asyncio
     async def test_playbook_junior_board_url_excluded_from_candidates(self):
+        """Review B4 — careers.junior_board_urls is a dated {url, at} list,
+        not the old scalar junior_board_url."""
         client = _client(website="https://trumpf.com", careers_url="https://trumpf.com/students")
-        pb = {"careers": {"junior_board_url": "https://trumpf.com/students"}}
+        pb = {"careers": {"junior_board_urls": [
+            {"url": "https://trumpf.com/students", "at": datetime.now(timezone.utc).isoformat()},
+        ]}}
         with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
              patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
              patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
              _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
             candidates = await pipeline._careers_candidates(1, client, pb)
         assert all(c["url"] != "https://trumpf.com/students" for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_expired_junior_board_url_no_longer_excluded(self):
+        """Review B3 — a junior-board exclusion expires after
+        _JUNIOR_BOARD_EXPIRY_DAYS (30) days, same spirit as last_tried_url."""
+        client = _client(website="https://trumpf.com", careers_url="https://trumpf.com/students")
+        old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+        pb = {"careers": {"junior_board_urls": [{"url": "https://trumpf.com/students", "at": old}]}}
+        with patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(lambda u: _fake_response(404, "", url=u)):
+            candidates = await pipeline._careers_candidates(1, client, pb)
+        assert any(c["url"] == "https://trumpf.com/students" for c in candidates)
 
     @pytest.mark.asyncio
     async def test_exclude_kwarg_excludes_a_fresh_playbook_url_too(self):

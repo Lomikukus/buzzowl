@@ -1490,10 +1490,18 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
     domain = _client_domain(client)
     # D27 — vorwerk.de -> vorwerk.com: resolve (and cache) the client's
     # canonical alias domain, so a genuine newsroom result on the NEW domain
-    # counts as "own" too, not just the stale recorded one.
+    # counts as "own" too, not just the stale recorded one. Review nit 2 —
+    # fall back to the domain's playbook aliases when this pass's own live
+    # check found nothing new.
     alias = await _resolve_site_domain(org_id, client)
     if alias == domain:
         alias = ""
+    if not alias and domain:
+        try:
+            import playbook  # type: ignore
+            alias = _known_alias_domain(client, await playbook.load(org_id, domain))
+        except Exception:
+            pass
 
     candidates: list[tuple[int, str, str]] = []
 
@@ -2291,10 +2299,14 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
     # can itself live on the canonical alias domain, not the stale recorded
     # one — resolve (and cache) it so the own-domain filter below accepts
     # it. Only worth the extra GET once there's actually a newsroom page to
-    # read.
+    # read. Review nit 2 — fall back to the domain's playbook aliases
+    # (already loaded as `pb` above) when this pass's own live check found
+    # nothing new.
     alias = await _resolve_site_domain(org_id, client)
     if alias == domain:
         alias = ""
+    if not alias:
+        alias = _known_alias_domain(client, pb)
 
     today = datetime.now(timezone.utc).date()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -3336,18 +3348,54 @@ _PATH_PROBE_BLOCK_DAYS = 14
 # discovery doesn't just hand the exact same known-bad URL straight back.
 _CAREERS_LAST_TRIED_SKIP_DAYS = 7
 
-# D22 — a careers page whose extracted roles are ≥70% junior/student/intern
-# AND leaves fewer than 5 real positions is treated as a junior/student
-# board (e.g. Trumpf's Workday "TRUMPF_Students"), never as "the" careers
-# page: recorded as careers.junior_board_url (never careers.url), excluded
-# from every future candidate list, and _scan_client_jobs retries the next
-# candidate instead of accepting it.
+# D22 — a careers page whose extracted RAW roles are ≥70% junior/student/
+# intern (review B3: counted directly via _JUNIOR_TITLE_RE matches on the
+# raw LLM output, never derived from _filter_positions' filtered_out — that
+# also drops duplicates and caps at 20, so a raw list that's mostly the same
+# few titles repeated could hit a high "filtered fraction" despite having
+# zero actual junior roles) AND leaves fewer than 5 real (deduped) positions
+# is treated as a junior/student board (e.g. Trumpf's Workday
+# "TRUMPF_Students"), never as "the" careers page: recorded as
+# careers.junior_board_urls (never careers.url, and never overwriting a
+# scalar — see _MAX_JUNIOR_BOARD_URLS in playbook.py), excluded from every
+# future candidate list for _JUNIOR_BOARD_EXPIRY_DAYS, and _scan_client_jobs
+# retries the next candidate instead of accepting it.
 _JUNIOR_BOARD_MIN_RATIO = 0.7
 _JUNIOR_BOARD_MAX_REMAINING = 5
-# D22 — bounds the retry loop's candidate attempts within one scan (each one
-# can cost an LLM call) so a pathological run of junior-only boards can't
-# spend unlimited requests.
-_MAX_CAREERS_ATTEMPTS = 4
+# Review B3 — the ratio is only trusted once there's a real sample: a raw
+# list of, say, 3 titles where 3 are junior is a 100% ratio from almost no
+# data (a small landing page snippet, not a genuine board).
+_JUNIOR_BOARD_MIN_RAW_TITLES = 8
+# Review B3 — a board's roster can change (a "students" board today could
+# add senior roles later); a junior-board exclusion is not permanent.
+_JUNIOR_BOARD_EXPIRY_DAYS = 30
+# Review budget — at most this many TOTAL attempts within one scan (the
+# first "real" pick plus up to 2 retries after a junior board), and the
+# retries reuse the first attempt's own discovery pass (see _scan_client_
+# jobs' docstring for the worst-case call budget this bounds).
+_MAX_CAREERS_ATTEMPTS = 3
+
+
+def _active_junior_board_urls(careers_pb: dict) -> set:
+    """Review B3/B4 — urls in careers.junior_board_urls ({url, at} entries)
+    confirmed within the last _JUNIOR_BOARD_EXPIRY_DAYS days. An expired
+    entry is treated as if it were never recorded — the whole point of the
+    expiry is to let a re-discovery try it again eventually."""
+    now = datetime.now(timezone.utc)
+    active: set = set()
+    for entry in (careers_pb or {}).get("junior_board_urls") or []:
+        if not isinstance(entry, dict):
+            continue
+        url = (entry.get("url") or "").strip()
+        at = entry.get("at")
+        if not url or not at:
+            continue
+        try:
+            if (now - datetime.fromisoformat(at)) <= timedelta(days=_JUNIOR_BOARD_EXPIRY_DAYS):
+                active.add(url)
+        except (ValueError, TypeError):
+            continue
+    return active
 
 
 def _ats_match(host: str) -> bool:
@@ -3796,9 +3844,9 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     excluded_urls = exclude or set()
 
     careers_pb = (pb or {}).get("careers") or {}
-    junior_board_url = (careers_pb.get("junior_board_url") or "").strip()
-    if junior_board_url:
-        excluded_urls = excluded_urls | {junior_board_url}
+    # D22 review B3/B4 — careers.junior_board_urls, not the old scalar
+    # junior_board_url, and only entries still within their expiry window.
+    excluded_urls = excluded_urls | _active_junior_board_urls(careers_pb)
 
     # D16 — a URL careers.last_tried_url recorded as "found nothing" within
     # the last _CAREERS_LAST_TRIED_SKIP_DAYS days is skipped as a candidate
@@ -3889,15 +3937,29 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     domain = _client_domain(client)
     # D27 — vorwerk.de -> vorwerk.com: resolve (and cache) the client's
     # canonical alias domain ONCE per discovery pass, so every own-domain
-    # check below treats a result on either domain as "own".
+    # check below treats a result on either domain as "own". Review nit 2 —
+    # fall back to the domain's playbook aliases (a prior resolution from a
+    # different call site/run) when this pass's own live check found
+    # nothing new (rejected by B1/B2, or metadata just hasn't caught up).
     alias = await _resolve_site_domain(org_id, client)
     if alias == domain:
         alias = ""
+    if not alias:
+        alias = _known_alias_domain(client, pb)
 
-    if website:
-        _home_text, home_html = await _fetch_page_raw(website)
+    # Review nit 3 — once the canonical alias is known, probe/harvest
+    # directly against IT, not the stale original domain (which the very
+    # existence of an alias means just redirects everywhere anyway): a
+    # relative link on the (already-redirected) homepage must urljoin
+    # against the REDIRECT TARGET, not the pre-redirect URL, or it resolves
+    # to the wrong host entirely.
+    probe_website = _site_base(f"https://{alias}") if alias else website
+    own_host = alias or domain
+
+    if probe_website:
+        _home_text, home_html = await _fetch_page_raw(probe_website)
         if home_html:
-            for link in _harvest_links(home_html, website, _CAREERS_KEYS, domain, alias=alias):
+            for link in _harvest_links(home_html, probe_website, _CAREERS_KEYS, domain, alias=alias):
                 _add(link, "homepage")
 
         # D1 — own-domain path-probe tier: only worth the extra requests when
@@ -3916,7 +3978,7 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
             # plain GET it already knows will come back thin.
             prefer_camofox = bool((pb or {}).get("needs_js"))
             probe_hits, probe_blocked = await _probe_careers_paths(
-                website, domain, pb_blocked, home_title_h1, prefer_camofox,
+                probe_website, own_host, pb_blocked, home_title_h1, prefer_camofox,
             )
             for cand in probe_hits:
                 _add(cand["url"], cand["tier"], cand.get("title", ""))
@@ -3925,11 +3987,11 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
                 # is below — every frozen signature in this file stays as-is.
                 client["_probe_blocked"] = (client.get("_probe_blocked") or []) + probe_blocked
 
-        sitemap_jobs = await _sitemap_job_urls(website)
+        sitemap_jobs = await _sitemap_job_urls(probe_website)
         # Cache the crawl on the client dict (keyed by the site's own host) so
         # _scan_client_jobs can reuse it instead of crawling the same sitemap
         # a second time right after discovery returns.
-        site_host = urlparse(website).netloc.lower().replace("www.", "")
+        site_host = urlparse(probe_website).netloc.lower().replace("www.", "")
         if site_host:
             client["_sitemap_cache"] = {"host": site_host, "jobs": sitemap_jobs}
         if sitemap_jobs:
@@ -3971,8 +4033,9 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     domain = _client_domain(client)
     # D27 — _careers_candidates already resolved (and cached in-memory on
     # client["metadata"]) the canonical alias domain, if any; read it back
-    # here rather than re-resolving (another live GET) a second time.
-    alias = ((client.get("metadata") or {}).get("canonical_domain") or "").strip()
+    # here (with the same nit-2 playbook-aliases fallback) rather than
+    # re-resolving (another live GET) a second time.
+    alias = _known_alias_domain(client, pb)
 
     # Constrain EVERY path (single-candidate short-circuit, LLM pick, heuristic
     # fallback) up front — filtering only inside the LLM branch let an
