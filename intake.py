@@ -36,6 +36,26 @@ _TERMINAL_BRIEF_STATES = ("written", "refreshed", "failed")
 # and blow through the ChatGPT-subscription bridge's rate limit.
 _INTAKE_LLM_SEM = asyncio.Semaphore(2)
 
+# Strong references to fire-and-forget tasks spawned by sweep() (see
+# _spawn_background) — a task with nothing else referencing it can be
+# garbage-collected mid-flight, silently dropping the finish it was doing.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    """Run `coro` in the background instead of awaiting it inline, keeping a
+    strong reference until it completes. sweep() uses this for anything that
+    can reach _finish (an up-to-180s _auto_generate_brief call under
+    _INTAKE_LLM_SEM): sweep() iterates every client with an open intake in
+    one pass, and with the scheduler's max_instances=1 an inline await would
+    let one slow brief stall the sweeper for every other client until it
+    finishes. _finish's own CAS is already the single-flight gate, so firing
+    it in the background here doesn't weaken the "write the brief exactly
+    once" guarantee — it only stops sweep()'s loop from blocking on it."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -582,7 +602,15 @@ async def sweep() -> None:
         all-terminal-ness (parts can all finish without a deadline ever being
         set — e.g. right after (1) resets a stuck 'writing' brief) means the
         brief should be (re)written now — or a partial brief is due its
-        one-time refresh."""
+        one-time refresh.
+
+    (3)'s _maybe_finish() calls are fired via _spawn_background() rather than
+    awaited: they can reach _finish, an up-to-180s LLM call under
+    _INTAKE_LLM_SEM, and with the scheduler's max_instances=1 an inline await
+    would let one slow brief stall this whole sweep pass — every other
+    client in `clients` — for however long it took. sweep() itself returns
+    once it's queued up (3) for every client; the writes themselves land
+    slightly after that, same as they would from a part_done() callback."""
     clients = await db_module.list_clients_with_open_intake()
     now = _now()
     absolute_cap_min = config.get("intake_absolute_cap_min", 90)
@@ -660,6 +688,6 @@ async def sweep() -> None:
                 )
                 if result is not None:
                     updated_meta = result
-            await _maybe_finish(org_id, name, updated_meta, force=True)
+            _spawn_background(_maybe_finish(org_id, name, updated_meta, force=True))
         elif all_terminal or (deadline is not None and (now >= deadline or brief.get("status") == "partial")):
-            await _maybe_finish(org_id, name, meta)
+            _spawn_background(_maybe_finish(org_id, name, meta))
