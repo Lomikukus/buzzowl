@@ -321,26 +321,20 @@ def _anchor_dates(html: str) -> dict:
     return out
 
 
-def _padded_item(href: str, title: str, date_html: str = "", *, date_before: bool = False) -> str:
-    """One <li> listing item with realistic surrounding markup — a class
-    attribute and a summary paragraph after the link — rather than bare,
-    back-to-back anchors. That padding matters for these tests: it pushes
-    a NEIGHBOUR's own marker (reached through the "wrong" direction, past
-    that neighbour's whole <li>) well past _DATE_NEAR_MAX_DISTANCE, while
-    this item's OWN marker (a few dozen chars away either forward or
-    backward) stays comfortably under it. A fully compact, unpadded
-    fixture doesn't exercise the cap at all — every candidate sits within
-    a handful of characters of every anchor regardless of which item it
-    actually belongs to."""
-    if date_before:
-        lead, trail = (f'{date_html} ' if date_html else ""), ""
-    else:
-        lead, trail = "", (f' {date_html}' if date_html else "")
-    return (
-        f'<li class="news-item">{lead}<a href="{href}">{title}</a>{trail}'
-        f'<p class="summary">A short summary of the article goes here to pad out '
-        f'the listing realistically.</p></li>'
-    )
+def _li_trailing(href: str, title: str, date_str: str = "") -> str:
+    """One <li> listing item, trailing-marker convention (title link, then
+    its own date) — wrapping in a real container tag is what lets
+    _extract_date_near bound its search to THIS item's own markup, never a
+    neighbour's, regardless of the neighbour's distance."""
+    date_bit = f' <span class="date">{date_str}</span>' if date_str else ""
+    return f'<li><a href="{href}">{title}</a>{date_bit}</li>'
+
+
+def _li_before(href: str, title: str, date_str: str = "") -> str:
+    """One <li> listing item, date-before convention (date, then the title
+    link) — see _li_trailing."""
+    date_bit = f'<span class="date">{date_str}</span> ' if date_str else ""
+    return f'<li>{date_bit}<a href="{href}">{title}</a></li>'
 
 
 class TestExtractDateNear:
@@ -349,8 +343,9 @@ class TestExtractDateNear:
     def test_two_adjacent_compact_items_keep_their_own_dates(self):
         """The original bug: an unbounded +-300-char window let the FIRST
         <time> anywhere nearby win for every anchor. Three compact,
-        back-to-back items (no padding between them) must each resolve
-        their own trailing marker, in three different formats."""
+        back-to-back items with no container tag at all (the neighbouring-
+        anchor fallback path) must each resolve their own trailing marker,
+        in three different formats."""
         html = (
             '<a href="/a">A</a> 12.09.2026'
             '<a href="/b">B</a> 2026-09-10'
@@ -361,31 +356,36 @@ class TestExtractDateNear:
         assert dates["/b"] == "2026-09-10"
         assert dates["/c"] == "2026-09-08"
 
-    def test_undated_item_between_two_dated_ones_gets_no_date(self):
-        """Re-review BLOCKER: reintroducing backward search (needed for
-        the date-before convention below) must not let this undated item
-        inherit item A's trailing date through the back door — realistic
-        per-item padding is what lets _DATE_NEAR_MAX_DISTANCE tell "my own
-        marker" apart from "a neighbour's, leaking through backward"."""
-        a = _padded_item("/a", "A really long descriptive title", '<span class="meta">Published 12.09.2026</span>')
-        b = _padded_item("/b", "B has no date of its own")
-        c = _padded_item("/c", "C also has a long descriptive title", '<span class="meta">Published 10.09.2026</span>')
-        dates = _anchor_dates(a + b + c)
+    def test_fixture_a_four_li_items_last_undated(self):
+        """Final re-review BLOCKER, fixture A: with only the neighbouring-
+        anchor + 120-char cap bound (no container bound), item 4 — last,
+        undated — still inherited item 3's trailing date, since a plain
+        <li> item is well under 120 chars end to end. Bounding by the
+        enclosing <li> instead means item 4's own container never contains
+        item 3's markup at all, so there is nothing to leak regardless of
+        the cap."""
+        html = (
+            _li_trailing("/1", "Item 1", "12.09.2026")
+            + _li_trailing("/2", "Item 2", "10.09.2026")
+            + _li_trailing("/3", "Item 3", "08.09.2026")
+            + _li_trailing("/4", "Item 4")
+        )
+        dates = _anchor_dates(html)
+        assert dates["/1"] == "2026-09-12"
+        assert dates["/2"] == "2026-09-10"
+        assert dates["/3"] == "2026-09-08"
+        assert dates["/4"] is None
+
+    def test_fixture_e_undated_item_between_two_dated_trailing(self):
+        html = (
+            _li_trailing("/a", "A", "12.09.2026")
+            + _li_trailing("/b", "B has no date of its own")
+            + _li_trailing("/c", "C", "10.09.2026")
+        )
+        dates = _anchor_dates(html)
         assert dates["/a"] == "2026-09-12"
         assert dates["/b"] is None
         assert dates["/c"] == "2026-09-10"
-
-    def test_neighbours_trailing_date_never_leaks_backward(self):
-        """A lone anchor with a dated, padded neighbour right before it,
-        and nothing of its own after it, must not inherit the neighbour's
-        date — this is the exact bleed the original window bug caused,
-        now guarded by _DATE_NEAR_MAX_DISTANCE instead of by refusing to
-        search backward at all (which broke the date-before convention)."""
-        a = _padded_item("/a", "A really long descriptive title", '<span class="meta">Published 12.09.2026</span>')
-        b = _padded_item("/b", "B")
-        dates = _anchor_dates(a + b)
-        assert dates["/a"] == "2026-09-12"
-        assert dates["/b"] is None
 
     def test_dated_200_days_ago_resolves_but_is_later_dropped_by_age(self):
         """_extract_date_near itself has no age opinion — the 90-day gate
@@ -398,9 +398,9 @@ class TestExtractDateNear:
     def test_next_anchor_bounds_the_forward_search(self):
         """A date belonging to a THIRD item, two anchors away, must never
         be visible to the first, even though a flat 300-char window would
-        easily have reached it (the original bug) — the forward search
-        must stop at the very next `<a`, not merely somewhere within
-        `window` chars."""
+        easily have reached it (the original bug) — with no container tag
+        present, the forward search must stop at the very next `<a`, not
+        merely somewhere within `window` chars."""
         html = '<a href="/a">A</a><a href="/b">B</a><a href="/c">C</a> 12.09.2026'
         dates = _anchor_dates(html)
         assert dates["/a"] is None
@@ -411,54 +411,63 @@ class TestExtractDateNear:
         html = '<a href="/a">A</a> 12.09.2026'
         assert _anchor_dates(html)["/a"] == "2026-09-12"
 
+    def test_fixture_h_date_more_than_cap_chars_away_returns_none(self):
+        """No container tag and nothing before it either — the
+        neighbouring-anchor fallback has no anchor to bound it, so only
+        _DATE_NEAR_MAX_DISTANCE stops it from reaching an unrelated date
+        far down the page."""
+        html = '<a href="/h">H</a>' + (" padding " * 20) + "12.09.2026"
+        anchor_end = len('<a href="/h">H</a>')
+        assert html.index("12.09.2026") - anchor_end > pipeline._DATE_NEAR_MAX_DISTANCE
+        assert _anchor_dates(html)["/h"] is None
+
     # -- date-before convention: date, then the title link (re-review) ----
 
-    def test_date_before_anchor_three_items_each_keep_their_own_date(self):
+    def test_fixture_c_date_before_anchor_three_items_each_keep_their_own_date(self):
         """The re-review BLOCKER, reproduced: forward-only search made
         every item resolve its SUCCESSOR's leading date (item 1 got item
         2's date, item 2 got item 3's, item 3 got none) on the German
         <span>12.09.2026</span> <a>Titel</a> convention. All three must
         now resolve their own date instead."""
-        i1 = _padded_item("/1", "Titel eins ist recht lang beschrieben",
-                           '<span class="meta">12.09.2026</span>', date_before=True)
-        i2 = _padded_item("/2", "Titel zwei ist ebenfalls lang beschrieben",
-                           '<span class="meta">05.07.2026</span>', date_before=True)
-        i3 = _padded_item("/3", "Titel drei ist auch lang beschrieben",
-                           '<span class="meta">01.03.2026</span>', date_before=True)
-        dates = _anchor_dates(i1 + i2 + i3)
+        html = (
+            _li_before("/1", "Titel eins", "12.09.2026")
+            + _li_before("/2", "Titel zwei", "05.07.2026")
+            + _li_before("/3", "Titel drei", "01.03.2026")
+        )
+        dates = _anchor_dates(html)
         assert dates["/1"] == "2026-09-12"
         assert dates["/2"] == "2026-07-05"
         assert dates["/3"] == "2026-03-01"
 
-    def test_undated_item_between_two_dated_ones_date_before_convention(self):
-        i1 = _padded_item("/1", "Titel eins lang beschrieben",
-                           '<span class="meta">12.09.2026</span>', date_before=True)
-        i2 = _padded_item("/2", "Zwei hat kein eigenes Datum", date_before=True)
-        i3 = _padded_item("/3", "Titel drei lang beschrieben",
-                           '<span class="meta">01.03.2026</span>', date_before=True)
-        dates = _anchor_dates(i1 + i2 + i3)
+    def test_fixture_f_undated_item_between_two_dated_date_before(self):
+        html = (
+            _li_before("/1", "Titel eins", "12.09.2026")
+            + _li_before("/2", "Zwei hat kein eigenes Datum")
+            + _li_before("/3", "Titel drei", "01.03.2026")
+        )
+        dates = _anchor_dates(html)
         assert dates["/1"] == "2026-09-12"
         assert dates["/2"] is None
         assert dates["/3"] == "2026-03-01"
 
-    def test_time_tag_before_the_anchor_resolves_to_its_own_date(self):
+    def test_fixture_g_time_tag_before_anchor_two_items(self):
         html = (
-            '<li class="news-item"><time datetime="2026-09-08"></time> '
-            '<a href="/t">Titel mit time davor</a>'
-            '<p class="summary">Padding text here to simulate a realistic '
-            'listing item with enough space.</p></li>'
+            '<li><time datetime="2026-09-12"></time> <a href="/1">1</a></li>'
+            '<li><time datetime="2026-07-05"></time> <a href="/2">2</a></li>'
         )
-        assert _anchor_dates(html)["/t"] == "2026-09-08"
+        dates = _anchor_dates(html)
+        assert dates["/1"] == "2026-09-12"
+        assert dates["/2"] == "2026-07-05"
 
-    def test_mixed_listing_date_before_then_trailing(self):
+    def test_fixture_d_mixed_listing_date_before_then_trailing(self):
         """One listing can (and in practice sometimes does) mix
         conventions item-to-item — each anchor must still resolve its own
         date regardless of which side its neighbour's marker is on."""
-        i1 = _padded_item("/1", "Titel eins lang beschrieben hier",
-                           '<span class="meta">12.09.2026</span>', date_before=True)
-        i2 = _padded_item("/2", "Titel zwei lang beschrieben trailing",
-                           '<span class="meta">Published 10.09.2026</span>')
-        dates = _anchor_dates(i1 + i2)
+        html = (
+            _li_before("/1", "Titel eins", "12.09.2026")
+            + _li_trailing("/2", "Titel zwei", "10.09.2026")
+        )
+        dates = _anchor_dates(html)
         assert dates["/1"] == "2026-09-12"
         assert dates["/2"] == "2026-09-10"
 

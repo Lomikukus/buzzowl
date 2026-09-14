@@ -1815,20 +1815,28 @@ async def _probe_published_date(url: str) -> Optional[str]:
 _ANCHOR_OPEN_RE = re.compile(r"<a\b", re.I)
 _ANCHOR_CLOSE_RE = re.compile(r"</a>", re.I)
 
-# WP9 re-review BLOCKER: forward-only search (the previous fix) is wrong for
-# a "date BEFORE the title link" convention (e.g. German
-# <span>12.09.2026</span> <a>Titel</a> listings) — every anchor's forward
-# region runs up to the NEXT `<a`, which is exactly where the next item's
-# OWN leading date sits, so each item silently inherits its successor's
-# date and the last item gets none. Search both directions instead and let
-# distance decide, but cap how far a match may be and still count: in a
-# realistic listing (with normal per-item wrapper markup, e.g. <li>...</li>)
-# an item's OWN marker — whichever side its convention puts it on — sits at
-# most ~30-40 chars from the anchor, while a NEIGHBOUR's marker reached
-# through the "wrong" direction sits past the neighbour's own tag structure,
-# comfortably over 100 chars away. Without this cap, an undated item
-# sandwiched between two dated ones (either convention) would still inherit
-# whichever neighbour happens to be within the +-300-char window.
+# The tags real listings wrap one item in — <li>/<article>/<tr>/<section>/
+# <div> — used to bound _extract_date_near's search to THIS item's own
+# markup. Neighbouring-anchor bounds (below) are only a fallback for
+# markup with no such wrapper at all: a real listing's item boundary is
+# this tag, not merely "wherever the next/previous <a> happens to be".
+_CONTAINER_CLOSE_RE = re.compile(r"</(?:li|article|tr|section|div)\b", re.I)
+_CONTAINER_OPEN_RE = re.compile(r"<(?:li|article|tr|section|div)\b", re.I)
+
+# WP9 re-review: forward-only search (the first fix) was wrong for a "date
+# BEFORE the title link" convention (e.g. German <span>12.09.2026</span>
+# <a>Titel</a> listings) — every anchor's forward region ran up to the NEXT
+# `<a`, exactly where the next item's own leading date sits, so each item
+# silently inherited its successor's date. Bounding both directions by the
+# neighbouring <a> (the second fix) still let an UNDATED item inherit a
+# neighbour's marker whenever that neighbour's own container was smaller
+# than the (generous, unbounded-by-markup) 120-char cap — a plain compact
+# `<li>` item is well under 120 chars end to end. Bounding by the enclosing
+# item CONTAINER instead of just the neighbouring anchor fixes this
+# properly: an item's own container never includes a NEIGHBOUR's marker,
+# so there is nothing left to leak regardless of the cap's exact value.
+# The cap stays as a last-resort guard for markup with no container tags at
+# all (the neighbouring-anchor fallback below).
 _DATE_NEAR_MAX_DISTANCE = 120
 
 
@@ -1839,30 +1847,46 @@ def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Op
     handles BOTH a trailing-marker convention (title link, then its own
     date) and a date-before convention (date, then the title link).
 
-    Searches a forward region (from `end` up to the next `<a`, or `window`
-    chars) and a backward region (from the previous `</a>` up to `start`,
-    or `window` chars) — bounded by the neighbouring anchors so it can
-    never reach a THIRD item's date. Every `<time datetime>` / ISO / German
-    (dd.mm.yyyy) match found in EITHER region is a candidate; the NEAREST
-    one to the anchor (by character distance, capped at
-    _DATE_NEAR_MAX_DISTANCE — see its comment) wins, not whichever
-    direction or pattern is tried first. In a trailing-marker listing the
-    anchor's own date is a few chars forward while a neighbour's leaks in
-    only from far behind; in a date-before listing it's the mirror image —
-    either way the genuine, close-by match wins and a neighbour's distant
-    one is dropped, so an anchor with no marker of its own still correctly
-    finds nothing."""
-    fwd_limit = min(len(html), end + window)
-    next_anchor = _ANCHOR_OPEN_RE.search(html, end)
-    if next_anchor:
-        fwd_limit = min(fwd_limit, next_anchor.start())
+    Searches a forward region and a backward region, each bounded first by
+    this item's own enclosing container tag (the first `</li|</article|
+    </tr|</section|</div` after the anchor forward; the last matching open
+    tag before it backward) — never a neighbour's, since a container never
+    contains another item's markup. Only when no such tag exists on that
+    side at all does it fall back to the neighbouring anchor (`<a` forward,
+    `</a>` backward, WP9's first two fixes), further capped at
+    _DATE_NEAR_MAX_DISTANCE chars — a last resort for markup with no
+    per-item wrapper, where "far away" is the only signal left that a
+    match belongs to some OTHER item.
 
-    back_limit = max(0, start - window)
-    prev_close = None
-    for m in _ANCHOR_CLOSE_RE.finditer(html, back_limit, start):
-        prev_close = m
-    if prev_close is not None:
-        back_limit = max(back_limit, prev_close.end())
+    Every `<time datetime>` / ISO / German (dd.mm.yyyy) match found in
+    EITHER region is a candidate; the NEAREST one to the anchor (by
+    character distance) wins, not whichever direction or pattern is tried
+    first. When nothing qualifies, returns None — an item with no marker
+    of its own must never inherit a neighbour's; a dropped date is better
+    than a wrong one."""
+    window_fwd_limit = min(len(html), end + window)
+    container_close = _CONTAINER_CLOSE_RE.search(html, end, window_fwd_limit)
+    if container_close:
+        fwd_limit = container_close.start()
+    else:
+        fwd_limit = window_fwd_limit
+        next_anchor = _ANCHOR_OPEN_RE.search(html, end)
+        if next_anchor:
+            fwd_limit = min(fwd_limit, next_anchor.start())
+
+    window_back_limit = max(0, start - window)
+    container_open = None
+    for m in _CONTAINER_OPEN_RE.finditer(html, window_back_limit, start):
+        container_open = m
+    if container_open:
+        back_limit = container_open.start()
+    else:
+        back_limit = window_back_limit
+        prev_close = None
+        for m in _ANCHOR_CLOSE_RE.finditer(html, window_back_limit, start):
+            prev_close = m
+        if prev_close is not None:
+            back_limit = max(back_limit, prev_close.end())
 
     candidates: list[tuple[int, str]] = []
 
