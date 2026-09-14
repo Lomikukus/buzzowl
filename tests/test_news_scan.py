@@ -1014,6 +1014,76 @@ class TestClientNewsScan:
         db.link_document.assert_awaited_once_with(101, "client", 1)
 
     @pytest.mark.asyncio
+    async def test_engine_kept_in_written_signal_metadata(self):
+        """D14 — the tier that produced a signal (a SearXNG engine name, or
+        "newsroom" for the own-newsroom tier) must survive onto the stored
+        document so it stays auditable after the fact."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        cand = [{"url": "https://acme.com/news/1", "title": "Acme wins deal", "content": "c",
+                 "_norm_url": "acme.com/news/1", "_published": _RECENT_ISO, "query": '"Acme GmbH"',
+                 "engine": "bing news"}]
+        reply = json.dumps([{"i": 0, "relevance": 4, "signal_type": "opportunity",
+                              "headline": "Acme wins deal", "why": "Confirmed contract win"}])
+
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=101)
+        db.link_document = AsyncMock()
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates", AsyncMock(return_value=_news_data(cand))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            await pipeline._client_news_scan(1, client)
+
+        meta = db.index_document.await_args.kwargs["metadata"]
+        assert meta["engine"] == "bing news"
+
+    @pytest.mark.asyncio
+    async def test_engine_defaults_to_empty_string_when_absent(self):
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        cand = [{"url": "https://acme.com/news/1", "title": "Acme wins deal", "content": "c",
+                 "_norm_url": "acme.com/news/1", "_published": _RECENT_ISO, "query": '"Acme GmbH"'}]
+        reply = json.dumps([{"i": 0, "relevance": 4, "signal_type": "opportunity",
+                              "headline": "Acme wins deal", "why": "Confirmed contract win"}])
+
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=101)
+        db.link_document = AsyncMock()
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates", AsyncMock(return_value=_news_data(cand))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            await pipeline._client_news_scan(1, client)
+
+        meta = db.index_document.await_args.kwargs["metadata"]
+        assert meta["engine"] == ""
+
+    @pytest.mark.asyncio
+    async def test_newsroom_engine_kept_in_written_signal_metadata(self):
+        """_newsroom_candidates already sets engine="newsroom" on every
+        candidate it produces — confirm it survives through to storage too."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        newsroom_cand = [{"url": "https://acme.com/presse/1", "title": "Acme launches X",
+                           "content": "", "_norm_url": "acme.com/presse/1",
+                           "_published": _RECENT_ISO, "query": "", "engine": "newsroom"}]
+        reply = json.dumps([{"i": 0, "relevance": 3, "signal_type": "news",
+                              "headline": "Acme launches X", "why": "New product"}])
+
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=101)
+        db.link_document = AsyncMock()
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates", AsyncMock(return_value=_news_data([]))), \
+             patch.object(pipeline, "_newsroom_candidates", AsyncMock(return_value=(newsroom_cand, []))), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            await pipeline._client_news_scan(1, client)
+
+        meta = db.index_document.await_args.kwargs["metadata"]
+        assert meta["engine"] == "newsroom"
+
+    @pytest.mark.asyncio
     async def test_low_relevance_not_written(self):
         client = _client("Acme GmbH")
         cand = [{"url": "https://acme.com/news/1", "title": "t", "content": "c",

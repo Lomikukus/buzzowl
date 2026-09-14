@@ -2487,6 +2487,11 @@ async def _client_news_scan(
                 "subject": name,
                 "from_news_scan": True,
                 "query": cand.get("query", ""),
+                # D14 — which tier actually produced this signal (a SearXNG
+                # engine name like "bing news", or "newsroom" for the
+                # own-newsroom tier) — dropped before, so there was no way
+                # to audit after the fact which tier is doing the work.
+                "engine": cand.get("engine") or "",
                 "service": "python",
             },
             embedding=[],
