@@ -622,7 +622,7 @@ export interface RunAgentOptions {
 
 export async function runPiAgent(opts: RunAgentOptions): Promise<void> {
   const allTools = buildTools(opts.orgId, opts.agentRunId, opts.subject, opts.toolCallLog,
-    opts.useBrowserFetch ?? false);
+    opts.useBrowserFetch ?? false, opts.agentType);
 
   const allowlist = AGENT_TOOL_ALLOWLIST[opts.agentType] ?? AGENT_TOOL_ALLOWLIST.research;
   const tools = allTools.filter(t => allowlist.has(t.name));
@@ -906,7 +906,7 @@ export async function runPiChat(opts: ChatOptions): Promise<ChatResult> {
   const sources: Array<{ title: string; url: string; type: string; snippet: string }> = [];
   const toolCallLog: Array<{ tool: string; args: unknown; result: string; ts: string }> = [];
 
-  const allTools = buildTools(opts.orgId, -1, opts.clientName ?? '', toolCallLog, false, sources);
+  const allTools = buildTools(opts.orgId, -1, opts.clientName ?? '', toolCallLog, false, 'chat', sources);
   const chatAllowlist = new Set([
     'search_kb', 'get_client', 'search_clients',
     'list_clients', 'get_recent_findings',

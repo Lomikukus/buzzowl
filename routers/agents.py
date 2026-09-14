@@ -1547,7 +1547,40 @@ async def _handle_match_synthesis_callback(org_id: int, svc_run_id, client_name:
                 "ORDER BY created_at DESC LIMIT 1",
                 org_id, int(svc_run_id),
             )
-            # If Pi didn't write it (older Pi version), create it from the agent run output
+            # D15 backstop — some Pi builds still write the match_synthesis
+            # report as type='research' (the generic final-report type
+            # every other agent uses) despite the prompt and the tools.ts-
+            # side coercion. That document is then invisible to every
+            # type='match_report' consumer even though match_status is
+            # reported as done below. Recover it by run id and promote it
+            # in place rather than leaving the client stuck on a "done"
+            # match no page can find.
+            #
+            # Review nit — checked by run id BEFORE the org-wide content
+            # ILIKE fallback below, not after: a client with an OLDER
+            # match_report from a previous run would otherwise win that
+            # fallback first (it isn't scoped to this run at all) and this
+            # run's mis-typed research doc would never get promoted.
+            if not doc:
+                research_doc = await conn.fetchrow(
+                    "SELECT id FROM documents WHERE org_id=$1 AND agent_run_id=$2 AND type='research' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    org_id, int(svc_run_id),
+                )
+                if research_doc:
+                    await conn.execute(
+                        "UPDATE documents SET type='match_report' WHERE id=$1 AND org_id=$2",
+                        research_doc["id"], org_id,
+                    )
+                    doc = research_doc
+                    logger.warning(
+                        "_handle_match_synthesis_callback: coerced doc %s from type='research' to "
+                        "'match_report' for run=%s client=%s org=%d",
+                        research_doc["id"], svc_run_id, client_name, org_id,
+                    )
+            # If Pi didn't write a match_report FOR THIS RUN at all (older
+            # Pi version, or a run that predates agent_run_id tracking),
+            # fall back to the org-wide content match as a last resort.
             if not doc:
                 doc = await conn.fetchrow(
                     "SELECT id FROM documents WHERE org_id=$1 AND type='match_report' "
@@ -2258,8 +2291,10 @@ async def get_research_log(
 @router.get("/api/agents/fetch-log")
 async def get_fetch_log(user: dict = Depends(current_user)):
     """Which tier (plain http / browser-service / camofox) served each of
-    the last 50 page fetches — admin only. Lets an operator confirm which
-    tier is actually working on a given deployment (WP11)."""
+    the last 200 page fetches — admin only. Lets an operator confirm which
+    tier is actually working on a given deployment (WP11). D19: covers the
+    path-probe and posting-title-fetch tiers too, not just
+    _fetch_page_text/_fetch_page_raw."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     from routers.pipeline import _FETCH_TIER_LOG  # lazy import — avoid circular at module load

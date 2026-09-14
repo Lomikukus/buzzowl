@@ -12,6 +12,7 @@ Covers:
 
 import asyncio
 import hashlib
+import html
 import json
 import logging
 import os
@@ -922,6 +923,25 @@ def _normalize_source_url(url: str) -> str:
     return (url or "").strip().rstrip("/").lower()
 
 
+# D13 — legal/boilerplate pages that occasionally pass _probe_newsroom_paths'
+# has_keyword/has_dates heuristic (a footer full of dated legal notices) or
+# get harvested off the homepage footer: never real news, and unlike a
+# genuine newsroom page they never change, so they'd be re-fetched every
+# single scan for nothing. Checked against the URL PATH only, anchored on a
+# WHOLE path segment (review nit: an unanchored substring match dropped a
+# genuine article like /news/contact-tracing-launch just for containing
+# "contact") — "/impressum", "/kontakt/", "/agb.html" match; "contact" only
+# as part of a longer slug word does not.
+_LEGAL_URL_PATH_RE = re.compile(
+    r"(^|/)(impressum|datenschutz|privacy|agb|kontakt|contact|legal|cookie)(/|$|\.)",
+    re.IGNORECASE,
+)
+
+
+def _is_legal_url(url: str) -> bool:
+    return bool(_LEGAL_URL_PATH_RE.search(urlparse(url or "").path))
+
+
 def _client_domain(client: dict) -> str:
     website = ((client.get("metadata") or {}).get("website") or "").strip()
     if not website:
@@ -930,6 +950,41 @@ def _client_domain(client: dict) -> str:
         website = f"https://{website}"
     host = urlparse(website).netloc.lower()
     return host[4:] if host.startswith("www.") else host
+
+
+def _site_base(website: str) -> str:
+    """Normalize a client's metadata.website into a fetchable https:// base
+    URL for the jobs-discovery block (D11).
+
+    metadata.website is stored VERBATIM by routers/internal.py's
+    internal_create_client — for the four clients created that way in the
+    WP7b drive that meant a bare domain with no scheme ("trumpf.com",
+    "datev.de", "vorwerk.de", "festo.com"). urlparse("trumpf.com") then
+    yields an EMPTY netloc (the whole string lands in .path instead), so
+    every consumer that trusted a schemeless website silently did nothing:
+    _careers_probe_urls returned [] (netloc check), _fetch_page_raw handed
+    "trumpf.com" straight to httpx (which raises, then the same bad string
+    reaches Camofox, which logs "Invalid URL: trumpf.com"), and
+    _sitemap_job_urls' own netloc check also came back empty. One place to
+    fix, reused at every jobs-block call site that turns metadata.website
+    into a URL: the homepage fetch, the path-probe tier, and the sitemap
+    probe (_client_domain above already gets this right and stays
+    domain-only; the news block's _probe_newsroom_paths has the same
+    https:// prepend inline).
+
+    strip -> prepend https:// when there's no scheme -> drop a trailing
+    slash -> lower-case the host. '' in, '' out."""
+    website = (website or "").strip()
+    if not website:
+        return ""
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", website):
+        website = f"https://{website}"
+    p = urlparse(website)
+    host = p.netloc.lower()
+    if not host:
+        return ""
+    path = p.path.rstrip("/")
+    return f"{p.scheme}://{host}{path}"
 
 
 # Aggregator/registry/social domains that are never a company's own website
@@ -1125,8 +1180,7 @@ async def _probe_newsroom_paths(website: str) -> list[dict]:
     plain heuristics, same spirit as _fetch_source_fp's readability floor."""
     if not website:
         return []
-    base = website if website.startswith("http") else f"https://{website}"
-    base = base.rstrip("/")
+    base = _site_base(website)  # D11 — same normalization the jobs block uses
     hits: list[dict] = []
     async with httpx.AsyncClient(
         timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
@@ -1173,7 +1227,7 @@ async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> lis
     """
     if not website:
         return []
-    base = website if website.startswith("http") else f"https://{website}"
+    base = _site_base(website)  # D11 — same normalization the jobs block uses
     html = ""
     try:
         async with httpx.AsyncClient(
@@ -1279,6 +1333,12 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
         if norm in seen:
             continue
         seen.add(norm)
+        # D13 — an Impressum/Datenschutz/AGB page is never real news; without
+        # this, one that happened to pass a probe/harvest heuristic gets
+        # recorded once and then re-fetched by the own-newsroom tier on
+        # every subsequent scan forever.
+        if _is_legal_url(url):
+            continue
         added.append({"url": url, "label": title or urlparse(url).netloc, "added": now_iso})
         if len(added) >= 4 or len(existing) + len(added) >= _MAX_MONITORED_SOURCES:
             break
@@ -1323,9 +1383,12 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
 # routers/knowledge.py's _fetch_event_for_mail.
 _CAMOFOX_USER_ID = "server"
 
-# Bounded ring of the last 50 page fetches, for diagnostics (which tier is
+# Bounded ring of the last 200 page fetches, for diagnostics (which tier is
 # actually working on a given deployment). Not persisted; process-local.
-_FETCH_TIER_LOG: deque = deque(maxlen=50)
+# D19 — raised from 50: once the path-probe and posting-title-fetch tiers
+# started recording here too, a single jobs scan alone (~10 probes + up to
+# 20 title fetches) could fill more than half of a 50-entry ring.
+_FETCH_TIER_LOG: deque = deque(maxlen=200)
 
 
 def _record_fetch_tier(url: str, tier: str, chars: int) -> None:
@@ -1960,18 +2023,22 @@ def _client_newsroom_urls(client: dict, pb: Optional[dict]) -> list[str]:
     """Newsroom URLs already known for this client: playbook.newsroom.urls
     first (org-wide, written by _discover_client_sources' playbook.record
     call), then client.metadata.monitored_sources (per-client, same origin —
-    see _discover_client_sources). Order preserved, deduped."""
+    see _discover_client_sources). Order preserved, deduped.
+
+    D13 — also drops any legal/boilerplate URL (Impressum, Datenschutz, ...)
+    on read, not just at write time: a source recorded before this fix
+    shipped, or added by hand, must stop being re-fetched too."""
     urls: list[str] = []
     seen: set = set()
     for u in ((pb or {}).get("newsroom") or {}).get("urls") or []:
         u = (u or "").strip()
-        if u and u not in seen:
+        if u and u not in seen and not _is_legal_url(u):
             seen.add(u)
             urls.append(u)
     meta = client.get("metadata") or {}
     for src in meta.get("monitored_sources") or []:
         u = (src.get("url") or "").strip()
-        if u and u not in seen:
+        if u and u not in seen and not _is_legal_url(u):
             seen.add(u)
             urls.append(u)
     return urls
@@ -2427,6 +2494,11 @@ async def _client_news_scan(
                 "subject": name,
                 "from_news_scan": True,
                 "query": cand.get("query", ""),
+                # D14 — which tier actually produced this signal (a SearXNG
+                # engine name like "bing news", or "newsroom" for the
+                # own-newsroom tier) — dropped before, so there was no way
+                # to audit after the fact which tier is doing the work.
+                "engine": cand.get("engine") or "",
                 "service": "python",
             },
             embedding=[],
@@ -2853,6 +2925,9 @@ async def _market_news_scan(
                 "published_at": published,
                 "signal_type": signal_type,
                 "from_news_scan": True,
+                # D14 nit — this write path dropped engine too; see
+                # _client_news_scan for why it matters.
+                "engine": cand.get("engine") or "",
                 "service": "python",
             },
             embedding=[],
@@ -3037,6 +3112,12 @@ _PATH_PROBE_STOP_AFTER_HITS = 2
 _PATH_PROBE_BROWSER_RETRY_MAX = 2
 _PATH_PROBE_BLOCK_DAYS = 14
 
+# D16 — a careers URL that 200'd but yielded zero extractable positions
+# (careers.last_tried_url, stamped by _scan_client_jobs' "no positions found"
+# failure) is excluded from _careers_candidates for this many days, so
+# discovery doesn't just hand the exact same known-bad URL straight back.
+_CAREERS_LAST_TRIED_SKIP_DAYS = 7
+
 
 def _ats_match(host: str) -> bool:
     """True when `host` IS one of _ATS_HOSTS (label-anchored) or a subdomain of
@@ -3170,6 +3251,10 @@ def _careers_probe_urls(website: str, domain: str, blocked_urls: Optional[list] 
     always trimmed off the end before a single one was ever tried), minus
     anything blocked in the last _PATH_PROBE_BLOCK_DAYS days (D7), capped at
     _PATH_PROBE_MAX total."""
+    # D11 — normalize defensively here too (not just at _careers_candidates'
+    # call site): website may be a bare domain with no scheme, and
+    # urlparse() on that yields an empty netloc, silently returning [].
+    website = _site_base(website)
     p = urlparse(website)
     if not p.netloc:
         return []
@@ -3275,8 +3360,15 @@ async def _probe_careers_path(url: str, *, own_domain: str, hits: list, http: ht
     except Exception:
         # D7 — a fetch that raised (timeout, connection refused, ...) is as
         # much an own-domain failure as an explicit 403/4xx.
+        # D19 — this tier fetches through its own httpx client (not
+        # _fetch_page_text/_fetch_page_raw), so it must record its own
+        # ring-log entry or the whole path-probe tier stays invisible to
+        # /api/agents/fetch-log.
+        _record_fetch_tier(url, "none", 0)
         return {"url": url, "status": None, "accepted": None,
                 "blocked": {"url": url, "kind": "fetch_error", "at": now_iso}, "title_h1": None}
+
+    _record_fetch_tier(url, "http" if html else "none", len(html))
 
     final_host = urlparse(final_url).netloc.lower().replace("www.", "")
     if final_url != url and _ats_match(final_host):
@@ -3385,6 +3477,11 @@ async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional
                 r["url"], "", 18000, 3000, prefer_camofox=prefer_camofox,
             )
             text = re.sub(r"\s+", " ", text).strip()
+            # D19 — called directly rather than through _fetch_page_text/
+            # _fetch_page_raw (the two callers that already record this),
+            # so this browser/Camofox fallback attempt would otherwise
+            # never show up in the fetch-tier ring log either.
+            _record_fetch_tier(r["url"], _tier if text else "none", len(text))
             if len(text) < 500:
                 continue
             # Neither tier _fetch_rendered_tier can land on ever returns real
@@ -3448,19 +3545,63 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     candidates: list[dict] = []
     seen: set = set()
 
+    careers_pb = (pb or {}).get("careers") or {}
+
+    # D16 — a URL careers.last_tried_url recorded as "found nothing" within
+    # the last _CAREERS_LAST_TRIED_SKIP_DAYS days is skipped as a candidate
+    # from EVERY tier below (not just the playbook one it came from), so a
+    # homepage/sitemap/path-probe re-discovery of the exact same dead end
+    # doesn't just hand it straight back either.
+    #
+    # Review fix: the clock is careers.last_tried_at (stamped ONLY when
+    # THIS URL was the one just re-tried and yielded 0 positions), never
+    # careers.last_failure_at — that field is rewritten by _record_playbook
+    # on EVERY careers failure, including the "no careers page found" the
+    # skip itself causes once this URL is the only candidate. Reading
+    # last_failure_at here made the skip re-arm itself forever (site fixed,
+    # candidate offered every scan, skipped every scan, last_failure_at
+    # bumped every scan) — permanently worse than no skip at all.
+    # last_failure_at is still read as a fallback for a playbook recorded
+    # before this fix shipped (no last_tried_at yet).
+    last_tried_url = (careers_pb.get("last_tried_url") or "").strip()
+    last_tried_skip = False
+    if last_tried_url:
+        last_tried_at = careers_pb.get("last_tried_at") or careers_pb.get("last_failure_at")
+        if last_tried_at:
+            try:
+                last_tried_skip = (datetime.now(timezone.utc) - datetime.fromisoformat(last_tried_at)) \
+                    <= timedelta(days=_CAREERS_LAST_TRIED_SKIP_DAYS)
+            except (ValueError, TypeError):
+                last_tried_skip = False
     def _add(url: str, tier: str, title: str = "") -> None:
         url = (url or "").strip()
         if not url.startswith("http") or url in seen:
             return
+        if last_tried_skip and url == last_tried_url:
+            # Smuggled onto the client dict (same pattern as _probe_blocked/
+            # _sitemap_cache below — _careers_candidates' signature is
+            # frozen) so _scan_client_jobs can tell "the skip suppressed a
+            # candidate" apart from "there is genuinely nothing here" and
+            # stamp an honest failure reason instead of the generic
+            # "no careers page found" when this turns out to be the only one.
+            client["_careers_skip_suppressed_url"] = url
+            return
         seen.add(url)
         candidates.append({"url": url, "tier": tier, "title": title[:120]})
 
-    careers_pb = (pb or {}).get("careers") or {}
     pb_blocked = (pb or {}).get("blocked_urls") or []
     pb_url = (careers_pb.get("url") or "").strip()
     if pb_url:
         fresh = _playbook_careers_fresh(careers_pb)
         if fresh:
+            # Review nit (documented, not changed): this short-circuit
+            # returns pb_url directly, bypassing _add and therefore the
+            # last_tried_url skip above — intentional, not an oversight: a
+            # fresh careers.url means a scan already SUCCEEDED here inside
+            # the last 60 days (_playbook_careers_fresh), which cannot be
+            # the same URL as last_tried_url (that field only ever holds a
+            # URL that yielded 0 positions, and a success wipes the skip's
+            # relevance for that URL going forward regardless).
             return [{"url": pb_url, "tier": "playbook", "title": ""}]
         _add(pb_url, "playbook")
 
@@ -3476,7 +3617,11 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
         if website:
             meta["website"] = website
             client["metadata"] = meta
-    website = (meta.get("website") or "").strip()
+    # D11 — normalize once here: metadata.website can be a bare domain with
+    # no scheme (internal_create_client stores it verbatim), and every
+    # consumer below (homepage fetch, path-probe tier, sitemap probe) turns
+    # it into a URL. See _site_base's docstring for the exact failure mode.
+    website = _site_base(meta.get("website") or "")
     domain = _client_domain(client)
 
     if website:
@@ -3671,7 +3816,7 @@ _JUNIOR_TITLE_RE = re.compile(
 # terms qualify as an override.
 _IT_MGMT_WORD_RE = re.compile(
     r"fachinformatiker|informatik|software|entwickler|developer|engineer|data|cloud|"
-    r"security|cyber|devops|sap|erp|\bit\b|architekt|architect|cio|cto|ciso|head of|leiter",
+    r"security|cyber|devops|\bsap\b|\berp\b|\bit\b|architekt|architect|cio|cto|ciso|head of|leiter",
     re.IGNORECASE,
 )
 
@@ -3826,34 +3971,71 @@ async def _map_needs_to_products(org_id: int, client_name: str, needs: list) -> 
 _POSTING_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 _POSTING_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.I | re.S)
 
+# D17 — a visible separator between the real title and a trailing site-name
+# segment: "Senior Engineer - Acme GmbH", "Data Engineer | Acme", Personio's
+# "... (Gütersloh) › Miele Gruppe", "... – Stellenangebot". Whatever follows
+# the FIRST one is always the site/company name, never part of the role — a
+# plain hyphen only counts with mandatory whitespace on both sides so a
+# compound word like "Kubernetes-Platform" is never mistaken for one.
+_TITLE_SEGMENT_SPLIT_RE = re.compile(r"\s+-\s+|\s*[|›–—]\s*")
+# A bare boilerplate tail with NO separator at all (Workday's "... Job
+# Details") — anchored on the whitespace before it so a role genuinely
+# titled e.g. "IT Support Jobs Coordinator" is untouched.
+_TITLE_BARE_SUFFIX_RE = re.compile(r"\s+(?:job\s*details?|jobdetails)\s*$", re.IGNORECASE)
+_TITLE_FETCH_MAX = 20
+_TITLE_FETCH_CONCURRENCY = 6
+
+
+def _clean_posting_title(title: str) -> str:
+    """D17: html-unescape entities (&amp; -> &), drop a leading
+    "Jobangebot:" prefix, strip everything from the FIRST "|"/" - "/"›"/
+    en-or-em-dash separator onward (that's always the site/company name,
+    e.g. "Senior Engineer - Acme GmbH", "... › Miele Gruppe") plus a bare
+    "Job Details" tail with no separator at all (Workday), and collapse
+    whitespace. '' in, '' out."""
+    text = html.unescape(title or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^\s*jobangebot\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    if not text:
+        return ""
+    m = _TITLE_SEGMENT_SPLIT_RE.search(text)
+    if m:
+        text = text[:m.start()].strip()
+    text = _TITLE_BARE_SUFFIX_RE.sub("", text).strip()
+    return text
+
 
 async def _fetch_posting_title(url: str) -> str:
-    """D10: plain-GET a single job-posting page and return a cleaned
-    <title>/<h1> (company suffix after ' - '/' | ' stripped) — used to
-    replace a sitemap-slug-derived title, which is only ever as good as the
-    URL's slug and gets truncated mid-word for a longer role name. '' on any
-    failure (no response, no title/h1, or an empty one after cleanup) — the
-    caller falls back to the slug title in that case."""
-    html = ""
+    """D10/D17/D19: plain-GET a single job-posting page and return a cleaned
+    <title>/<h1> (_clean_posting_title: html-unescaped, boilerplate site-name
+    suffix/prefix stripped, whitespace collapsed) — used to replace a
+    sitemap-slug-derived title, which is only ever as good as the URL's slug
+    and gets truncated mid-word for a longer role name. '' on any failure
+    (no response, no title/h1, or an empty one after cleanup) — the caller
+    falls back to the slug title in that case."""
+    body = ""
     try:
         async with httpx.AsyncClient(
             timeout=8.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
         ) as http:
             resp = await http.get(url)
             if resp.status_code == 200:
-                html = resp.text
+                body = resp.text
     except Exception:
+        _record_fetch_tier(url, "none", 0)
         return ""
+    # D19 — this tier fetches through its own httpx client (not
+    # _fetch_page_text/_fetch_page_raw), so it must record its own ring-log
+    # entry or title fetches stay invisible to /api/agents/fetch-log.
+    _record_fetch_tier(url, "http" if body else "none", len(body))
     for pattern in (_POSTING_TITLE_RE, _POSTING_H1_RE):
-        m = pattern.search(html or "")
+        m = pattern.search(body or "")
         if not m:
             continue
         raw = re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", m.group(1))).strip()
-        for sep in (" - ", " | "):
-            if sep in raw:
-                raw = raw.split(sep)[0].strip()
-        if raw:
-            return raw
+        cleaned = _clean_posting_title(raw)
+        if cleaned:
+            return cleaned
     return ""
 
 
@@ -3927,11 +4109,32 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
             return
         effective_tier = report_tier if report_tier is not None else tier
         careers_patch: dict = {}
-        # Omit "url" entirely when there's nothing to report (e.g. the "no
-        # careers page found" path) — an empty string here would clobber a
-        # good previously-recorded playbook URL. last_failure_at / error
-        # below still get recorded either way.
-        if url:
+        # D16 — a URL that resolved (200) but yielded zero extractable
+        # positions (e.g. Trumpf's SPA shell) is NOT "the careers URL that
+        # works": recording it as careers.url let the exact same failure
+        # resurface next scan via the metadata-cached branch above and
+        # repeat forever. Record it separately as last_tried_url instead so
+        # _careers_candidates can skip re-suggesting this one URL for a
+        # while but still finds a real careers page through another tier.
+        #
+        # Review fix: last_tried_at is its OWN timestamp, stamped ONLY here
+        # (i.e. only when `url` was actually just re-tried and got 0
+        # positions) — never reuse last_failure_at for this, since that
+        # field is rewritten below on every failure, including a later "no
+        # careers page found" caused by this very skip once last_tried_url
+        # is the only candidate _careers_candidates has to offer. Bumping
+        # the skip's clock from that self-inflicted failure re-armed the
+        # skip forever even after the site was fixed and offering the URL
+        # again every scan.
+        no_positions_failure = not success and reason == "no positions found on careers page"
+        if no_positions_failure and url:
+            careers_patch["last_tried_url"] = url
+            careers_patch["last_tried_at"] = now_iso
+        elif url:
+            # Omit "url" entirely when there's nothing to report (e.g. the
+            # "no careers page found" path) — an empty string here would
+            # clobber a good previously-recorded playbook URL. last_failure_at
+            # / error below still get recorded either way.
             careers_patch["url"] = url
         # D5 — "metadata"/"playbook" mean "we already knew the URL", not a
         # fresh discovery: writing them back as `tier` would erase whatever
@@ -3995,6 +4198,16 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         return summary
 
     if not url:
+        # Review fix — the D16 skip suppressing the ONLY candidate is not
+        # the same failure as "there is genuinely nothing here"; report it
+        # honestly instead of the generic reason so an operator reading
+        # last_error understands why (and that it will re-try on its own).
+        skip_suppressed_url = client.pop("_careers_skip_suppressed_url", None)
+        if skip_suppressed_url:
+            return await _stamp_failure(
+                f"careers page skipped for {_CAREERS_LAST_TRIED_SKIP_DAYS} days "
+                f"after a 0-position scan: {skip_suppressed_url}"
+            )
         return await _stamp_failure("no careers page found")
 
     original_url = url  # the URL the scan started from, for tier reporting below
@@ -4058,9 +4271,6 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                         p["title_source"] = "page"
                     break
 
-    if effective_url and effective_url != meta.get("careers_url"):
-        await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
-
     # From here on `url` always means the URL actually used/found — both the
     # failure stamp below and the success write further down must persist
     # this (effective_url), not the originally discovered/known one; a
@@ -4071,6 +4281,28 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     # Nothing found anywhere — keep any prior good scan, just record we looked.
     if not positions and not needs:
         return await _stamp_failure("no positions found on careers page")
+
+    # D16 — only cache a careers URL once it has actually produced >=1
+    # position. A URL that 200s but yields nothing extractable (e.g.
+    # Trumpf's SPA shell) must not be written to clients.metadata: that
+    # would make the NEXT scan take the "metadata" branch above, skip
+    # discovery entirely, and repeat this exact same failure forever.
+    #
+    # Review nit (documented, not changed): a needs-only scan (positions
+    # empty but needs non-empty) skips this metadata write — gated on
+    # `positions` — yet still falls through to the unconditional
+    # _record_playbook(success=True, ...) near the end of this function,
+    # which DOES write careers.url + last_success_at to the playbook. The
+    # asymmetry is deliberate-by-omission rather than deliberate-by-design:
+    # metadata.careers_url only ever meant "a page that listed positions",
+    # while the playbook's careers.url is reused more loosely (D5's tier
+    # precedence, D2's candidate ranking) and a page that at least yielded
+    # inferred needs is arguably still "worth going back to". Left as-is
+    # rather than widened, since a needs-only success is rare in practice
+    # (extract_jobs' needs are themselves derived FROM positions) and
+    # aligning the two would be a behavior change beyond this review's ask.
+    if positions and effective_url and effective_url != meta.get("careers_url"):
+        await db_module.update_client_metadata(org_id, name, {"careers_url": effective_url})
 
     # Attach each position's own posting URL (the sitemap path gives per-job URLs;
     # match the LLM-cleaned title back to the closest sitemap title).
@@ -4097,14 +4329,23 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
             if best and best_score >= 0.5:
                 p["url"] = best
 
-        # D10 — replace a slug-derived title with the real posting page's
-        # <title>/<h1> for the (at most 8) positions that got a posting URL
-        # above; a fetch that fails or turns up nothing leaves the slug title
-        # in place (title_source stays "slug").
-        slug_positions = [p for p in positions if p.get("title_source") == "slug" and p.get("url")][:8]
+        # D10/D17 — replace a slug-derived title with the real posting page's
+        # <title>/<h1> for the (at most _TITLE_FETCH_MAX) positions that got a
+        # posting URL above; a fetch that fails or turns up nothing leaves the
+        # slug title in place (title_source stays "slug"). Concurrency is
+        # bounded (_TITLE_FETCH_CONCURRENCY) rather than firing all of them
+        # at once now that the cap itself was raised 8 -> 20.
+        slug_positions = [p for p in positions if p.get("title_source") == "slug" and p.get("url")] \
+            [:_TITLE_FETCH_MAX]
         if slug_positions:
+            title_sem = asyncio.Semaphore(_TITLE_FETCH_CONCURRENCY)
+
+            async def _bounded_title(u: str) -> str:
+                async with title_sem:
+                    return await _fetch_posting_title(u)
+
             page_titles = await asyncio.gather(
-                *[_fetch_posting_title(p["url"]) for p in slug_positions]
+                *[_bounded_title(p["url"]) for p in slug_positions]
             )
             for p, page_title in zip(slug_positions, page_titles):
                 if page_title:

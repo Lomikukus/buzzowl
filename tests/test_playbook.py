@@ -273,6 +273,34 @@ def test_classify_tool_calls_empty_result_is_not_content_bearing():
     assert result["careers_candidate_url"] == ""
 
 
+def test_classify_tool_calls_detects_own_domain_jobs_subdomain_candidate():
+    """D12 — a fetch of the client's own jobs.<domain> subdomain (e.g. a
+    Workday-style host jobs.festo.com) must score as a careers candidate
+    even when the PATH itself carries none of the careers words (a bare
+    "/job/<slug>" posting page, not "/jobs" or "/karriere")."""
+    domain = "festo.com"
+    tool_calls = [
+        {"tool": "fetch_page",
+         "args": {"url": "https://jobs.festo.com/job/Bangalore-System-Engineer/1409093733/"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == \
+        "https://jobs.festo.com/job/Bangalore-System-Engineer/1409093733/"
+
+
+def test_classify_tool_calls_third_party_jobs_subdomain_not_a_candidate():
+    """The host-label match must still be gated on own-domain — a jobs.
+    subdomain of some OTHER site (e.g. a job board) must not qualify."""
+    domain = "festo.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://jobs.example-board.com/festo-opening"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == ""
+
+
 def test_classify_tool_calls_ats_candidate_outranks_careers_path_candidate():
     domain = "acme.com"
     tool_calls = [
