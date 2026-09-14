@@ -214,11 +214,14 @@ def test_classify_tool_calls_binary_and_fetch_error_kinds():
 # candidate (never written straight to careers.url/tier)
 # ---------------------------------------------------------------------------
 
+_LONG_JOBS_TEXT = "Open roles: Software Engineer, Sales Manager. " * 6  # >= 200 chars
+
+
 def test_classify_tool_calls_detects_workday_candidate():
     domain = "acme.com"
     tool_calls = [
         {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
-         "result": "Open roles: Software Engineer, Sales Manager", "ts": "t0"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
     ]
     result = playbook.classify_tool_calls(tool_calls, domain)
     assert result["careers_candidate_url"] == "https://acme.wd3.myworkdayjobs.com/en-US/Acme"
@@ -228,7 +231,7 @@ def test_classify_tool_calls_detects_own_domain_careers_path_candidate():
     domain = "acme.com"
     tool_calls = [
         {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere"},
-         "result": "Open roles: Software Engineer", "ts": "t0"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
     ]
     result = playbook.classify_tool_calls(tool_calls, domain)
     assert result["careers_candidate_url"] == "https://acme.com/karriere"
@@ -240,7 +243,7 @@ def test_classify_tool_calls_ignores_third_party_careers_looking_url():
     domain = "acme.com"
     tool_calls = [
         {"tool": "fetch_page", "args": {"url": "https://competitor.example/karriere"},
-         "result": "Some competitor content", "ts": "t0"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
     ]
     result = playbook.classify_tool_calls(tool_calls, domain)
     assert result["careers_candidate_url"] == ""
@@ -256,13 +259,27 @@ def test_classify_tool_calls_blocked_fetch_is_never_a_candidate():
     assert result["careers_candidate_url"] == ""
 
 
+def test_classify_tool_calls_empty_result_is_not_content_bearing():
+    # WP8 review nit 6: "clean" only means "not one of the sentinel
+    # strings" — an empty/near-empty 200 body is not actually content, and
+    # must not score as a careers candidate just because the URL matches.
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere"}, "result": "", "ts": "t0"},
+        {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
+         "result": "short", "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == ""
+
+
 def test_classify_tool_calls_ats_candidate_outranks_careers_path_candidate():
     domain = "acme.com"
     tool_calls = [
         {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere"},
-         "result": "landing page", "ts": "t0"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
         {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
-         "result": "Open roles: Software Engineer", "ts": "t1"},
+         "result": _LONG_JOBS_TEXT, "ts": "t1"},
     ]
     result = playbook.classify_tool_calls(tool_calls, domain)
     assert result["careers_candidate_url"] == "https://acme.wd3.myworkdayjobs.com/en-US/Acme"
@@ -271,7 +288,7 @@ def test_classify_tool_calls_ats_candidate_outranks_careers_path_candidate():
 async def test_reflect_on_run_records_pi_run_careers_candidate():
     tool_calls = [
         {"tool": "fetch_page", "args": {"url": "https://acme.wd3.myworkdayjobs.com/en-US/Acme"},
-         "result": "Open roles: Software Engineer", "ts": "t0"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
     ]
     db = MagicMock()
     db.get_agent_run = AsyncMock(return_value={

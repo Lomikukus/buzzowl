@@ -428,6 +428,7 @@ def _is_own_domain(url: str, domain: str) -> bool:
 
 
 _CAREERS_CANDIDATE_PATH_RE = re.compile(r"karriere|career|jobs|stellen", re.IGNORECASE)
+_CAREERS_CANDIDATE_MIN_CONTENT_CHARS = 200
 
 
 def _ats_match_safe(host: str) -> bool:
@@ -520,13 +521,17 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
                 if 0 < i - j <= 3 and query not in good_queries:
                     good_queries.append(query)
             # D2 — this same clean fetch may also be a careers/ATS candidate.
-            host = _host_of(url)
-            is_ats = _ats_match_safe(host)
-            is_careers_path = _is_own_domain(url, domain) and bool(
-                _CAREERS_CANDIDATE_PATH_RE.search(urlparse(url).path)
-            )
-            if is_ats or is_careers_path:
-                careers_candidates.append((2 if is_ats else 1, i, url))
+            # "Clean" only means "not one of the sentinel strings" — an empty
+            # or near-empty 200 (e.g. a blank body) is not actually
+            # content-bearing and must not score either (WP8 review nit 6).
+            if len(result.strip()) >= _CAREERS_CANDIDATE_MIN_CONTENT_CHARS:
+                host = _host_of(url)
+                is_ats = _ats_match_safe(host)
+                is_careers_path = _is_own_domain(url, domain) and bool(
+                    _CAREERS_CANDIDATE_PATH_RE.search(urlparse(url).path)
+                )
+                if is_ats or is_careers_path:
+                    careers_candidates.append((2 if is_ats else 1, i, url))
 
     careers_candidate_url = ""
     if careers_candidates:
