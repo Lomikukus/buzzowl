@@ -308,6 +308,80 @@ class TestProbePublishedDate:
 
 
 # ---------------------------------------------------------------------------
+# _extract_date_near (WP9 review BLOCKER 1)
+# ---------------------------------------------------------------------------
+
+def _anchor_dates(html: str) -> dict:
+    """href -> _extract_date_near(...) for every <a> in html, exactly how
+    _newsroom_candidates drives it (m.end() of the whole anchor match)."""
+    out = {}
+    for m in pipeline._ANCHOR_RE.finditer(html):
+        out[m.group(1)] = pipeline._extract_date_near(html, m.end())
+    return out
+
+
+class TestExtractDateNear:
+    def test_two_adjacent_compact_items_keep_their_own_dates(self):
+        """The original bug: an unbounded +-300-char window let the FIRST
+        <time> anywhere nearby win for every anchor. Three compact,
+        back-to-back items (no padding between them) must each resolve
+        their own trailing marker, in three different formats."""
+        html = (
+            '<a href="/a">A</a> 12.09.2026'
+            '<a href="/b">B</a> 2026-09-10'
+            '<a href="/c">C</a> <time datetime="2026-09-08"></time>'
+        )
+        dates = _anchor_dates(html)
+        assert dates["/a"] == "2026-09-12"
+        assert dates["/b"] == "2026-09-10"
+        assert dates["/c"] == "2026-09-08"
+
+    def test_undated_item_between_two_dated_ones_gets_no_date(self):
+        html = (
+            '<a href="/a">A</a> 12.09.2026'
+            '<a href="/b">B has no date of its own</a>'
+            '<a href="/c">C</a> 10.09.2026'
+        )
+        dates = _anchor_dates(html)
+        assert dates["/a"] == "2026-09-12"
+        assert dates["/b"] is None
+        assert dates["/c"] == "2026-09-10"
+
+    def test_neighbours_trailing_date_never_leaks_backward(self):
+        """A lone anchor with a dated neighbour right before it, and
+        nothing of its own after it, must not inherit the neighbour's
+        date — this is the exact bleed the original window bug caused."""
+        html = '<a href="/a">A</a> 12.09.2026<a href="/b">B</a>'
+        dates = _anchor_dates(html)
+        assert dates["/a"] == "2026-09-12"
+        assert dates["/b"] is None
+
+    def test_dated_200_days_ago_resolves_but_is_later_dropped_by_age(self):
+        """_extract_date_near itself has no age opinion — the 90-day gate
+        lives in _newsroom_candidates. This just confirms an old date is
+        still read correctly (so the age filter has something to reject)."""
+        html = '<a href="/old">Old</a> 01.01.2020'
+        dates = _anchor_dates(html)
+        assert dates["/old"] == "2020-01-01"
+
+    def test_next_anchor_bounds_the_forward_search(self):
+        """A date belonging to a THIRD item, two anchors away, must never
+        be visible to the first, even though a flat 300-char window would
+        easily have reached it (the original bug) — the forward search
+        must stop at the very next `<a`, not merely somewhere within
+        `window` chars."""
+        html = '<a href="/a">A</a><a href="/b">B</a><a href="/c">C</a> 12.09.2026'
+        dates = _anchor_dates(html)
+        assert dates["/a"] is None
+        assert dates["/b"] is None
+        assert dates["/c"] == "2026-09-12"
+
+    def test_no_next_anchor_still_bounded_by_window(self):
+        html = '<a href="/a">A</a> 12.09.2026'
+        assert _anchor_dates(html)["/a"] == "2026-09-12"
+
+
+# ---------------------------------------------------------------------------
 # _existing_signal_urls
 # ---------------------------------------------------------------------------
 
@@ -577,6 +651,12 @@ class TestNewsroomCandidates:
         assert all(c["engine"] == "newsroom" for c in candidates)
         assert all("otherdomain" not in c["url"] for c in candidates)
         assert blocked == []
+        # Each item keeps its OWN date, not a neighbour's (WP9 review BLOCKER 1) —
+        # this used to yield 2026-09-11 (item B's <time>) for every item.
+        by_url = {c["url"]: c["_published"] for c in candidates}
+        assert by_url["https://acme.com/presse/produkt-a"] == "2026-09-12"
+        assert by_url["https://acme.com/presse/produkt-b"] == "2026-09-11"
+        assert by_url["https://acme.com/presse/produkt-c"] == "2026-09-10"
 
     @pytest.mark.asyncio
     async def test_no_date_nearby_dropped(self, monkeypatch):

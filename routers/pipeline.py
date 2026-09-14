@@ -1812,34 +1812,67 @@ async def _probe_published_date(url: str) -> Optional[str]:
     return _extract_published_from_html(html)
 
 
-def _extract_date_near(html: str, start: int, end: int, window: int = 300) -> Optional[str]:
-    """A date near one <a> match on a listing page (a newsroom index lists
-    many items, each with its own date, so — unlike
-    _extract_published_from_html — this looks only at a window of raw HTML
-    around the anchor): a sibling `<time datetime>` first, else an ISO or
-    German (dd.mm.yyyy) date in the surrounding visible text."""
-    ctx = html[max(0, start - window): min(len(html), end + window)]
-    m = _TIME_TAG_RE.search(ctx)
-    if m:
+_ANCHOR_OPEN_RE = re.compile(r"<a\b", re.I)
+
+
+def _extract_date_near(html: str, end: int, window: int = 300) -> Optional[str]:
+    """The date belonging to ONE <a> match on a listing page (a newsroom
+    index lists many items, each with its own date) — unlike
+    _extract_published_from_html (a whole single-article page), this
+    targets the standard trailing-marker convention: title link, then its
+    own date, right after it.
+
+    Searches FORWARD ONLY, from this anchor's own close (`end`) up to the
+    next `<a` (or `window` chars, whichever is nearer) — deliberately never
+    backward from the anchor's start. A symmetric +-window scan (the
+    original bug) could reach past a neighbour into a THIRD item's date;
+    bounding it to "the previous </a>" instead of dropping backward search
+    entirely does not actually fix that — the gap between two anchors is
+    always exactly the PRECEDING anchor's own forward region, so a
+    backward scan into it either re-attributes that neighbour's date to an
+    anchor that has none of its own (an undated item between two dated
+    ones would incorrectly inherit one), or — if instead split at the
+    midpoint to avoid that — truncates a real date that sits hard against
+    the next anchor in a compact, unpadded list. Forward-only sidesteps
+    both failure modes: an anchor with no trailing marker of its own
+    always finds nothing, and a real marker is always read in full.
+
+    Within that forward region, every `<time datetime>` / ISO / German
+    (dd.mm.yyyy) match is a candidate; the NEAREST one to the anchor (by
+    character distance) wins — not whichever pattern is tried first."""
+    fwd_limit = min(len(html), end + window)
+    next_anchor = _ANCHOR_OPEN_RE.search(html, end)
+    if next_anchor:
+        fwd_limit = min(fwd_limit, next_anchor.start())
+
+    segment = html[end:fwd_limit]
+    candidates: list[tuple[int, str]] = []
+
+    for m in _TIME_TAG_RE.finditer(segment):
         iso = _coerce_iso_date(m.group(1))
         if iso:
-            return iso
-    text_ctx = _HTML_TAG_RE.sub(" ", ctx)
-    m = _TEXT_ISO_DATE_RE.search(text_ctx)
-    if m:
+            candidates.append((m.start(), iso))
+
+    text_seg = _HTML_TAG_RE.sub(" ", segment)
+    for m in _TEXT_ISO_DATE_RE.finditer(text_seg):
         y, mo, d = (int(g) for g in m.groups())
         try:
-            return date(y, mo, d).isoformat()
+            iso = date(y, mo, d).isoformat()
         except ValueError:
-            pass
-    m = _TEXT_DE_DATE_RE.search(text_ctx)
-    if m:
+            continue
+        candidates.append((m.start(), iso))
+    for m in _TEXT_DE_DATE_RE.finditer(text_seg):
         d, mo, y = (int(g) for g in m.groups())
         try:
-            return date(y, mo, d).isoformat()
+            iso = date(y, mo, d).isoformat()
         except ValueError:
-            pass
-    return None
+            continue
+        candidates.append((m.start(), iso))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0])
+    return candidates[0][1]
 
 
 # ---------------------------------------------------------------------------
