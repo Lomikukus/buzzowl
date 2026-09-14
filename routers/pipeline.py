@@ -987,6 +987,193 @@ def _site_base(website: str) -> str:
     return f"{p.scheme}://{host}{path}"
 
 
+# D27 — some clients' recorded domain (metadata.website) is stale: the site
+# now redirects EVERYTHING to a different registrable domain (vorwerk.de ->
+# vorwerk.com). _client_domain still returns the ORIGINAL domain (playbooks
+# stay keyed by it, unchanged — see playbook.domain_of), but a probe/harvest
+# result landing on the new domain must still count as "the client's own
+# site", or it's silently discarded as off-domain forever (root cause for
+# Vorwerk — every genuine careers-page result on vorwerk.com was dropped).
+_CANONICAL_DOMAIN_RECHECK_DAYS = 30
+
+# Review B1 — ccTLD-style compound public suffixes where the registrable
+# domain is the last THREE labels, not two (acme.co.uk, not co.uk itself).
+# Not a full public-suffix list — a small, deliberately bounded set of the
+# common ones this codebase's clients (mostly DE/EU B2B) are likely to hit.
+_MULTI_PART_PUBLIC_SUFFIXES = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "ltd.uk", "plc.uk",
+    "co.jp", "co.nz", "co.za", "co.in", "co.kr", "co.id",
+    "com.au", "com.br", "com.mx", "com.tr", "com.sg", "com.hk", "com.cn",
+}
+
+# Review B1 — domain parking / for-sale placeholder hosts a broken redirect
+# can land on; never a company's own site regardless of any other check.
+_PARKING_HOST_DOMAINS = {
+    "sedoparking.com", "sedo.com", "parkingcrew.net", "bodis.com", "above.com",
+    "parklogic.com", "dan.com", "hugedomains.com", "godaddy.com", "afternic.com",
+    "undeveloped.com", "domainmarket.com", "namecheap.com", "parked.com",
+    "trellian.com", "voodoo.com", "uniregistry.com",
+}
+
+
+def _registrable_domain(host: str) -> str:
+    """The registrable domain of `host`: the last two labels, or the last
+    three when the last two form a known compound public suffix
+    (_MULTI_PART_PUBLIC_SUFFIXES, e.g. "acme.co.uk" not "co.uk"). Strips a
+    leading "www." first. '' in (or too few labels to have one), same
+    string back out."""
+    host = (host or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    labels = [l for l in host.split(".") if l]
+    if len(labels) < 2:
+        return host
+    last_two = ".".join(labels[-2:])
+    if last_two in _MULTI_PART_PUBLIC_SUFFIXES and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return last_two
+
+
+def _registrable_sld_label(host: str) -> str:
+    """The single label identifying the registrant within the registrable
+    domain — "vorwerk" from both vorwerk.com and vorwerk.co.uk. Used to
+    require a redirect target to plausibly be the SAME company under a
+    different TLD/ccTLD, not merely "some other 2-label domain"."""
+    labels = _registrable_domain(host).split(".")
+    return labels[0] if labels and labels[0] else ""
+
+
+async def _resolve_site_domain(org_id: int, client: dict) -> str:
+    """GET the client's homepage once (_site_base, following redirects, 10s)
+    and, if the final resolved host's REGISTRABLE domain (_registrable_
+    domain — strips subdomains, so a redirect to jobs.vorwerk.com still
+    resolves to vorwerk.com) differs from _client_domain(client), record it
+    as metadata.canonical_domain (and stamp metadata.canonical_checked_at)
+    so _own_or_ats and the news block's own-domain checks can treat BOTH as
+    "own". Also records the alias on the domain's site playbook
+    (aliases: [canonical]) — the playbook document itself stays keyed by
+    the ORIGINAL domain (site-playbook-vorwerk.de).
+
+    Review B1 — a redirect target is adopted ONLY when it plausibly IS the
+    same company: rejected outright when it's a known aggregator
+    (_AGGREGATOR_DOMAINS), an ATS host (_ats_match), a domain-parking host
+    (_PARKING_HOST_DOMAINS), or its registrable-domain SLD label doesn't
+    match the original's (vorwerk.de -> vorwerk.com: "vorwerk" == "vorwerk",
+    accepted; example.de -> sedoparking.com/linkedin.com/some-unrelated.com:
+    SLD mismatch, rejected). A rejected or absent redirect returns the
+    client's own domain unchanged — never a wrong adopted one.
+
+    Review B2 — cross-client leakage guard: a candidate alias is also
+    rejected when it's already recorded as some OTHER client's own website
+    domain (playbook._domain_belongs_to_a_client), so two unrelated clients
+    whose sites happen to both redirect toward the same third domain (or an
+    acquired subsidiary now folded into a sibling client's own site) never
+    adopt each other's domain as an alias.
+
+    Review nit 5 — metadata.canonical_checked_at is stamped on EVERY live
+    check, found-a-redirect or not, so a healthy client (the common case)
+    also gets the 30-day cache and doesn't pay for a fresh homepage GET on
+    every single discovery/news call.
+
+    Cached: the resolution GET is skipped when metadata.canonical_checked_at
+    is younger than _CANONICAL_DOMAIN_RECHECK_DAYS days, returning whatever
+    metadata.canonical_domain says (possibly "").
+
+    Returns the canonical domain when an accepted redirect was found (this
+    call or a cached prior one), else _client_domain(client)'s own domain
+    unchanged. Never "" when a domain could be determined at all."""
+    domain = _client_domain(client)
+    if not domain:
+        return ""
+    meta = client.get("metadata") or {}
+    checked_at = meta.get("canonical_checked_at")
+    if checked_at:
+        try:
+            if (datetime.now(timezone.utc) - datetime.fromisoformat(checked_at)) \
+                    <= timedelta(days=_CANONICAL_DOMAIN_RECHECK_DAYS):
+                return (meta.get("canonical_domain") or "").strip() or domain
+        except (ValueError, TypeError):
+            pass
+
+    website = _site_base(meta.get("website") or "")
+    if not website:
+        return domain
+
+    resolved_domain = domain
+    try:
+        async with httpx.AsyncClient(
+            timeout=10.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
+        ) as http:
+            resp = await http.get(website)
+            final_host = urlparse(str(resp.url)).netloc.lower()
+            if final_host:
+                resolved_domain = _registrable_domain(final_host)
+    except Exception:
+        resolved_domain = domain
+
+    canonical = ""
+    if resolved_domain != domain:
+        # B1 — reject an aggregator/ATS/parking host, or one whose SLD
+        # label doesn't match the original's (not plausibly the same
+        # company under a different TLD).
+        if (resolved_domain not in _AGGREGATOR_DOMAINS
+                and resolved_domain not in _PARKING_HOST_DOMAINS
+                and not _ats_match(resolved_domain)
+                and _registrable_sld_label(resolved_domain) == _registrable_sld_label(domain)):
+            canonical = resolved_domain
+
+    if canonical:
+        # B2 — never adopt a domain that's already someone ELSE's own site.
+        try:
+            import playbook  # type: ignore
+            if await playbook._domain_belongs_to_a_client(org_id, canonical, exclude_name=client["name"]):
+                canonical = ""
+        except Exception as exc:
+            console.print(f"[yellow]canonical-domain cross-client check failed for {client['name']}: {exc}[/yellow]")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    patch: dict = {"canonical_checked_at": now_iso}
+    if canonical:
+        patch["canonical_domain"] = canonical
+    try:
+        await db_module.update_client_metadata(org_id, client["name"], patch)
+    except Exception as exc:
+        console.print(f"[yellow]canonical-domain resolve failed for {client['name']}: {exc}[/yellow]")
+    meta["canonical_checked_at"] = now_iso
+    if canonical:
+        meta["canonical_domain"] = canonical
+    client["metadata"] = meta
+
+    if not canonical:
+        return domain
+
+    try:
+        import playbook  # type: ignore
+        await playbook.record(org_id, domain, {"aliases": [canonical]}, website=meta.get("website") or "")
+    except Exception as exc:
+        console.print(f"[yellow]canonical-domain alias record failed for {client['name']}: {exc}[/yellow]")
+    return canonical
+
+
+def _known_alias_domain(client: dict, pb: Optional[dict]) -> str:
+    """Review nit 2 — the client's canonical alias domain, if already known,
+    WITHOUT triggering a new resolution (_resolve_site_domain is the only
+    writer): prefer a live metadata.canonical_domain (this session's own
+    resolution, or a prior one already persisted to this client); fall back
+    to the domain's site playbook aliases list (written by a resolution
+    from a different call site, run, or session) when metadata doesn't have
+    it yet. Returns "" when nothing is known."""
+    canonical = ((client.get("metadata") or {}).get("canonical_domain") or "").strip()
+    if canonical:
+        return canonical
+    aliases = (pb or {}).get("aliases") or []
+    for a in aliases:
+        a = (a or "").strip()
+        if a:
+            return a
+    return ""
+
+
 # Aggregator/registry/social domains that are never a company's own website
 _AGGREGATOR_DOMAINS = {
     "linkedin.com", "xing.com", "facebook.com", "instagram.com", "youtube.com",
@@ -1214,30 +1401,35 @@ async def _probe_newsroom_paths(website: str) -> list[dict]:
     return hits
 
 
-async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> list[dict]:
-    """Homepage link harvest for newsroom/press pages: GET the homepage and
+async def _harvest_links_news(website: str, keys: tuple, own_domain: str, *,
+                               alias: str = "") -> list[dict]:
+    """Homepage link harvest for newsroom/press pages: fetch the homepage and
     pull out <a href> links whose href or visible text mentions one of `keys`,
-    restricted to `own_domain` (or a subdomain of it).
+    restricted to `own_domain` (or a subdomain of it) — or, D27, `alias` (the
+    client's canonical alias domain, when its recorded domain just redirects
+    elsewhere — e.g. vorwerk.com when metadata.website is still vorwerk.de).
+
+    Trumpf fix — routed through _fetch_page_raw (plain GET -> browser-
+    service -> Camofox, the same ladder the jobs block's homepage harvest
+    already uses) instead of doing its own bare httpx GET: a homepage that
+    503s a plain GET (trumpf.com) never yielded its own /de_DE/newsroom/
+    link before this, even though Camofox renders the page fine.
+    _fetch_page_raw's raw_html already falls back to Camofox's rebuilt
+    <a href> markup (_camofox_links_html) when the plain GET comes back
+    empty/thin, so harvesting from THAT instead of a second, separate plain
+    GET picks it up.
 
     Deliberately separate from the jobs block's `_harvest_links(html,
     base_url, keys, own_domain)`: that one parses HTML it is handed and
-    returns bare URLs, this one does its own GET and keeps the link text as
-    a label (used to name the discovered source). Kept as one mockable unit
-    so `TestDiscoverSources` never makes a real HTTP call.
+    returns bare URLs, this one does its own fetch and keeps the link text as
+    a label (used to name the discovered source). Kept as one mockable unit,
+    same name/signature, so `TestDiscoverSources` never makes a real HTTP
+    call.
     """
     if not website:
         return []
     base = _site_base(website)  # D11 — same normalization the jobs block uses
-    html = ""
-    try:
-        async with httpx.AsyncClient(
-            timeout=12.0, follow_redirects=True, headers={"User-Agent": _SOURCE_UA},
-        ) as http:
-            resp = await http.get(base)
-            if resp.status_code == 200:
-                html = resp.text or ""
-    except Exception:
-        return []
+    _text, html = await _fetch_page_raw(base)
     if not html:
         return []
     hits: list[dict] = []
@@ -1250,7 +1442,9 @@ async def _harvest_links_news(website: str, keys: tuple, own_domain: str) -> lis
             continue
         url = urljoin(base, href)
         host = _result_domain(url)
-        if not own_domain or not (host == own_domain or host.endswith("." + own_domain)):
+        is_own = own_domain and (host == own_domain or host.endswith("." + own_domain))
+        is_alias = alias and (host == alias or host.endswith("." + alias))
+        if not (is_own or is_alias):
             continue
         if url in seen:
             continue
@@ -1294,6 +1488,20 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
         return existing
 
     domain = _client_domain(client)
+    # D27 — vorwerk.de -> vorwerk.com: resolve (and cache) the client's
+    # canonical alias domain, so a genuine newsroom result on the NEW domain
+    # counts as "own" too, not just the stale recorded one. Review nit 2 —
+    # fall back to the domain's playbook aliases when this pass's own live
+    # check found nothing new.
+    alias = await _resolve_site_domain(org_id, client)
+    if alias == domain:
+        alias = ""
+    if not alias and domain:
+        try:
+            import playbook  # type: ignore
+            alias = _known_alias_domain(client, await playbook.load(org_id, domain))
+        except Exception:
+            pass
 
     candidates: list[tuple[int, str, str]] = []
 
@@ -1305,7 +1513,7 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
         candidates.append((0, h["url"], h.get("label", "")))
 
     try:
-        harvested = await _harvest_links_news(website, _SOURCE_KEYWORDS, domain)
+        harvested = await _harvest_links_news(website, _SOURCE_KEYWORDS, domain, alias=alias)
     except Exception:
         harvested = []
     for h in harvested:
@@ -1323,7 +1531,9 @@ async def _discover_client_sources(org_id: int, client: dict) -> list[dict]:
             if not url.startswith("http"):
                 continue
             host = _result_domain(url)
-            if not (host == domain or host.endswith("." + domain)):
+            is_own = host == domain or host.endswith("." + domain)
+            is_alias = alias and (host == alias or host.endswith("." + alias))
+            if not (is_own or is_alias):
                 continue
             candidates.append((2, url, (r.get("title") or "")[:60]))
 
@@ -2085,6 +2295,19 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
     if not urls:
         return [], []
 
+    # D27 — vorwerk.de -> vorwerk.com: an article link on a newsroom page
+    # can itself live on the canonical alias domain, not the stale recorded
+    # one — resolve (and cache) it so the own-domain filter below accepts
+    # it. Only worth the extra GET once there's actually a newsroom page to
+    # read. Review nit 2 — fall back to the domain's playbook aliases
+    # (already loaded as `pb` above) when this pass's own live check found
+    # nothing new.
+    alias = await _resolve_site_domain(org_id, client)
+    if alias == domain:
+        alias = ""
+    if not alias:
+        alias = _known_alias_domain(client, pb)
+
     today = datetime.now(timezone.utc).date()
     now_iso = datetime.now(timezone.utc).isoformat()
     candidates: list[dict] = []
@@ -2135,7 +2358,9 @@ async def _newsroom_candidates(org_id: int, client: dict) -> tuple[list[dict], l
             if not full.startswith("http"):
                 continue
             host = _result_domain(full)
-            if not (host == domain or host.endswith("." + domain)):
+            is_own = host == domain or host.endswith("." + domain)
+            is_alias = alias and (host == alias or host.endswith("." + alias))
+            if not (is_own or is_alias):
                 continue
             norm = _norm_news_url(full)
             if not norm or norm in norm_seen:
@@ -2337,6 +2562,15 @@ def _write_news_signal_content(why: str, published: Optional[str], url: str) -> 
     return f"{why}\n\nPublished: {published or 'unknown'}\nSource: {url}\n\n## Sources\n- {url}"
 
 
+# D20 review B5 — "majority of the configured/attempted engines"
+# unresponsive: SearXNG's own engine count varies by deployment, and
+# _news_candidates doesn't plumb a "total configured" number through, so
+# this is the reviewer's own concrete heuristic rather than a true
+# percentage — a fixed engines-down floor that only trips once most of a
+# typical ~7-8 engine deployment is suspended, not on one or two flaky ones.
+_NEWS_MAJORITY_UNRESPONSIVE = 4
+
+
 async def _client_news_scan(
     org_id: int, client: dict, *, run_id: Optional[int] = None, max_write: int = 8,
 ) -> dict:
@@ -2345,20 +2579,23 @@ async def _client_news_scan(
 
     Flow: SearXNG candidates (_news_candidates) plus the client's own-
     newsroom tier (_newsroom_candidates, backend-independent of SearXNG)
-    minus already-known signal URLs → one llm.acomplete call → keep
-    relevance ≥2 → index_document + link_document for each (capped at
-    max_write).
+    minus already-known signal URLs → one llm.acomplete call (skipped when
+    there's nothing fresh to score) → keep relevance ≥2 → index_document +
+    link_document for each (capped at max_write).
 
-    Before scoring, a degraded SearXNG backend is detected and reported
-    instead of silently returning found=0/error=None: either every
-    news-category query came back with zero raw results while ≥1 engine was
-    unresponsive, or SearXNG results came back but 100% stayed undated even
-    after the page-header probe (step 3). Either sets result["error"] and
-    writes nothing — UNLESS the newsroom tier alone found ≥3 candidates, in
-    which case there is real news regardless of the search backend and the
-    scan proceeds with result["warning"] set instead of failing the part.
-    A total SearXNG outage (every query raised) is retried once after 20s
-    before giving up as before; an LLM failure writes nothing. Returns
+    Two independent degraded-backend signals: (1) SearXNG answered but every
+    result stayed undated even after the page-header probe, with nothing
+    from the newsroom tier either — hard-fails before scoring, nothing to
+    score. (2) D20 review B5: once scoring is done, a MAJORITY of the
+    configured search engines (_NEWS_MAJORITY_UNRESPONSIVE or more)
+    reporting unresponsive means result["written"] == 0 can no longer be
+    trusted as "genuinely no news" — regardless of how many raw candidates
+    were found — and fails the part (result["error"]); the same
+    majority-unresponsive backend with something actually written is only
+    worth a result["warning"]; fewer than that many unresponsive engines
+    sets neither, and no unresponsive engines at all guarantees error is
+    None. A total SearXNG outage (every query raised) is retried once after
+    20s before giving up as before; an LLM failure writes nothing. Returns
     {found, scored, written, max_relevance, error}, plus warning/
     unresponsive/newsroom_found when relevant."""
     name = client["name"]
@@ -2383,7 +2620,6 @@ async def _client_news_scan(
     candidates = data.get("candidates") or []
     unresponsive = data.get("unresponsive") or []
     undated_total = data.get("undated_total", 0)
-    news_zero_all = data.get("news_zero_all", False)
 
     try:
         newsroom_candidates, newsroom_blocked = await _newsroom_candidates(org_id, client)
@@ -2403,117 +2639,111 @@ async def _client_news_scan(
             except Exception as exc:
                 console.print(f"[yellow]news scan: playbook blocked_urls record failed for '{name}': {exc}[/yellow]")
 
-    degraded_reason = None
-    if not candidates and unresponsive and news_zero_all:
-        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
-        degraded_reason = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
-    elif not candidates and undated_total > 0:
-        degraded_reason = "search results undated"
-
-    newsroom_saves_it = len(newsroom_candidates) >= 3
-
-    if degraded_reason and not newsroom_saves_it:
-        result["error"] = degraded_reason
-        if unresponsive:
-            result["unresponsive"] = unresponsive
-        return result
-
-    if degraded_reason and newsroom_saves_it:
-        # News exists (the newsroom tier alone found enough) — don't fail
-        # the part, but still say the search backend was degraded.
-        result["warning"] = degraded_reason
-    elif news_zero_all and unresponsive:
-        # Nit: candidates can be non-empty here (e.g. the site: domain
-        # query still worked) even though every news-category query was
-        # degraded — that reads as healthy unless flagged explicitly.
-        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
-        result["warning"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
-
     if unresponsive:
         result["unresponsive"] = unresponsive
 
-    all_candidates = candidates + newsroom_candidates
+    # A distinct, non-engine-count concern: SearXNG answered but nothing
+    # ever got a usable date, even after the page-header probe, and the
+    # newsroom tier didn't turn up anything either — no point scoring an
+    # empty candidate list.
+    if not candidates and not newsroom_candidates and undated_total > 0:
+        result["error"] = "search results undated"
+        return result
 
+    all_candidates = candidates + newsroom_candidates
     existing = await _existing_signal_urls(org_id, client_id)
     fresh = [c for c in all_candidates if c["_norm_url"] not in existing]
     result["found"] = len(fresh)
-    if not fresh:
-        return result
-
-    prompt = _NEWS_SCORE_PROMPT.format(
-        subject=name, n=len(fresh), listing=_news_listing(fresh),
-        rules=_rules_block(await _news_lessons_block(org_id)),
-    )
-    try:
-        reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
-    except Exception as exc:
-        console.print(f"[yellow]news scan: LLM scoring failed for '{name}': {exc}[/yellow]")
-        result["error"] = f"llm scoring failed: {exc}"
-        return result
-
-    scores = _parse_json_list(reply)
-    result["scored"] = len(scores)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     good_queries: set[str] = set()
     written = 0
     max_rel = 0
-    for item in scores:
-        if written >= max_write:
-            break
-        if not isinstance(item, dict):
-            continue
-        try:
-            idx = int(item.get("i"))
-            relevance = int(item.get("relevance"))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= idx < len(fresh)) or relevance < 2:
-            continue
-        cand = fresh[idx]
-        norm = cand["_norm_url"]
-        url = cand.get("url", "")
-        headline = str(item.get("headline") or cand.get("title") or "")[:90]
-        why = str(item.get("why") or "")[:160]
-        signal_type = str(item.get("signal_type") or "news").strip().lower()
-        if signal_type not in ("opportunity", "risk", "pain_point", "news"):
-            signal_type = "news"
-        published = cand.get("_published")
-        doc_id = f"news-{client_id}-{hashlib.sha1(norm.encode()).hexdigest()[:10]}"
-        doc_db_id = await db_module.index_document(
-            org_id=org_id,
-            doc_id=doc_id,
-            doc_type="signal",
-            title=headline,
-            content=_write_news_signal_content(why, published, url),
-            metadata={
-                "source_url": url,
-                "published_at": published,
-                "signal_type": signal_type,
-                "relevance_score": relevance,
-                "subject": name,
-                "from_news_scan": True,
-                "query": cand.get("query", ""),
-                # D14 — which tier actually produced this signal (a SearXNG
-                # engine name like "bing news", or "newsroom" for the
-                # own-newsroom tier) — dropped before, so there was no way
-                # to audit after the fact which tier is doing the work.
-                "engine": cand.get("engine") or "",
-                "service": "python",
-            },
-            embedding=[],
-            source="agent",
-            agent_run_id=run_id,
+
+    if fresh:
+        prompt = _NEWS_SCORE_PROMPT.format(
+            subject=name, n=len(fresh), listing=_news_listing(fresh),
+            rules=_rules_block(await _news_lessons_block(org_id)),
         )
-        if doc_db_id and doc_db_id > 0:
-            await db_module.link_document(doc_db_id, "client", client_id)
-            written += 1
-            max_rel = max(max_rel, relevance)
-            if cand.get("query"):
-                good_queries.add(cand["query"])
+        try:
+            reply = await llm.acomplete(prompt, role="research", timeout=180, org_id=org_id)
+        except Exception as exc:
+            console.print(f"[yellow]news scan: LLM scoring failed for '{name}': {exc}[/yellow]")
+            result["error"] = f"llm scoring failed: {exc}"
+            return result
+
+        scores = _parse_json_list(reply)
+        result["scored"] = len(scores)
+
+        for item in scores:
+            if written >= max_write:
+                break
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("i"))
+                relevance = int(item.get("relevance"))
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= idx < len(fresh)) or relevance < 2:
+                continue
+            cand = fresh[idx]
+            norm = cand["_norm_url"]
+            url = cand.get("url", "")
+            headline = str(item.get("headline") or cand.get("title") or "")[:90]
+            why = str(item.get("why") or "")[:160]
+            signal_type = str(item.get("signal_type") or "news").strip().lower()
+            if signal_type not in ("opportunity", "risk", "pain_point", "news"):
+                signal_type = "news"
+            published = cand.get("_published")
+            doc_id = f"news-{client_id}-{hashlib.sha1(norm.encode()).hexdigest()[:10]}"
+            doc_db_id = await db_module.index_document(
+                org_id=org_id,
+                doc_id=doc_id,
+                doc_type="signal",
+                title=headline,
+                content=_write_news_signal_content(why, published, url),
+                metadata={
+                    "source_url": url,
+                    "published_at": published,
+                    "signal_type": signal_type,
+                    "relevance_score": relevance,
+                    "subject": name,
+                    "from_news_scan": True,
+                    "query": cand.get("query", ""),
+                    # D14 — which tier actually produced this signal (a SearXNG
+                    # engine name like "bing news", or "newsroom" for the
+                    # own-newsroom tier) — dropped before, so there was no way
+                    # to audit after the fact which tier is doing the work.
+                    "engine": cand.get("engine") or "",
+                    "service": "python",
+                },
+                embedding=[],
+                source="agent",
+                agent_run_id=run_id,
+            )
+            if doc_db_id and doc_db_id > 0:
+                await db_module.link_document(doc_db_id, "client", client_id)
+                written += 1
+                max_rel = max(max_rel, relevance)
+                if cand.get("query"):
+                    good_queries.add(cand["query"])
 
     result["written"] = written
     result["max_relevance"] = max_rel
+
+    # D20 review B5 — degraded signal from a MAJORITY of configured engines
+    # being unresponsive, independent of `found`: nothing written while
+    # most engines are down cannot be trusted as "genuinely no news" (fail
+    # the part); something written despite the same degraded backend is
+    # still worth flagging, not failing; fewer than a majority unresponsive,
+    # or none at all, sets neither.
+    if unresponsive and len(unresponsive) >= _NEWS_MAJORITY_UNRESPONSIVE:
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        if written == 0:
+            result["error"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+        else:
+            result["warning"] = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
 
     if written:
         try:
@@ -3118,6 +3348,55 @@ _PATH_PROBE_BLOCK_DAYS = 14
 # discovery doesn't just hand the exact same known-bad URL straight back.
 _CAREERS_LAST_TRIED_SKIP_DAYS = 7
 
+# D22 — a careers page whose extracted RAW roles are ≥70% junior/student/
+# intern (review B3: counted directly via _JUNIOR_TITLE_RE matches on the
+# raw LLM output, never derived from _filter_positions' filtered_out — that
+# also drops duplicates and caps at 20, so a raw list that's mostly the same
+# few titles repeated could hit a high "filtered fraction" despite having
+# zero actual junior roles) AND leaves fewer than 5 real (deduped) positions
+# is treated as a junior/student board (e.g. Trumpf's Workday
+# "TRUMPF_Students"), never as "the" careers page: recorded as
+# careers.junior_board_urls (never careers.url, and never overwriting a
+# scalar — see _MAX_JUNIOR_BOARD_URLS in playbook.py), excluded from every
+# future candidate list for _JUNIOR_BOARD_EXPIRY_DAYS, and _scan_client_jobs
+# retries the next candidate instead of accepting it.
+_JUNIOR_BOARD_MIN_RATIO = 0.7
+_JUNIOR_BOARD_MAX_REMAINING = 5
+# Review B3 — the ratio is only trusted once there's a real sample: a raw
+# list of, say, 3 titles where 3 are junior is a 100% ratio from almost no
+# data (a small landing page snippet, not a genuine board).
+_JUNIOR_BOARD_MIN_RAW_TITLES = 8
+# Review B3 — a board's roster can change (a "students" board today could
+# add senior roles later); a junior-board exclusion is not permanent.
+_JUNIOR_BOARD_EXPIRY_DAYS = 30
+# Review budget — at most this many TOTAL attempts within one scan (the
+# first "real" pick plus up to 2 retries after a junior board), and the
+# retries reuse the first attempt's own discovery pass (see _scan_client_
+# jobs' docstring for the worst-case call budget this bounds).
+_MAX_CAREERS_ATTEMPTS = 3
+
+
+def _active_junior_board_urls(careers_pb: dict) -> set:
+    """Review B3/B4 — urls in careers.junior_board_urls ({url, at} entries)
+    confirmed within the last _JUNIOR_BOARD_EXPIRY_DAYS days. An expired
+    entry is treated as if it were never recorded — the whole point of the
+    expiry is to let a re-discovery try it again eventually."""
+    now = datetime.now(timezone.utc)
+    active: set = set()
+    for entry in (careers_pb or {}).get("junior_board_urls") or []:
+        if not isinstance(entry, dict):
+            continue
+        url = (entry.get("url") or "").strip()
+        at = entry.get("at")
+        if not url or not at:
+            continue
+        try:
+            if (now - datetime.fromisoformat(at)) <= timedelta(days=_JUNIOR_BOARD_EXPIRY_DAYS):
+                active.add(url)
+        except (ValueError, TypeError):
+            continue
+    return active
+
 
 def _ats_match(host: str) -> bool:
     """True when `host` IS one of _ATS_HOSTS (label-anchored) or a subdomain of
@@ -3192,15 +3471,21 @@ async def _fetch_page_raw(url: str, wait_ms: int = 1500, max_chars: int = 18000)
     return text, html
 
 
-def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "") -> list[str]:
+def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "", *,
+                    alias: str = "") -> list[str]:
     """Rank links on a page by relevance to `keys` (substring match against the
     full URL) plus ATS-host / own-domain bonuses. Generalises the old
     _career_listing_links so the same code harvests a careers-page link off a
     homepage (keys=_CAREERS_KEYS) or a job-listing link off a careers landing
-    page (keys=_JOB_LINK_KEYS) today, and a newsroom link (WP3) later."""
+    page (keys=_JOB_LINK_KEYS) today, and a newsroom link (WP3) later.
+
+    `alias` (D27): the client's canonical alias domain (metadata.
+    canonical_domain), when its recorded domain redirects elsewhere — a link
+    landing on it earns the same own-domain scoring bonus `own_domain` does."""
     from urllib.parse import urljoin
     base_host = urlparse(base_url).netloc.lower().replace("www.", "")
     own_domain = (own_domain or base_host).lower().replace("www.", "")
+    alias = (alias or "").lower().replace("www.", "")
     ranked: list[tuple[int, str]] = []
     seen: set = set()
     for m in re.finditer(r'href=["\']([^"\']+)["\']', html or "", re.I):
@@ -3217,7 +3502,8 @@ def _harvest_links(html: str, base_url: str, keys: tuple, own_domain: str = "") 
         if full in seen or not (is_ats or is_match):
             continue
         seen.add(full)
-        score = (3 if is_ats else 0) + (1 if own_domain and own_domain in host else 0) \
+        is_own = (own_domain and own_domain in host) or (alias and alias in host)
+        score = (3 if is_ats else 0) + (1 if is_own else 0) \
                   + (1 if any(t in low for t in ("stellenangebote", "all-jobs", "open-positions", "joblist", "stellensuche")) else 0)
         ranked.append((score, full))
     ranked.sort(reverse=True)
@@ -3511,13 +3797,18 @@ async def _probe_careers_paths(website: str, domain: str, blocked_urls: Optional
     return accepted, blocked
 
 
-def _own_or_ats(url: str, domain: str) -> bool:
-    """True when `url` is on the client's own domain (or a subdomain of it)
-    or a known ATS host. Module-level (was a _discover_careers_url closure)
-    so _careers_candidates can also use it to decide whether the path-probe
+def _own_or_ats(url: str, domain: str, alias: str = "") -> bool:
+    """True when `url` is on the client's own domain (or a subdomain of it),
+    its D27 canonical alias domain (or a subdomain of THAT — e.g.
+    vorwerk.com when metadata.website is still vorwerk.de), or a known ATS
+    host. Module-level (was a _discover_careers_url closure) so
+    _careers_candidates can also use it to decide whether the path-probe
     tier is still worth running (WP8 review nit 1)."""
     host = urlparse(url).netloc.lower().replace("www.", "")
-    return bool(domain and (host == domain or host.endswith("." + domain))) or _ats_match(host)
+    for d in (domain, alias):
+        if d and (host == d or host.endswith("." + d)):
+            return True
+    return _ats_match(host)
 
 
 def _playbook_careers_fresh(careers_pb: dict) -> bool:
@@ -3533,19 +3824,29 @@ def _playbook_careers_fresh(careers_pb: dict) -> bool:
         return False
 
 
-async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = None) -> list[dict]:
+async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = None, *,
+                               exclude: Optional[set] = None) -> list[dict]:
     """Ordered candidate careers/jobs URLs, cheapest and most reliable first:
     a fresh (<=60 days) playbook careers URL short-circuits everything else
     (no HTTP, no SearXNG); then the client's own recorded careers_url; then a
     homepage link harvest; then a sitemap probe of the site root; then the
     legacy SearXNG queries as the last resort. Each candidate carries the tier
-    it came from so the caller never has to re-derive it."""
+    it came from so the caller never has to re-derive it.
+
+    `exclude` (D22): URLs already confirmed to be junior/student boards (this
+    scan's own retry loop, or a prior scan via careers.junior_board_urls) —
+    never offered as a candidate at any tier, same treatment as the
+    last_tried_url skip below."""
     name = client["name"]
     meta = client.get("metadata") or {}
     candidates: list[dict] = []
     seen: set = set()
+    excluded_urls = exclude or set()
 
     careers_pb = (pb or {}).get("careers") or {}
+    # D22 review B3/B4 — careers.junior_board_urls, not the old scalar
+    # junior_board_url, and only entries still within their expiry window.
+    excluded_urls = excluded_urls | _active_junior_board_urls(careers_pb)
 
     # D16 — a URL careers.last_tried_url recorded as "found nothing" within
     # the last _CAREERS_LAST_TRIED_SKIP_DAYS days is skipped as a candidate
@@ -3577,6 +3878,8 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
         url = (url or "").strip()
         if not url.startswith("http") or url in seen:
             return
+        if url in excluded_urls:
+            return
         if last_tried_skip and url == last_tried_url:
             # Smuggled onto the client dict (same pattern as _probe_blocked/
             # _sitemap_cache below — _careers_candidates' signature is
@@ -3591,7 +3894,7 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
 
     pb_blocked = (pb or {}).get("blocked_urls") or []
     pb_url = (careers_pb.get("url") or "").strip()
-    if pb_url:
+    if pb_url and pb_url not in excluded_urls:
         fresh = _playbook_careers_fresh(careers_pb)
         if fresh:
             # Review nit (documented, not changed): this short-circuit
@@ -3607,8 +3910,17 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
 
     # D2 — a careers/ATS URL a Pi run cited but the scanner hasn't confirmed
     # yet: one rung below a confirmed playbook URL, still ahead of whatever
-    # was just typed into metadata.
-    _add((careers_pb.get("candidate_url") or "").strip(), "pi-run")
+    # was just typed into metadata. D22: a run can see BOTH a junior/student
+    # board and a sibling "professionals" board for the same ATS tenant
+    # (Workday's "TRUMPF_Students" vs "TRUMPF_Graduates_and_Professionals")
+    # — classify_tool_calls ranks up to 3, professional-board first, in
+    # careers.candidate_urls; a playbook recorded before that shipped only
+    # has the single candidate_url, kept as a one-item fallback.
+    candidate_urls = list(careers_pb.get("candidate_urls") or [])
+    if not candidate_urls and careers_pb.get("candidate_url"):
+        candidate_urls = [careers_pb["candidate_url"]]
+    for candidate_url in candidate_urls[:3]:
+        _add((candidate_url or "").strip(), "pi-run")
 
     _add((meta.get("careers_url") or "").strip(), "metadata")
 
@@ -3623,11 +3935,31 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     # it into a URL. See _site_base's docstring for the exact failure mode.
     website = _site_base(meta.get("website") or "")
     domain = _client_domain(client)
+    # D27 — vorwerk.de -> vorwerk.com: resolve (and cache) the client's
+    # canonical alias domain ONCE per discovery pass, so every own-domain
+    # check below treats a result on either domain as "own". Review nit 2 —
+    # fall back to the domain's playbook aliases (a prior resolution from a
+    # different call site/run) when this pass's own live check found
+    # nothing new (rejected by B1/B2, or metadata just hasn't caught up).
+    alias = await _resolve_site_domain(org_id, client)
+    if alias == domain:
+        alias = ""
+    if not alias:
+        alias = _known_alias_domain(client, pb)
 
-    if website:
-        _home_text, home_html = await _fetch_page_raw(website)
+    # Review nit 3 — once the canonical alias is known, probe/harvest
+    # directly against IT, not the stale original domain (which the very
+    # existence of an alias means just redirects everywhere anyway): a
+    # relative link on the (already-redirected) homepage must urljoin
+    # against the REDIRECT TARGET, not the pre-redirect URL, or it resolves
+    # to the wrong host entirely.
+    probe_website = _site_base(f"https://{alias}") if alias else website
+    own_host = alias or domain
+
+    if probe_website:
+        _home_text, home_html = await _fetch_page_raw(probe_website)
         if home_html:
-            for link in _harvest_links(home_html, website, _CAREERS_KEYS, domain):
+            for link in _harvest_links(home_html, probe_website, _CAREERS_KEYS, domain, alias=alias):
                 _add(link, "homepage")
 
         # D1 — own-domain path-probe tier: only worth the extra requests when
@@ -3637,7 +3969,7 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
         # metadata URL that turns out to be off-domain) must not suppress
         # this tier; that was the WP7 symptom verbatim. A bare "any
         # candidates at all" check let it through untouched.
-        if not any(_own_or_ats(c["url"], domain) for c in candidates):
+        if not any(_own_or_ats(c["url"], domain, alias) for c in candidates):
             home_title_h1 = _page_title_h1(home_html) if home_html else None
             # WP11 rebase: a playbook that already knows this site needs
             # anti-detection (needs_js from a prior scan, or a cookie wall)
@@ -3646,7 +3978,7 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
             # plain GET it already knows will come back thin.
             prefer_camofox = bool((pb or {}).get("needs_js"))
             probe_hits, probe_blocked = await _probe_careers_paths(
-                website, domain, pb_blocked, home_title_h1, prefer_camofox,
+                probe_website, own_host, pb_blocked, home_title_h1, prefer_camofox,
             )
             for cand in probe_hits:
                 _add(cand["url"], cand["tier"], cand.get("title", ""))
@@ -3655,11 +3987,11 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
                 # is below — every frozen signature in this file stays as-is.
                 client["_probe_blocked"] = (client.get("_probe_blocked") or []) + probe_blocked
 
-        sitemap_jobs = await _sitemap_job_urls(website)
+        sitemap_jobs = await _sitemap_job_urls(probe_website)
         # Cache the crawl on the client dict (keyed by the site's own host) so
         # _scan_client_jobs can reuse it instead of crawling the same sitemap
         # a second time right after discovery returns.
-        site_host = urlparse(website).netloc.lower().replace("www.", "")
+        site_host = urlparse(probe_website).netloc.lower().replace("www.", "")
         if site_host:
             client["_sitemap_cache"] = {"host": site_host, "jobs": sitemap_jobs}
         if sitemap_jobs:
@@ -3684,7 +4016,9 @@ async def _careers_candidates(org_id: int, client: dict, pb: Optional[dict] = No
     return candidates
 
 
-async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = None) -> tuple[str, str]:
+async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = None, *,
+                                 exclude: Optional[set] = None,
+                                 candidates_out: Optional[list] = None) -> tuple[str, str]:
     """Find a client's careers/jobs page. Cheap candidates (playbook, known
     metadata, homepage harvest, sitemap probe) come first and, if only one
     surfaces, it is used directly with no LLM call at all. Once SearXNG
@@ -3692,16 +4026,55 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
     only accepted when it lands on the client's own domain or a known ATS
     host, so it can never wander off to an unrelated URL. Falls back to a
     own-domain + careers-keyword heuristic ranking when the LLM is
-    unavailable, unsure, or picks something off-domain."""
-    candidates = await _careers_candidates(org_id, client, pb)
+    unavailable, unsure, or picks something off-domain.
+
+    `exclude` (D22): passed straight through to _careers_candidates — URLs
+    already ruled out as junior/student boards this scan.
+
+    `candidates_out` (review budget): when given a list, the full filtered
+    candidate set — ranked highest-first by the same heuristic used as the
+    LLM-unavailable fallback below — is appended to it. Lets a caller
+    (_scan_client_jobs' D22 retry loop) reuse THIS ONE discovery pass's
+    results on a later retry instead of calling _discover_careers_url (and
+    therefore re-running SearXNG/probe/homepage rounds) a second time."""
+    candidates = await _careers_candidates(org_id, client, pb, exclude=exclude)
     domain = _client_domain(client)
+    # D27 — _careers_candidates already resolved (and cached in-memory on
+    # client["metadata"]) the canonical alias domain, if any; read it back
+    # here (with the same nit-2 playbook-aliases fallback) rather than
+    # re-resolving (another live GET) a second time.
+    alias = _known_alias_domain(client, pb)
 
     # Constrain EVERY path (single-candidate short-circuit, LLM pick, heuristic
     # fallback) up front — filtering only inside the LLM branch let an
     # off-domain lone candidate (or an LLM pick from an all-off-domain pool)
     # through untouched, and that URL then persists in clients.metadata
     # forever once a scan writes it back.
-    candidates = [c for c in candidates if _own_or_ats(c["url"], domain)]
+    candidates = [c for c in candidates if _own_or_ats(c["url"], domain, alias)]
+
+    def _heuristic_rank(cands: list) -> list:
+        """own-domain / ATS-host + careers-ish keyword wins. An ATS host
+        counts on its own (score 2, same as own-domain) — a bare
+        "https://company.personio.de/" with no careers keyword in the URL
+        is still a real candidate worth ranking, not a 0-score drop. Every
+        candidate here already passed _own_or_ats above, so every one of
+        them scores at least 2 — nothing is ever dropped by this ranking,
+        only ordered."""
+        ranked: list[tuple[int, dict]] = []
+        for c in cands:
+            host = urlparse(c["url"]).netloc.lower().replace("www.", "")
+            is_own = (domain and (host == domain or host.endswith("." + domain))) \
+                  or (alias and (host == alias or host.endswith("." + alias)))
+            score = (2 if is_own else 0) \
+                  + (2 if _ats_match(host) else 0) \
+                  + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
+            ranked.append((score, c))
+        ranked.sort(key=lambda t: t[0], reverse=True)
+        return [c for _, c in ranked]
+
+    if candidates_out is not None:
+        candidates_out.extend(_heuristic_rank(candidates))
+
     if not candidates:
         return "", ""
     if len(candidates) == 1:
@@ -3730,27 +4103,16 @@ async def _discover_careers_url(org_id: int, client: dict, pb: Optional[dict] = 
         if m:
             picked = m.group(0).rstrip(").,>\"'")
             match = next((c for c in candidates if c["url"] == picked), None)
-            if match and _own_or_ats(picked, domain):
+            if match and _own_or_ats(picked, domain, alias):
                 return match["url"], match["tier"]
     except Exception as exc:
         console.print(f"[yellow]careers-url LLM pick failed for {name}: {exc}[/yellow]")
 
-    # Heuristic fallback: own-domain / ATS-host + careers-ish keyword wins, tier
-    # preserved. An ATS host counts on its own (score 2, same as own-domain) —
-    # a bare "https://company.personio.de/" with no careers keyword in the URL
-    # is still a real candidate worth returning, not a 0-score drop, when the
-    # LLM pick is unavailable.
-    ranked: list[tuple[int, dict]] = []
-    for c in candidates:
-        host = urlparse(c["url"]).netloc.lower().replace("www.", "")
-        score = (2 if domain and (host == domain or host.endswith("." + domain)) else 0) \
-              + (2 if _ats_match(host) else 0) \
-              + (1 if any(k in c["url"].lower() for k in _CAREERS_KEYS) else 0)
-        if score:
-            ranked.append((score, c))
+    # Heuristic fallback when the LLM pick is unavailable/unsure/off-domain:
+    # same ranking already computed for candidates_out above.
+    ranked = _heuristic_rank(candidates)
     if ranked:
-        ranked.sort(key=lambda t: t[0], reverse=True)
-        return ranked[0][1]["url"], ranked[0][1]["tier"]
+        return ranked[0]["url"], ranked[0]["tier"]
     return "", ""
 
 
@@ -4051,6 +4413,21 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     page. The LLM filters to IT/management roles and rejects category names;
     _filter_positions then drops junior/apprentice noise on top.
 
+    D22/review budget — a candidate that extracts positions but turns out to
+    be a junior/student board (B3: judged from RAW LLM-output titles, not
+    _filter_positions' post-dedup/cap count) is retried, up to
+    _MAX_CAREERS_ATTEMPTS total attempts (the first "real" pick plus at most
+    2 extra). The retries cost is bounded and does NOT scale with the full
+    per-attempt ladder: discovery itself (_discover_careers_url, so also its
+    own SearXNG/probe/homepage rounds) runs AT MOST ONCE per scan — a retry
+    just walks the SAME already-fetched candidate list — and each retry
+    replays only the ONE ladder stage (sitemap OR page-text) that won the
+    first attempt, never re-trying the other stage or the listing-link
+    follow-through. Worst case: main's own ladder (up to 1 sitemap + 1
+    page-text + up to 3 listing-link _extract_jobs calls) plus at most 2
+    more _extract_jobs calls (one per extra attempt) — not a multiple of
+    main's full cost.
+
     Every attempt — success or failure — is recorded: a failure stamps the
     existing jobs doc's last_attempt/last_error/attempts (bumping updated_at
     so _run_jobs_monitor's LRU rotation stops retrying a never-yielding client
@@ -4084,14 +4461,219 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
     pb_url = (careers_pb.get("url") or "").strip()
     arg_url = (careers_url or "").strip()
     meta_url = (meta.get("careers_url") or "").strip()
-    if pb_url and _playbook_careers_fresh(careers_pb):
-        url, tier = pb_url, "playbook"
-    elif arg_url:
-        url, tier = arg_url, "argument"
-    elif meta_url:
-        url, tier = meta_url, "metadata"
+
+    # D21 — careers.last_tried_url (a URL that just 0-positioned within the
+    # last _CAREERS_LAST_TRIED_SKIP_DAYS days) used to be consulted ONLY
+    # inside _careers_candidates, which the metadata/argument branches below
+    # short-circuit past entirely — so a stale metadata.careers_url that had
+    # just 0-positioned kept re-entering via the "metadata" branch every
+    # subsequent scan and the skip could never apply in practice. Same
+    # last_tried_at clock, same _careers_candidates docstring reasoning:
+    # last_failure_at is only a fallback for a playbook recorded before
+    # last_tried_at existed.
+    def _recently_tried(candidate: str) -> bool:
+        last_tried_url = (careers_pb.get("last_tried_url") or "").strip()
+        if not last_tried_url or candidate != last_tried_url:
+            return False
+        last_tried_at = careers_pb.get("last_tried_at") or careers_pb.get("last_failure_at")
+        if not last_tried_at:
+            return False
+        try:
+            return (datetime.now(timezone.utc) - datetime.fromisoformat(last_tried_at)) \
+                <= timedelta(days=_CAREERS_LAST_TRIED_SKIP_DAYS)
+        except (ValueError, TypeError):
+            return False
+
+    # D22 — a URL already confirmed (this scan, or a prior one) to be a
+    # junior/student board is excluded at every tier below, not just
+    # discovery's candidate list — this scan's own retry loop adds more of
+    # them as it rules candidates out. Review B3/B4 — the dated
+    # junior_board_urls list, not the old scalar junior_board_url.
+    excluded_urls: set = set(_active_junior_board_urls(careers_pb))
+    junior_boards_found: list = []
+    # Review nit 4 — cheap (no live HTTP resolve) alias lookup for the
+    # listing-link harvest inside _extract_from below; _pick_url's own
+    # discovery call resolves (and caches) it properly when needed.
+    alias = _known_alias_domain(client, pb)
+
+    # Review budget — discovery (and therefore its own SearXNG/probe/
+    # homepage rounds) runs AT MOST ONCE per scan: the first time _pick_url
+    # falls through to it, the resulting (filtered, ranked) candidate list
+    # is cached here so a retry after a junior board just walks it instead
+    # of re-discovering from scratch.
+    discovery_done = False
+    discovered_candidates: list = []
+
+    async def _pick_url() -> tuple[str, str]:
+        nonlocal discovery_done
+        if pb_url and pb_url not in excluded_urls and _playbook_careers_fresh(careers_pb):
+            return pb_url, "playbook"
+        if arg_url and arg_url not in excluded_urls and not _recently_tried(arg_url):
+            return arg_url, "argument"
+        if meta_url and meta_url not in excluded_urls and not _recently_tried(meta_url):
+            return meta_url, "metadata"
+        if not discovery_done:
+            discovery_done = True
+            return await _discover_careers_url(
+                org_id, client, pb, exclude=excluded_urls, candidates_out=discovered_candidates,
+            )
+        for c in discovered_candidates:
+            if c["url"] not in excluded_urls:
+                return c["url"], c["tier"]
+        return "", ""
+
+    async def _extract_from(start_url: str, *, stage_only: str = "") -> tuple[list, list, int, int, int, str, bool, list]:
+        """The sitemap -> page-text -> listing-link extraction ladder (D22
+        split out of the main body so it can run once per candidate in the
+        retry loop below).
+
+        `stage_only` (review budget): "" runs the full ladder (the first,
+        "real" attempt); "sitemap" or "page" — whichever stage produced the
+        FIRST attempt's (junior-board) result — restricts a retry attempt
+        to just that one stage, with NO listing-link follow-through, so
+        each extra attempt costs exactly one _extract_jobs call rather than
+        replaying the whole ladder.
+
+        Returns (positions, needs, filtered_out, raw_count, junior_raw_count,
+        effective_url, needs_js, sitemap_jobs). Review B3 — raw_count/
+        junior_raw_count are computed straight from whichever raw LLM
+        output tier ultimately won, counting _JUNIOR_TITLE_RE matches
+        directly — never derived from _filter_positions' filtered_out,
+        which also drops duplicates and caps at 20 (conflating "mostly
+        junior" with "mostly the same title repeated")."""
+        positions: list = []
+        needs: list = []
+        raw_count = 0
+        junior_raw_count = 0
+        needs_js_local = False
+        effective = start_url
+        sitemap_jobs: list = []
+
+        def _count_junior(raw: list) -> int:
+            return sum(
+                1 for p in raw or []
+                if isinstance(p, dict) and _JUNIOR_TITLE_RE.search(str(p.get("title") or ""))
+            )
+
+        # (1) Sitemap of actual postings — the JS-free ground truth. A JS-heavy
+        # careers page (own-domain or ATS-hosted) only exposes category filters
+        # to a fetch, but its sitemap lists every real opening (e.g.
+        # jobs.apleona.com — apleona's own domain, not an ATS host — →
+        # /offer/<slug>/<uuid>). A single hit is trusted (lowered from 3): the
+        # sitemap can't lie about what's posted.
+        # Reuse the crawl _careers_candidates already did during discovery
+        # instead of hitting the same sitemap a second time when the host
+        # matches.
+        if stage_only in ("", "sitemap"):
+            sitemap_cache = client.pop("_sitemap_cache", None)
+            url_host = urlparse(start_url).netloc.lower().replace("www.", "")
+            if sitemap_cache and sitemap_cache.get("host") == url_host:
+                sitemap_jobs = sitemap_cache.get("jobs") or []
+            else:
+                sitemap_jobs = await _sitemap_job_urls(start_url)
+            if len(sitemap_jobs) >= 1:
+                listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
+                listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
+                listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
+                raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
+                positions = _filter_positions(raw_positions)
+                raw_count = len(raw_positions)
+                junior_raw_count = _count_junior(raw_positions)
+                # D10 — a title here is only ever as good as the sitemap URL's
+                # slug (e.g. "IT Solution Architect Customer Serv", cut
+                # mid-word); the per-job-URL match below tries to replace it
+                # with the real posting page's <title>/<h1>.
+                for p in positions:
+                    p["title_source"] = "slug"
+
+        # (2) Careers-page text (good for sites that list roles inline).
+        if not positions and stage_only in ("", "page"):
+            text, html = await _fetch_page_raw(start_url, wait_ms=3500)
+            plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()) if html else 0
+            raw_positions, needs = await _extract_jobs(name, text, org_id)
+            positions = _filter_positions(raw_positions)
+            raw_count = len(raw_positions)
+            junior_raw_count = _count_junior(raw_positions)
+            for p in positions:
+                p["title_source"] = "page"  # from the actual page text, never a slug
+            if positions and plain_len < 500:
+                needs_js_local = True  # only the browser-rendered fallback found anything
+            # (3) Landing page with no roles → follow its job-listing links.
+            # Only on the FIRST attempt (stage_only=="") — a retry replays
+            # exactly one stage, no further fan-out (review budget).
+            if not positions and html and not stage_only:
+                for link in _harvest_links(html, start_url, _JOB_LINK_KEYS, domain, alias=alias):
+                    sub_text, sub_html = await _fetch_page_raw(link, wait_ms=5000)
+                    sub_plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", sub_html)).strip()) \
+                        if sub_html else 0
+                    p2, n2 = await _extract_jobs(name, sub_text, org_id)
+                    p2f = _filter_positions(p2)
+                    if p2f:
+                        positions, needs, effective = p2f, n2, link
+                        raw_count = len(p2)
+                        junior_raw_count = _count_junior(p2)
+                        if sub_plain_len < 500:
+                            needs_js_local = True
+                        for p in positions:
+                            p["title_source"] = "page"
+                        break
+
+        filtered_out = raw_count - len(positions)
+        return positions, needs, filtered_out, raw_count, junior_raw_count, effective, needs_js_local, sitemap_jobs
+
+    # D22 — try candidates in tier-precedence order; a page that extracts
+    # positions but turns out to be a junior/student board (Trumpf's
+    # Workday "TRUMPF_Students") is never accepted — it's remembered
+    # (careers.junior_board_urls) and excluded, and the NEXT candidate is
+    # tried instead, bounded so a pathological run of junior boards can't
+    # spend unlimited LLM calls (see this function's own docstring for the
+    # exact worst-case budget).
+    url, tier = "", ""
+    original_url = ""
+    effective_url = ""
+    positions, needs, filtered_out, needs_js, sitemap_jobs = [], [], 0, False, []
+    winning_stage = ""  # "" == first attempt (full ladder); "sitemap"/"page" once locked in for retries
+
+    for _attempt in range(_MAX_CAREERS_ATTEMPTS):
+        cand_url, cand_tier = await _pick_url()
+        if not cand_url:
+            url, tier = "", ""
+            break
+        url, tier = cand_url, cand_tier
+        original_url = url
+        positions, needs, filtered_out, raw_count, junior_raw_count, effective_url, needs_js, sitemap_jobs = \
+            await _extract_from(url, stage_only=winning_stage)
+
+        is_junior_board = (
+            raw_count >= _JUNIOR_BOARD_MIN_RAW_TITLES
+            and (junior_raw_count / raw_count) >= _JUNIOR_BOARD_MIN_RATIO
+            and len(positions) < _JUNIOR_BOARD_MAX_REMAINING
+        )
+        if is_junior_board:
+            if not winning_stage:
+                # Lock in which single stage keeps getting tried on
+                # retries — whichever one actually produced this (junior)
+                # result — inferred from title_source (review budget).
+                winning_stage = "sitemap" if (positions and positions[0].get("title_source") == "slug") else "page"
+            junior_boards_found.append(effective_url)
+            excluded_urls.add(url)
+            excluded_urls.add(effective_url)
+            if playbook is not None and domain:
+                try:
+                    now_iso_junior = datetime.now(timezone.utc).isoformat()
+                    await playbook.record(
+                        org_id, domain,
+                        {"careers": {"junior_board_urls": [{"url": effective_url, "at": now_iso_junior}]}},
+                        run_id=run_id,
+                    )
+                except Exception as exc:
+                    console.print(f"[yellow]playbook junior-board record failed for {name}: {exc}[/yellow]")
+            positions, needs, filtered_out = [], [], 0
+            continue
+        break
     else:
-        url, tier = await _discover_careers_url(org_id, client, pb)
+        # Exhausted every attempt without a single non-junior result.
+        url, tier = "", ""
 
     # D1/D7 — own-domain 403/4xx hit while probing for the careers page
     # (path-probe tier), smuggled back on the client dict since
@@ -4130,6 +4712,20 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         if no_positions_failure and url:
             careers_patch["last_tried_url"] = url
             careers_patch["last_tried_at"] = now_iso
+            # D21 — a metadata-cached URL that just 0-positioned must not
+            # keep winning the tier-precedence ladder forever: the metadata
+            # branch short-circuits PAST _careers_candidates entirely (see
+            # _pick_url above), so the last_tried_url skip there never even
+            # gets a chance to apply to it. Clearing clients.metadata.
+            # careers_url forces the NEXT scan to fall through past the
+            # metadata branch — to argument/discovery, where the skip (and,
+            # once 7 days pass, a genuine retry) actually takes effect.
+            if effective_tier == "metadata" and meta.get("careers_url"):
+                try:
+                    await db_module.update_client_metadata(org_id, name, {"careers_url": ""})
+                except Exception as exc:
+                    console.print(f"[yellow]playbook: could not clear stale careers_url "
+                                  f"for {name}: {exc}[/yellow]")
         elif url:
             # Omit "url" entirely when there's nothing to report (e.g. the
             # "no careers page found" path) — an empty string here would
@@ -4208,68 +4804,15 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                 f"careers page skipped for {_CAREERS_LAST_TRIED_SKIP_DAYS} days "
                 f"after a 0-position scan: {skip_suppressed_url}"
             )
+        if junior_boards_found:
+            # D22 — every candidate this scan tried turned out to be a
+            # junior/student board; distinct from "no careers page found"
+            # so an operator understands discovery DID find pages, just not
+            # a usable one, and that they're now excluded going forward.
+            return await _stamp_failure(
+                "only junior/student boards found: " + ", ".join(junior_boards_found[:3])
+            )
         return await _stamp_failure("no careers page found")
-
-    original_url = url  # the URL the scan started from, for tier reporting below
-    effective_url = url
-    positions: list = []
-    needs: list = []
-    filtered_out = 0
-    needs_js = False
-
-    # (1) Sitemap of actual postings — the JS-free ground truth. A JS-heavy careers
-    # page (own-domain or ATS-hosted) only exposes category filters to a fetch, but
-    # its sitemap lists every real opening (e.g. jobs.apleona.com — apleona's own
-    # domain, not an ATS host — → /offer/<slug>/<uuid>). A single hit is trusted
-    # (lowered from 3): the sitemap can't lie about what's posted.
-    # Reuse the crawl _careers_candidates already did during discovery instead
-    # of hitting the same sitemap a second time when the host matches.
-    sitemap_cache = client.pop("_sitemap_cache", None)
-    url_host = urlparse(url).netloc.lower().replace("www.", "")
-    if sitemap_cache and sitemap_cache.get("host") == url_host:
-        sitemap_jobs = sitemap_cache.get("jobs") or []
-    else:
-        sitemap_jobs = await _sitemap_job_urls(url)
-    if len(sitemap_jobs) >= 1:
-        listing = "ACTUAL OPEN POSITIONS — these are real individual job postings (titles from the "
-        listing += "company's job sitemap, NOT categories). Extract and filter them per the rules:\n"
-        listing += "\n".join(f"- {t}" for t, _ in sitemap_jobs)
-        raw_positions, needs = await _extract_jobs(name, listing, org_id, min_len=40)
-        positions = _filter_positions(raw_positions)
-        filtered_out = len(raw_positions) - len(positions)
-        # D10 — a title here is only ever as good as the sitemap URL's slug
-        # (e.g. "IT Solution Architect Customer Serv", cut mid-word); the
-        # per-job-URL match below tries to replace it with the real posting
-        # page's <title>/<h1>.
-        for p in positions:
-            p["title_source"] = "slug"
-
-    # (2) Careers-page text (good for sites that list roles inline).
-    if not positions:
-        text, html = await _fetch_page_raw(url, wait_ms=3500)
-        plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", html)).strip()) if html else 0
-        raw_positions, needs = await _extract_jobs(name, text, org_id)
-        positions = _filter_positions(raw_positions)
-        filtered_out = len(raw_positions) - len(positions)
-        for p in positions:
-            p["title_source"] = "page"  # from the actual page text, never a slug
-        if positions and plain_len < 500:
-            needs_js = True  # only the browser-rendered fallback found anything
-        # (3) Landing page with no roles → follow its job-listing links.
-        if not positions and html:
-            for link in _harvest_links(html, url, _JOB_LINK_KEYS, domain):
-                sub_text, sub_html = await _fetch_page_raw(link, wait_ms=5000)
-                sub_plain_len = len(re.sub(r"\s+", " ", _HTML_TAG_RE.sub(" ", sub_html)).strip()) if sub_html else 0
-                p2, n2 = await _extract_jobs(name, sub_text, org_id)
-                p2f = _filter_positions(p2)
-                if p2f:
-                    positions, needs, effective_url = p2f, n2, link
-                    filtered_out = len(p2) - len(p2f)
-                    if sub_plain_len < 500:
-                        needs_js = True
-                    for p in positions:
-                        p["title_source"] = "page"
-                    break
 
     # From here on `url` always means the URL actually used/found — both the
     # failure stamp below and the success write further down must persist

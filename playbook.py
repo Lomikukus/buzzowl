@@ -57,6 +57,11 @@ _MAX_LESSON_PROPOSALS_PER_PASS = 5
 _DEDUPE_JACCARD_THRESHOLD = 0.6
 _REFLECT_LLM_MIN_TOOL_CALLS = 8
 _MAX_NAV_NOTES = 4
+# D27 review B1/nit2 — a client's known redirect-target domains (usually
+# just one; bounded defensively).
+_MAX_ALIASES = 3
+# D22 review B4 — careers.junior_board_urls, {url, at} entries.
+_MAX_JUNIOR_BOARD_URLS = 5
 
 LESSONS_DOC_ID = "agent-lessons-org"
 
@@ -177,10 +182,17 @@ def _merge_blocked_urls(old, new, cap: int) -> list:
 def _merge_dict_field(old: dict, new: dict) -> dict:
     """One level deep: scalars overwrite, lists union+bound. Keys the patch
     doesn't mention (e.g. careers.url when a patch only sets last_failure_at)
-    are left untouched."""
+    are left untouched.
+
+    D22 review B4 — careers.junior_board_urls is a dated {url, at} list, same
+    shape as the top-level blocked_urls: dedupe by url (a board re-confirmed
+    as junior gets its `at` refreshed in place, not appended as a second
+    entry) rather than the generic whole-item union below."""
     merged = dict(old or {})
     for k, v in (new or {}).items():
-        if isinstance(v, list):
+        if k == "junior_board_urls" and isinstance(v, list):
+            merged[k] = _merge_blocked_urls(merged.get(k), v, _MAX_JUNIOR_BOARD_URLS)
+        elif isinstance(v, list):
             merged[k] = _merge_list(merged.get(k), v, _MAX_QUERY_LIST)
         else:
             merged[k] = v
@@ -193,7 +205,22 @@ _TOP_LIST_CAPS = {
     "good_queries": _MAX_QUERY_LIST,
     "failed_queries": _MAX_QUERY_LIST,
     "notes": _MAX_NOTES,
+    # D27 review nit 2 — aliases must UNION across writes (bounded), not
+    # scalar-overwrite: a second resolution pass finding the same (or a
+    # different) alias must not silently erase a previously-recorded one.
+    "aliases": _MAX_ALIASES,
 }
+
+
+def _is_legal_url_safe(url: str) -> bool:
+    """Lazy, best-effort import of routers.pipeline._is_legal_url — same
+    guard pattern as _ats_match_safe below it against the routers.pipeline
+    <-> playbook import cycle."""
+    try:
+        from routers.pipeline import _is_legal_url
+    except Exception:
+        return False
+    return _is_legal_url(url)
 
 
 def _merge(existing: dict, patch: dict, *, domain: str, website: str) -> dict:
@@ -213,6 +240,22 @@ def _merge(existing: dict, patch: dict, *, domain: str, website: str) -> dict:
                 merged[key] = _merge_list(merged.get(key), value, _TOP_LIST_CAPS[key])
         else:
             merged[key] = value
+
+    # D24 — a legal/boilerplate URL (Impressum, Datenschutz, ...) is already
+    # kept out of newsroom.urls at the SOURCE (_discover_client_sources'
+    # _is_legal_url check) and filtered on READ (_client_newsroom_urls), but
+    # a playbook written before either of those shipped — or a URL added by
+    # hand — could still carry one in STORAGE forever, since a patch that
+    # only ever adds/unions new URLs never drops an old one. One-time
+    # cleanup: scrub it here too, on every write to this playbook (not just
+    # ones whose own patch touches newsroom), so it eventually falls out on
+    # its own the next time anything records to this domain.
+    newsroom = merged.get("newsroom")
+    if isinstance(newsroom, dict) and newsroom.get("urls"):
+        cleaned = [u for u in newsroom["urls"] if not _is_legal_url_safe(u)]
+        if cleaned != newsroom["urls"]:
+            merged["newsroom"] = {**newsroom, "urls": cleaned}
+
     return merged
 
 
@@ -444,6 +487,28 @@ _CAREERS_CANDIDATE_HOST_RE = re.compile(
 )
 _CAREERS_CANDIDATE_MIN_CONTENT_CHARS = 200
 
+# D22 — a Workday-hosted board whose path names it a junior/student board
+# must never outrank a sibling "professionals" board seen in the SAME run
+# (e.g. TRUMPF's "TRUMPF_Students" vs "TRUMPF_Graduates_and_Professionals").
+# Scoped to Workday hosts specifically — these words are too generic to
+# safely bias every own-domain URL's ranking (an own-domain page titled
+# "careers" is the NORMAL case, not a signal).
+_WORKDAY_HOST_MARKER = "myworkdayjobs.com"
+# Review nit 6 — a Workday tenant path is underscore-joined words
+# ("TRUMPF_Students", "TRUMPF_Graduates_and_Professionals"), so a plain
+# \b...\b word boundary does nothing (`_` counts as a word character,
+# giving no boundary between "TRUMPF" and "_Students") while STILL failing
+# to reject a substring match inside a longer word ("BASF_International"
+# contains "intern"). Anchor explicitly on "/", "_", "-" or start/end of
+# string instead, on both sides.
+_WORKDAY_JUNIOR_PATH_RE = re.compile(
+    r"(?:^|[/_-])(?:students?|graduates?_only|praktik|intern)(?:[/_-]|$)", re.IGNORECASE,
+)
+_WORKDAY_PROFESSIONAL_PATH_RE = re.compile(
+    r"(?:^|[/_-])(?:professionals?|careers|jobs|external)(?:[/_-]|$)", re.IGNORECASE,
+)
+_MAX_CAREERS_CANDIDATE_URLS = 3
+
 
 def _ats_match_safe(host: str) -> bool:
     """Lazy, best-effort import of routers.pipeline._ats_match — mirrors
@@ -550,12 +615,26 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
                     or bool(_CAREERS_CANDIDATE_HOST_RE.match(host))
                 )
                 if is_ats or is_careers_candidate:
-                    careers_candidates.append((2 if is_ats else 1, i, url))
+                    score = 2 if is_ats else 1
+                    # D22 — a Workday sibling-board nudge, only ever applied
+                    # on top of an otherwise-equal ATS score so it settles a
+                    # tie between "TRUMPF_Students" and
+                    # "TRUMPF_Graduates_and_Professionals", never promotes a
+                    # weaker (non-ATS) candidate above a real ATS hit.
+                    if _WORKDAY_HOST_MARKER in host:
+                        path = urlparse(url).path
+                        if _WORKDAY_PROFESSIONAL_PATH_RE.search(path):
+                            score += 1
+                        elif _WORKDAY_JUNIOR_PATH_RE.search(path):
+                            score -= 1
+                    careers_candidates.append((score, i, url))
 
     careers_candidate_url = ""
+    careers_candidate_urls: list = []
     if careers_candidates:
         careers_candidates.sort(key=lambda t: (-t[0], t[1]))
-        careers_candidate_url = careers_candidates[0][2]
+        careers_candidate_urls = [u for _, _, u in careers_candidates[:_MAX_CAREERS_CANDIDATE_URLS]]
+        careers_candidate_url = careers_candidate_urls[0]
 
     return {
         "blocked_urls": blocked_urls[-_MAX_BLOCKED_URLS:],
@@ -563,6 +642,11 @@ def classify_tool_calls(tool_calls: list, domain: str) -> dict:
         "failed_queries": failed_queries[:_MAX_QUERY_LIST],
         "needs_js": no_content_own_domain >= 2,
         "careers_candidate_url": careers_candidate_url,
+        # D22 — up to 3, ranked professional-board first for a Workday
+        # tenant with a junior/student sibling; routers/pipeline.py's
+        # _careers_candidates offers all of them as "pi-run" tier
+        # candidates, not just the top one.
+        "careers_candidate_urls": careers_candidate_urls,
     }
 
 
@@ -792,9 +876,12 @@ async def _reflect_on_run_body(org_id: int, db_run_id: int, subject: Optional[st
     # CANDIDATE only: careers.url/tier stay the scanner's (routers/pipeline.py
     # _scan_client_jobs) to write; _merge_dict_field's scalar-overwrite means
     # each new run's candidate simply replaces the last one (bounded to 1).
+    # D22 — candidate_urls carries up to 3, ranked professional-board first
+    # for a Workday tenant with a junior/student sibling.
     if classified.get("careers_candidate_url"):
         patch["careers"] = {
             "candidate_url": classified["careers_candidate_url"],
+            "candidate_urls": classified.get("careers_candidate_urls") or [classified["careers_candidate_url"]],
             "candidate_source": "pi-run",
             "candidate_at": _now_iso(),
         }

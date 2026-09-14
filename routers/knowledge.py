@@ -1499,6 +1499,22 @@ async def _build_brief_context(org_id: int, client: dict) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _brief_generated_at(row_meta: dict, created_at) -> str:
+    """D23 — documents.created_at is only ever set on the FIRST insert of a
+    doc_id; index_document's upsert (ON CONFLICT DO UPDATE) never touches it
+    again, so a same-day regen (manual or automatic) that reuses today's
+    doc_id would otherwise keep showing the ORIGINAL creation time forever,
+    however many times the content is actually regenerated. Prefer
+    metadata.generated_at (stamped by _auto_generate_brief and
+    generate_client_brief whenever they write fresh content, and preserved
+    untouched by _rewrite_brief_close_out's banner-only patch) when present;
+    fall back to created_at for a document written before this field existed."""
+    generated_at = (row_meta or {}).get("generated_at")
+    if generated_at:
+        return str(generated_at).replace("T", " ")[:19]
+    return str(created_at)[:19]
+
+
 @router.get("/api/clients/{name}/brief")
 async def get_client_brief(name: str, user: dict = Depends(current_user)):
     """Return the latest generated brief for a client."""
@@ -1525,7 +1541,7 @@ async def get_client_brief(name: str, user: dict = Depends(current_user)):
     row_meta = row["metadata"] or {}
     return {
         "brief": row["content"],
-        "generated_at": str(row["created_at"])[:19],
+        "generated_at": _brief_generated_at(row_meta, row["created_at"]),
         "doc_id": row["id"],
         "partial": row_meta.get("partial") or [],
         "failed_parts": row_meta.get("failed_parts") or [],
@@ -1633,7 +1649,13 @@ async def _auto_generate_brief(org_id: int, client_name: str, *, partial_missing
             brief_content = "\n\n".join(banners) + "\n\n" + brief_content
         doc_id_str = f"brief-{hashlib.sha256(client_name.encode()).hexdigest()[:12]}-{today}"
         embedding = await db_module.embed_text(brief_content[:512])
-        metadata = {"subject": client_name, "generated_date": today}
+        # D23 — the actual moment this CONTENT was generated (as opposed to
+        # documents.created_at, which index_document's upsert never touches
+        # on a same-day doc_id reuse, so it keeps showing the FIRST time this
+        # doc_id was ever written). _rewrite_brief_close_out patches only the
+        # banner later, never this field — it has no new content to date.
+        metadata = {"subject": client_name, "generated_date": today,
+                    "generated_at": datetime.now(timezone.utc).isoformat()}
         metadata["partial"] = list(partial_missing) if partial_missing else []
         metadata["failed_parts"] = list(failed_parts) if failed_parts else []
         if partial_missing:
@@ -1760,6 +1782,20 @@ async def generate_client_brief(name: str, user: dict = Depends(current_user)):
         logger.error("Brief generation failed for %s: %s", name, exc)
         raise HTTPException(status_code=502, detail=f"AI call failed: {exc}")
 
+    # D23 — a manual regen can be closing out an intake that has one or more
+    # permanently-FAILED parts (e.g. jobs: "no careers page found"). Unlike a
+    # part still queued/running, a failed one will never "arrive" on its
+    # own, so the automatic close-out path (_auto_generate_brief) already
+    # renders a "> **Not collected:** …" note for exactly this case (WP10
+    # D4) — this manual endpoint never did. Re-read the client fresh (not
+    # the pre-brain-call snapshot above) since the brain call can take a
+    # while and a part can finish/fail while it runs.
+    current_client = await db_module.get_client(org_id, name)
+    current_parts = ((current_client or {}).get("metadata") or {}).get("intake", {}).get("parts") or {}
+    failed_parts = [m for m in intake._missing_parts(current_parts) if " (failed: " in m]
+    if failed_parts:
+        brief_content = f"{_failed_parts_banner(failed_parts)}\n\n{brief_content}"
+
     # Save as type=client_brief document, linked to client
     doc_id_str = f"brief-{hashlib.sha256(name.encode()).hexdigest()[:12]}-{today}"
     embedding = await db_module.embed_text(brief_content[:512])
@@ -1769,7 +1805,13 @@ async def generate_client_brief(name: str, user: dict = Depends(current_user)):
         doc_type="client_brief",
         title=f"{name} — Account Brief {today}",
         content=brief_content,
-        metadata={"subject": name, "generated_date": today},
+        # generated_at: this manual regen is freshly-generated content (the
+        # brain call above just ran) — distinct from documents.created_at,
+        # which index_document's upsert never touches on a same-day doc_id
+        # reuse (see get_client_brief's read side).
+        metadata={"subject": name, "generated_date": today,
+                  "generated_at": datetime.now(timezone.utc).isoformat(),
+                  "partial": [], "failed_parts": failed_parts},
         embedding=embedding or [],
         source="agent",
         created_by=user["id"],

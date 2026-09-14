@@ -100,6 +100,50 @@ async def test_record_dedupes_blocked_urls_by_url_keeping_newest_at():
     assert by_url["https://acme.com/y"]["at"] == "t0"
 
 
+async def test_record_scrubs_legal_url_from_existing_newsroom_urls_on_any_write():
+    """D24 — a legal/boilerplate URL (e.g. an Impressum page) recorded into
+    newsroom.urls before the source-side filter shipped (or added by hand)
+    must be scrubbed the next time ANYTHING writes to this playbook, not
+    just when a patch's own newsroom.urls list happens to mention it."""
+    existing = {"metadata": {
+        "domain": "datev.de",
+        "newsroom": {"urls": [
+            "https://datev.de/presse",
+            "https://datev.de/ueber-datev/impressum?utm_source=x",
+        ], "last_success_at": "2026-09-14T01:24:00+00:00"},
+    }}
+    db = _db(get_document=existing)
+    with patch.object(playbook, "db_module", db):
+        # An unrelated patch (news.good_queries) still triggers the cleanup.
+        merged = await playbook.record(1, "datev.de", {"news": {"good_queries": ["datev news"]}})
+    assert merged["newsroom"]["urls"] == ["https://datev.de/presse"]
+    assert merged["newsroom"]["last_success_at"] == "2026-09-14T01:24:00+00:00"  # untouched
+
+
+async def test_record_writes_aliases_field_under_original_domain():
+    """D27 — the playbook document stays keyed by the ORIGINAL domain
+    (site-playbook-vorwerk.de), with the canonical alias recorded as a
+    top-level scalar field, not nested under careers/newsroom/news."""
+    db = _db()
+    with patch.object(playbook, "db_module", db):
+        merged = await playbook.record(1, "vorwerk.de", {"aliases": ["vorwerk.com"]})
+    assert merged["aliases"] == ["vorwerk.com"]
+    db.index_document.assert_awaited_once()
+    kwargs = db.index_document.await_args.kwargs
+    assert kwargs["doc_id"] == "site-playbook-vorwerk.de"
+
+
+async def test_record_leaves_newsroom_urls_alone_when_none_are_legal():
+    existing = {"metadata": {
+        "domain": "acme.com",
+        "newsroom": {"urls": ["https://acme.com/presse", "https://acme.com/news"]},
+    }}
+    db = _db(get_document=existing)
+    with patch.object(playbook, "db_module", db):
+        merged = await playbook.record(1, "acme.com", {"needs_js": True})
+    assert merged["newsroom"]["urls"] == ["https://acme.com/presse", "https://acme.com/news"]
+
+
 # ---------------------------------------------------------------------------
 # _mirror_summary
 # ---------------------------------------------------------------------------
@@ -311,6 +355,91 @@ def test_classify_tool_calls_ats_candidate_outranks_careers_path_candidate():
     ]
     result = playbook.classify_tool_calls(tool_calls, domain)
     assert result["careers_candidate_url"] == "https://acme.wd3.myworkdayjobs.com/en-US/Acme"
+
+
+# ---------------------------------------------------------------------------
+# D22 — Workday junior/student board vs. a sibling "professionals" board
+# ---------------------------------------------------------------------------
+
+def test_classify_tool_calls_prefers_workday_professional_board_over_student_board():
+    """A run that fetched BOTH TRUMPF's student board and its professional
+    board must rank the professional one first, regardless of visit order —
+    Trumpf got permanently stuck on the student board precisely because
+    nothing ever preferred the sibling."""
+    domain = "trumpf.com"
+    tool_calls = [
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"},
+         "result": _LONG_JOBS_TEXT, "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == \
+        "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"
+    assert result["careers_candidate_urls"][0] == \
+        "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"
+    assert "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students" in result["careers_candidate_urls"]
+
+
+def test_classify_tool_calls_prefers_workday_professional_even_when_visited_first():
+    domain = "trumpf.com"
+    tool_calls = [
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+        {"tool": "fetch_page",
+         "args": {"url": "https://trumpf.wd3.myworkdayjobs.com/de-DE/TRUMPF_Students"},
+         "result": _LONG_JOBS_TEXT, "ts": "t1"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == \
+        "https://trumpf.wd3.myworkdayjobs.com/TRUMPF_Graduates_and_Professionals"
+
+
+def test_classify_tool_calls_careers_candidate_urls_capped_at_three():
+    domain = "acme.com"
+    urls = [
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_A",
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_B",
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_C",
+        "https://acme.wd3.myworkdayjobs.com/en-US/Acme_D",
+    ]
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": u}, "result": _LONG_JOBS_TEXT, "ts": f"t{i}"}
+        for i, u in enumerate(urls)
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert len(result["careers_candidate_urls"]) == 3
+
+
+def test_classify_tool_calls_non_workday_host_unaffected_by_student_word():
+    """The junior/professional nudge is scoped to Workday hosts — an
+    own-domain URL that happens to contain "students" must not be
+    penalized; it's still scored purely on the existing D12 rules."""
+    domain = "acme.com"
+    tool_calls = [
+        {"tool": "fetch_page", "args": {"url": "https://acme.com/karriere/students-program"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == "https://acme.com/karriere/students-program"
+
+
+def test_classify_tool_calls_workday_substring_not_falsely_flagged_as_junior():
+    """Review nit 6 — an unanchored "intern" substring match would have
+    wrongly treated a Workday tenant literally named "BASF_International"
+    as a junior board. Anchored on /, _, - or string edges, it must not —
+    it still scores as a plain (unadjusted) ATS candidate."""
+    domain = "basf.com"
+    tool_calls = [
+        {"tool": "fetch_page",
+         "args": {"url": "https://basf.wd3.myworkdayjobs.com/BASF_International"},
+         "result": _LONG_JOBS_TEXT, "ts": "t0"},
+    ]
+    result = playbook.classify_tool_calls(tool_calls, domain)
+    assert result["careers_candidate_url"] == "https://basf.wd3.myworkdayjobs.com/BASF_International"
 
 
 async def test_reflect_on_run_records_pi_run_careers_candidate():

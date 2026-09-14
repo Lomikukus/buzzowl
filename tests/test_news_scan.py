@@ -864,6 +864,26 @@ class TestNewsroomCandidates:
         assert by_url["https://acme.com/presse/produkt-c"] == "2026-09-10"
 
     @pytest.mark.asyncio
+    async def test_alias_domain_article_link_kept_not_dropped(self, monkeypatch):
+        """D27 — vorwerk.de -> vorwerk.com: an article link ON a newsroom
+        page that itself lives on the resolved canonical alias domain must
+        not be discarded as off-domain."""
+        fake_pb = MagicMock()
+        fake_pb.load = AsyncMock(return_value=None)
+        monkeypatch.setitem(sys.modules, "playbook", fake_pb)
+        client = _client("Vorwerk", website="https://vorwerk.de",
+                          monitored_sources=[{"url": "https://vorwerk.de/presse"}])
+        html = ('<html><body><a href="https://www.vorwerk.com/de/presse/produkt-a">'
+                'Vorwerk launches Produkt A</a> <span class="date">12.09.2026</span></body></html>')
+        httpx_patch, _ = _patch_page_httpx(html)
+        with httpx_patch, patch.object(pipeline, "_resolve_site_domain",
+                                        AsyncMock(return_value="vorwerk.com")):
+            candidates, blocked = await pipeline._newsroom_candidates(1, client)
+        assert blocked == []
+        assert len(candidates) == 1
+        assert candidates[0]["url"] == "https://www.vorwerk.com/de/presse/produkt-a"
+
+    @pytest.mark.asyncio
     async def test_no_date_nearby_dropped(self, monkeypatch):
         client = self._client_with_playbook(monkeypatch)
         html = '<html><body><a href="/presse/no-date">No date here</a></body></html>'
@@ -933,10 +953,12 @@ class TestNewsroomCandidates:
         client = self._client_with_playbook(monkeypatch, newsroom_urls=[url])
         rescued_links_html = '<a href="/presse/item">Item</a> <span class="date">12.09.2026</span>'
         httpx_patch, get_client = _patch_page_httpx(status=403, text="")
-        with httpx_patch, patch.object(
-            pipeline, "_fetch_rendered_tier",
-            AsyncMock(return_value=("Rendered snapshot text", "camofox", rescued_links_html)),
-        ) as rendered_mock:
+        with httpx_patch, \
+             patch.object(pipeline, "_resolve_site_domain", AsyncMock(return_value="")), \
+             patch.object(
+                 pipeline, "_fetch_rendered_tier",
+                 AsyncMock(return_value=("Rendered snapshot text", "camofox", rescued_links_html)),
+             ) as rendered_mock:
             candidates, blocked = await pipeline._newsroom_candidates(1, client)
         assert blocked == []
         assert len(candidates) == 1
@@ -1209,27 +1231,32 @@ class TestClientNewsScan:
         assert result["found"] == 0
         llm_mock.assert_not_awaited()
 
-    # -- WP9: degraded-backend detection -----------------------------------
+    # -- WP9/D20 review B5: degraded-backend detection ----------------------
+    # A majority of the CONFIGURED search engines being unresponsive
+    # (_NEWS_MAJORITY_UNRESPONSIVE, currently 4) is what matters — not how
+    # many raw candidates were found. Below that majority, neither error nor
+    # warning fires; no unresponsive engines at all guarantees error is None.
 
     @pytest.mark.asyncio
-    async def test_degraded_all_unresponsive_zero_results_sets_error_nothing_written(self):
+    async def test_majority_unresponsive_zero_candidates_sets_error(self):
         client = _client("Acme GmbH")
-        unresponsive = [["brave", "Suspended: too many requests"], ["startpage", "Suspended: CAPTCHA"]]
+        unresponsive = [["brave", "Suspended: too many requests"], ["startpage", "Suspended: CAPTCHA"],
+                         ["duckduckgo", "CAPTCHA"], ["google", "Suspended: CAPTCHA"]]
         db = MagicMock()
         db.index_document = AsyncMock()
         with patch.object(pipeline, "db_module", db), \
              patch.object(pipeline, "_news_candidates",
-                          AsyncMock(return_value=_news_data([], unresponsive=unresponsive, news_zero_all=True))), \
+                          AsyncMock(return_value=_news_data([], unresponsive=unresponsive))), \
              _no_newsroom(), \
              patch.object(pipeline.llm, "acomplete", AsyncMock()) as llm_mock:
             result = await pipeline._client_news_scan(1, client)
         assert result["error"] is not None
         assert "search degraded" in result["error"]
-        assert "2 engines unresponsive" in result["error"]
+        assert "4 engines unresponsive" in result["error"]
         assert result["found"] == 0
         assert result["written"] == 0
         db.index_document.assert_not_awaited()
-        llm_mock.assert_not_awaited()
+        llm_mock.assert_not_awaited()  # nothing fresh to score
 
     @pytest.mark.asyncio
     async def test_all_undated_after_probe_sets_error_nothing_written(self):
@@ -1247,9 +1274,133 @@ class TestClientNewsScan:
         llm_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_newsroom_saves_degraded_scan_sets_warning_and_writes(self):
+    async def test_review_b5_found_8_written_0_majority_unresponsive_errors(self):
+        """The reviewer's own scenario 1: found=8, written=0, 7 engines
+        suspended -> error, regardless of the (large) found count."""
         client = _client("Acme GmbH", website="https://www.acme.com")
-        unresponsive = [["brave", "Suspended: too many requests"]]
+        unresponsive = [[f"engine{i}", "Suspended"] for i in range(7)]
+        cand = [
+            {"url": f"https://acme.com/news/{i}", "title": f"t{i}", "content": "c",
+             "_norm_url": f"acme.com/news/{i}", "_published": _RECENT_ISO, "query": "q"}
+            for i in range(8)
+        ]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates",
+                          AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
+            result = await pipeline._client_news_scan(1, client)
+        assert result["found"] == 8
+        assert result["written"] == 0
+        assert result["error"] is not None
+        assert "search degraded" in result["error"]
+        assert "warning" not in result
+
+    @pytest.mark.asyncio
+    async def test_review_b5_found_3_written_0_majority_unresponsive_still_errors(self):
+        """Scenario 2: found=3, written=0, 7 suspended -> error. `found`
+        alone (>=3) no longer protects a written:0 outcome from failing —
+        only actually writing something (or the backend being healthy)
+        does, per the review's "independent of found" instruction."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        unresponsive = [[f"engine{i}", "Suspended"] for i in range(7)]
+        cand = [
+            {"url": f"https://acme.com/press-{i}", "title": f"t{i}", "content": "c",
+             "_norm_url": f"acme.com/press-{i}", "_published": _RECENT_ISO, "query": "site:acme.com"}
+            for i in range(3)
+        ]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates",
+                          AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
+            result = await pipeline._client_news_scan(1, client)
+        assert result["found"] == 3
+        assert result["written"] == 0
+        assert result["error"] is not None
+        assert "search degraded" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_review_b5_found_1_written_1_majority_unresponsive_is_warning(self):
+        """Scenario 3: found=1, written=1 -> warning, not error, despite the
+        same majority-unresponsive backend."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        unresponsive = [[f"engine{i}", "Suspended"] for i in range(7)]
+        cand = [{"url": "https://acme.com/news/1", "title": "t", "content": "c",
+                 "_norm_url": "acme.com/news/1", "_published": _RECENT_ISO, "query": "q"}]
+        reply = json.dumps([{"i": 0, "relevance": 3, "signal_type": "news", "headline": "h", "why": "w"}])
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=101)
+        db.link_document = AsyncMock()
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates",
+                          AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            result = await pipeline._client_news_scan(1, client)
+        assert result["found"] == 1
+        assert result["written"] == 1
+        assert result["error"] is None
+        assert "warning" in result and "search degraded" in result["warning"]
+
+    @pytest.mark.asyncio
+    async def test_review_b5_found_3_written_0_no_unresponsive_is_healthy(self):
+        """Scenario 4: found=3, written=0, no engines suspended -> a
+        genuinely healthy "nothing scored well" outcome; error stays None
+        and no warning is added."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        cand = [
+            {"url": f"https://acme.com/press-{i}", "title": f"t{i}", "content": "c",
+             "_norm_url": f"acme.com/press-{i}", "_published": _RECENT_ISO, "query": "q"}
+            for i in range(3)
+        ]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates", AsyncMock(return_value=_news_data(cand))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
+            result = await pipeline._client_news_scan(1, client)
+        assert result["found"] == 3
+        assert result["written"] == 0
+        assert result["error"] is None
+        assert "warning" not in result
+        assert "unresponsive" not in result
+
+    @pytest.mark.asyncio
+    async def test_below_majority_unresponsive_zero_written_is_neither(self):
+        """Fewer than _NEWS_MAJORITY_UNRESPONSIVE engines down (here: 2) —
+        below the majority floor, so a written:0 outcome is trusted as-is:
+        no error, no warning, even though `unresponsive` is still reported."""
+        client = _client("Acme GmbH")
+        unresponsive = [["brave", "Suspended: too many requests"], ["startpage", "Suspended: CAPTCHA"]]
+        db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock()
+        with patch.object(pipeline, "db_module", db), \
+             patch.object(pipeline, "_news_candidates",
+                          AsyncMock(return_value=_news_data([], unresponsive=unresponsive))), \
+             _no_newsroom(), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock()) as llm_mock:
+            result = await pipeline._client_news_scan(1, client)
+        assert result["error"] is None
+        assert "warning" not in result
+        assert result["unresponsive"] == unresponsive
+        db.index_document.assert_not_awaited()
+        llm_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_newsroom_candidates_count_toward_found_and_written(self):
+        """The newsroom tier's candidates flow through the same unified
+        found/written accounting as SearXNG ones — no separate "does the
+        newsroom tier save the scan" special case needed anymore."""
+        client = _client("Acme GmbH", website="https://www.acme.com")
+        unresponsive = [[f"engine{i}", "Suspended"] for i in range(7)]
         newsroom_cand = [
             {"url": f"https://acme.com/press/{i}", "title": f"Press {i}", "content": "",
              "_norm_url": f"acme.com/press/{i}", "_published": _RECENT_ISO, "query": "", "engine": "newsroom"}
@@ -1265,7 +1416,7 @@ class TestClientNewsScan:
         db.link_document = AsyncMock()
         with patch.object(pipeline, "db_module", db), \
              patch.object(pipeline, "_news_candidates",
-                          AsyncMock(return_value=_news_data([], unresponsive=unresponsive, news_zero_all=True))), \
+                          AsyncMock(return_value=_news_data([], unresponsive=unresponsive))), \
              patch.object(pipeline, "_newsroom_candidates", AsyncMock(return_value=(newsroom_cand, []))), \
              patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
             result = await pipeline._client_news_scan(1, client)
@@ -1278,25 +1429,30 @@ class TestClientNewsScan:
         assert result["unresponsive"] == unresponsive
 
     @pytest.mark.asyncio
-    async def test_newsroom_under_three_does_not_save_a_degraded_scan(self):
+    async def test_newsroom_alone_thin_and_unscored_still_errors_when_majority_down(self):
+        """A single newsroom candidate is still SCORED (no more "under 3
+        means skip the LLM" shortcut) — if it doesn't score well and the
+        backend is majority-unresponsive, that's an error like any other
+        written:0 outcome."""
         client = _client("Acme GmbH", website="https://www.acme.com")
-        unresponsive = [["brave", "Suspended: too many requests"]]
+        unresponsive = [[f"engine{i}", "Suspended"] for i in range(7)]
         newsroom_cand = [
             {"url": "https://acme.com/press/1", "title": "Press 1", "content": "",
              "_norm_url": "acme.com/press/1", "_published": _RECENT_ISO, "query": "", "engine": "newsroom"},
         ]
         db = MagicMock()
+        db.list_documents = AsyncMock(return_value=[])
         db.index_document = AsyncMock()
         with patch.object(pipeline, "db_module", db), \
              patch.object(pipeline, "_news_candidates",
-                          AsyncMock(return_value=_news_data([], unresponsive=unresponsive, news_zero_all=True))), \
+                          AsyncMock(return_value=_news_data([], unresponsive=unresponsive))), \
              patch.object(pipeline, "_newsroom_candidates", AsyncMock(return_value=(newsroom_cand, []))), \
-             patch.object(pipeline.llm, "acomplete", AsyncMock()) as llm_mock:
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
             result = await pipeline._client_news_scan(1, client)
+        assert result["written"] == 0
         assert result["error"] is not None
         assert "warning" not in result
         db.index_document.assert_not_awaited()
-        llm_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_newsroom_blocked_urls_recorded_to_playbook(self, monkeypatch):
@@ -1318,50 +1474,30 @@ class TestClientNewsScan:
         assert call.args[2] == {"blocked_urls": blocked}
 
     @pytest.mark.asyncio
-    async def test_unresponsive_but_not_degraded_still_reported_alongside_found(self):
-        """Some engines down but real dated candidates still came back — not
-        degraded, so it proceeds normally, but the caller still learns which
-        engines were unresponsive."""
+    async def test_unresponsive_but_something_written_is_not_degraded(self):
+        """Some engines down but a real dated candidate still came back AND
+        scored well — a genuinely healthy outcome despite the flaky engine,
+        so it's neither an error nor a warning; the caller still learns
+        which engines were unresponsive."""
         client = _client("Acme GmbH")
         unresponsive = [["brave", "Suspended: too many requests"]]
         cand = [{"url": "https://acme.com/news/1", "title": "t", "content": "c",
                  "_norm_url": "acme.com/news/1", "_published": _RECENT_ISO, "query": "q"}]
+        reply = json.dumps([{"i": 0, "relevance": 3, "signal_type": "news", "headline": "h", "why": "w"}])
         db = MagicMock()
         db.list_documents = AsyncMock(return_value=[])
+        db.index_document = AsyncMock(return_value=101)
+        db.link_document = AsyncMock()
         with patch.object(pipeline, "db_module", db), \
              patch.object(pipeline, "_news_candidates",
                           AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive))), \
              _no_newsroom(), \
-             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
             result = await pipeline._client_news_scan(1, client)
         assert result["error"] is None
+        assert "warning" not in result
+        assert result["written"] == 1
         assert result["unresponsive"] == unresponsive
-
-    @pytest.mark.asyncio
-    async def test_candidates_exist_but_news_queries_degraded_sets_warning(self):
-        """WP9 review nit 1: both original degraded branches required
-        `not candidates`, so "every news-category query dead, but the
-        site: domain query still returned something" read as healthy. It
-        should warn (not error — there IS a candidate) since the news
-        search itself was degraded."""
-        client = _client("Acme GmbH", website="https://www.acme.com")
-        unresponsive = [["brave", "Suspended: too many requests"]]
-        # A candidate that came from the site:domain (general-category)
-        # query, not from a news-category one — every news query was zero.
-        cand = [{"url": "https://acme.com/press-release", "title": "t", "content": "c",
-                 "_norm_url": "acme.com/press-release", "_published": _RECENT_ISO, "query": "site:acme.com"}]
-        db = MagicMock()
-        db.list_documents = AsyncMock(return_value=[])
-        with patch.object(pipeline, "db_module", db), \
-             patch.object(pipeline, "_news_candidates",
-                          AsyncMock(return_value=_news_data(cand, unresponsive=unresponsive, news_zero_all=True))), \
-             _no_newsroom(), \
-             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=json.dumps([]))):
-            result = await pipeline._client_news_scan(1, client)
-        assert result["error"] is None
-        assert "warning" in result and "search degraded" in result["warning"]
-        assert result["unresponsive"] == unresponsive
-        assert result["found"] == 1   # the candidate is still scored, nothing is dropped
 
 
 # ---------------------------------------------------------------------------
