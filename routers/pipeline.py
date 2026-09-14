@@ -1818,32 +1818,88 @@ async def _client_news_scan(
     """Score fresh news candidates for one client with a single text LLM call
     and write the relevant ones as client-linked type='signal' documents.
 
-    Flow: candidates minus already-known signal URLs → one llm.acomplete call
-    → keep relevance ≥2 → index_document + link_document for each (capped at
-    max_write). A SearXNG outage is retried once after 20s before giving up;
-    an LLM failure writes nothing. Returns
-    {found, scored, written, max_relevance, error}."""
+    Flow: SearXNG candidates (_news_candidates) plus the client's own-
+    newsroom tier (_newsroom_candidates, backend-independent of SearXNG)
+    minus already-known signal URLs → one llm.acomplete call → keep
+    relevance ≥2 → index_document + link_document for each (capped at
+    max_write).
+
+    Before scoring, a degraded SearXNG backend is detected and reported
+    instead of silently returning found=0/error=None: either every
+    news-category query came back with zero raw results while ≥1 engine was
+    unresponsive, or SearXNG results came back but 100% stayed undated even
+    after the page-header probe (step 3). Either sets result["error"] and
+    writes nothing — UNLESS the newsroom tier alone found ≥3 candidates, in
+    which case there is real news regardless of the search backend and the
+    scan proceeds with result["warning"] set instead of failing the part.
+    A total SearXNG outage (every query raised) is retried once after 20s
+    before giving up as before; an LLM failure writes nothing. Returns
+    {found, scored, written, max_relevance, error}, plus warning/
+    unresponsive/newsroom_found when relevant."""
     name = client["name"]
     client_id = client["id"]
     result: dict = {"found": 0, "scored": 0, "written": 0, "max_relevance": 0, "error": None}
 
-    candidates: Optional[list[dict]] = None
+    data: Optional[dict] = None
     last_exc: Optional[Exception] = None
     for attempt in range(2):
         try:
-            candidates = await _news_candidates(org_id, client)
+            data = await _news_candidates(org_id, client)
             break
         except Exception as exc:
             last_exc = exc
             if attempt == 0:
                 await asyncio.sleep(20)
-    if candidates is None:
+    if data is None:
         console.print(f"[yellow]news scan: SearXNG unreachable for '{name}': {last_exc}[/yellow]")
         result["error"] = "searxng unreachable"
         return result
 
+    candidates = data.get("candidates") or []
+    unresponsive = data.get("unresponsive") or []
+    undated_total = data.get("undated_total", 0)
+    news_zero_all = data.get("news_zero_all", False)
+
+    try:
+        newsroom_candidates, newsroom_blocked = await _newsroom_candidates(org_id, client)
+    except Exception as exc:
+        console.print(f"[yellow]news scan: newsroom tier failed for '{name}': {exc}[/yellow]")
+        newsroom_candidates, newsroom_blocked = [], []
+
+    if newsroom_candidates:
+        result["newsroom_found"] = len(newsroom_candidates)
+
+    if newsroom_blocked:
+        domain = _client_domain(client)
+        if domain:
+            try:
+                import playbook  # type: ignore
+                await playbook.record(org_id, domain, {"blocked_urls": newsroom_blocked}, run_id=run_id)
+            except Exception as exc:
+                console.print(f"[yellow]news scan: playbook blocked_urls record failed for '{name}': {exc}[/yellow]")
+
+    degraded_reason = None
+    if not candidates and unresponsive and news_zero_all:
+        reasons = ", ".join(f"{e}: {r}" for e, r in unresponsive[:3])
+        degraded_reason = f"search degraded: {len(unresponsive)} engines unresponsive ({reasons})"
+    elif not candidates and undated_total > 0:
+        degraded_reason = "search results undated"
+
+    if degraded_reason:
+        if len(newsroom_candidates) >= 3:
+            result["warning"] = degraded_reason
+        else:
+            result["error"] = degraded_reason
+            if unresponsive:
+                result["unresponsive"] = unresponsive
+            return result
+    elif unresponsive:
+        result["unresponsive"] = unresponsive
+
+    all_candidates = candidates + newsroom_candidates
+
     existing = await _existing_signal_urls(org_id, client_id)
-    fresh = [c for c in candidates if c["_norm_url"] not in existing]
+    fresh = [c for c in all_candidates if c["_norm_url"] not in existing]
     result["found"] = len(fresh)
     if not fresh:
         return result
