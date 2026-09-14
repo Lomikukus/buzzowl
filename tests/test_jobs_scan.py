@@ -641,6 +641,10 @@ class TestPlaybookIntegration:
         assert args[1] == "acme.com"
         assert args[2]["careers"]["url"] == "https://acme.com/jobs/"
         assert args[2]["careers"]["last_success_at"]
+        # D5: tier == "metadata" here (no playbook on file yet) must never be
+        # written back — it would permanently hide any real discovery tier a
+        # later scan finds behind an un-downgradeable "metadata".
+        assert "tier" not in args[2]["careers"]
         assert kwargs.get("run_id") == 7
 
     @pytest.mark.asyncio
@@ -659,6 +663,154 @@ class TestPlaybookIntegration:
         fake.record.assert_awaited_once()
         args, _kwargs = fake.record.await_args
         assert "last_failure_at" in args[2]["careers"]
+
+
+# ---------------------------------------------------------------------------
+# D5 — tier precedence, and _record_playbook never downgrades the tier
+# ---------------------------------------------------------------------------
+
+class TestTierPrecedenceAndNoDowngrade:
+    @pytest.mark.asyncio
+    async def test_second_scan_uses_playbook_tier_and_skips_discovery(self, monkeypatch):
+        fresh = datetime.now(timezone.utc).isoformat()
+        pb_state = {"careers": {"url": "https://acme.com/karriere", "tier": "searxng",
+                                 "last_success_at": fresh}}
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=pb_state)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        # metadata also carries a (stale/irrelevant) careers_url — the fresh
+        # playbook URL must win over it, per the D5 precedence order.
+        client = _client(website="https://acme.com", careers_url="https://acme.com/karriere")
+        reply = json.dumps({"positions": [{"title": "Cloud Engineer"}], "inferred_needs": []})
+        discover = AsyncMock(side_effect=AssertionError("discovery must be skipped"))
+        with db_patch, \
+             patch.object(pipeline, "_discover_careers_url", discover), \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("Cloud Engineer", "https://acme.com/karriere/cloud-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["tier"] == "playbook"
+        discover.assert_not_awaited()
+        fake.record.assert_awaited_once()
+        args, _ = fake.record.await_args
+        careers_patch = args[2]["careers"]
+        # The stored tier ("searxng" — the real, original discovery) must not
+        # be downgraded to "playbook".
+        assert "tier" not in careers_patch
+        assert careers_patch["last_success_at"]
+
+    @pytest.mark.asyncio
+    async def test_argument_url_beats_metadata_and_is_recorded_as_argument_tier(self, monkeypatch):
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com", careers_url="https://acme.com/old-metadata-url")
+        reply = json.dumps({"positions": [{"title": "Cloud Engineer"}], "inferred_needs": []})
+        with db_patch, \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("Cloud Engineer", "https://acme.com/karriere/cloud-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            summary = await pipeline._scan_client_jobs(1, client, careers_url="https://acme.com/karriere")
+
+        assert summary["tier"] == "argument"
+        args, _ = fake.record.await_args
+        assert args[2]["careers"]["tier"] == "argument"
+
+    @pytest.mark.asyncio
+    async def test_genuine_discovery_tier_written_and_discovered_tier_set_once(self, monkeypatch):
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)  # no playbook yet
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com")  # no careers_url anywhere -> real discovery
+        reply = json.dumps({"positions": [{"title": "Cloud Engineer"}], "inferred_needs": []})
+        with db_patch, \
+             patch.object(pipeline, "_discover_careers_url",
+                           AsyncMock(return_value=("https://acme.com/jobs/", "sitemap"))), \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("Cloud Engineer", "https://acme.com/jobs/cloud-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["tier"] == "sitemap"
+        args, _ = fake.record.await_args
+        careers_patch = args[2]["careers"]
+        assert careers_patch["tier"] == "sitemap"
+        assert careers_patch["discovered_tier"] == "sitemap"
+
+    @pytest.mark.asyncio
+    async def test_discovered_tier_never_overwritten_once_set(self, monkeypatch):
+        pb_state = {"careers": {"discovered_tier": "searxng"}}
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=pb_state)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com")
+        reply = json.dumps({"positions": [{"title": "Cloud Engineer"}], "inferred_needs": []})
+        with db_patch, \
+             patch.object(pipeline, "_discover_careers_url",
+                           AsyncMock(return_value=("https://acme.com/jobs/", "sitemap"))), \
+             patch.object(pipeline, "_sitemap_job_urls",
+                           AsyncMock(return_value=[("Cloud Engineer", "https://acme.com/jobs/cloud-1")])), \
+             patch.object(pipeline, "_fetch_posting_title", AsyncMock(return_value="")), \
+             patch.object(pipeline.llm, "acomplete", AsyncMock(return_value=reply)):
+            await pipeline._scan_client_jobs(1, client)
+
+        args, _ = fake.record.await_args
+        careers_patch = args[2]["careers"]
+        assert careers_patch["tier"] == "sitemap"  # tier itself DOES update
+        assert "discovered_tier" not in careers_patch  # already set — left alone
+
+
+# ---------------------------------------------------------------------------
+# D7 — own-domain path-probe failures feed playbook.blocked_urls
+# ---------------------------------------------------------------------------
+
+class TestBlockedUrlsFeedback:
+    @pytest.mark.asyncio
+    async def test_own_domain_403_recorded_once_to_playbook(self, monkeypatch):
+        fake = MagicMock()
+        fake.load = AsyncMock(return_value=None)
+        fake.record = AsyncMock()
+        monkeypatch.setitem(sys.modules, "playbook", fake)
+
+        db_patch, db = _patch_db()
+        client = _client(website="https://acme.com")
+        blocked_url = "https://acme.com/karriere"  # _CAREERS_PATHS[0]
+
+        def _resolver(url):
+            if url == blocked_url:
+                return _fake_response(403, "", url=url)
+            return _fake_response(404, "", url=url)
+
+        with db_patch, \
+             patch.object(pipeline, "_fetch_page_raw", AsyncMock(return_value=("", ""))), \
+             patch.object(pipeline, "_sitemap_job_urls", AsyncMock(return_value=[])), \
+             patch.object(pipeline, "_searxng_results", AsyncMock(return_value=[])), \
+             _patch_httpx_dynamic(_resolver):
+            summary = await pipeline._scan_client_jobs(1, client)
+
+        assert summary["found"] is False
+        fake.record.assert_awaited_once()
+        args, _ = fake.record.await_args
+        blocked = args[2].get("blocked_urls") or []
+        matches = [b for b in blocked if b["url"] == blocked_url]
+        assert len(matches) == 1
+        assert matches[0]["kind"] == "403"
 
 
 # ---------------------------------------------------------------------------

@@ -3186,10 +3186,30 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         except Exception:
             pb = None
 
-    url = (careers_url or meta.get("careers_url") or "").strip()
-    tier = "metadata" if url else ""
-    if not url:
+    # D5 — tier precedence, most specific/confirmed first: a fresh (<=60 day)
+    # playbook careers URL wins outright (discovery is skipped entirely, not
+    # just short-circuited inside _discover_careers_url); then an explicit
+    # careers_url argument (a human/admin-triggered scan); then whatever's
+    # cached on the client's own metadata; only then real discovery.
+    careers_pb = (pb or {}).get("careers") or {}
+    pb_url = (careers_pb.get("url") or "").strip()
+    arg_url = (careers_url or "").strip()
+    meta_url = (meta.get("careers_url") or "").strip()
+    if pb_url and _playbook_careers_fresh(careers_pb):
+        url, tier = pb_url, "playbook"
+    elif arg_url:
+        url, tier = arg_url, "argument"
+    elif meta_url:
+        url, tier = meta_url, "metadata"
+    else:
         url, tier = await _discover_careers_url(org_id, client, pb)
+
+    # D1/D7 — own-domain 403/4xx hit while probing for the careers page
+    # (path-probe tier), smuggled back on the client dict since
+    # _careers_candidates' signature is frozen. Consumed here (not left for
+    # a later reader) so it is reported exactly once, alongside this scan's
+    # playbook patch.
+    probe_blocked = client.pop("_probe_blocked", None) or []
 
     summary = {"client": name, "careers_url": url, "positions": 0, "needs": 0,
                "found": False, "tier": tier, "error": None}
@@ -3198,14 +3218,24 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
                                 report_tier: Optional[str] = None) -> None:
         if playbook is None or not domain:
             return
+        effective_tier = report_tier if report_tier is not None else tier
+        careers_patch: dict = {}
         # Omit "url" entirely when there's nothing to report (e.g. the "no
-        # careers page found" path) — an empty string here is inert today
-        # (playbook.record has no writer yet) but would clobber a good
-        # previously-recorded playbook URL once WP4 lands. last_failure_at /
-        # error below still get recorded either way.
-        careers_patch: dict = {"tier": report_tier if report_tier is not None else tier}
+        # careers page found" path) — an empty string here would clobber a
+        # good previously-recorded playbook URL. last_failure_at / error
+        # below still get recorded either way.
         if url:
             careers_patch["url"] = url
+        # D5 — "metadata"/"playbook" mean "we already knew the URL", not a
+        # fresh discovery: writing them back as `tier` would erase whatever
+        # more specific tier (searxng, sitemap, path-probe, ...) actually got
+        # this client working the first time. Only a genuine discovery run,
+        # or an explicit `careers_url` argument, is worth recording as tier —
+        # and, the first time it happens, as the permanent discovered_tier.
+        if effective_tier and effective_tier not in ("metadata", "playbook"):
+            careers_patch["tier"] = effective_tier
+            if success and not careers_pb.get("discovered_tier"):
+                careers_patch["discovered_tier"] = effective_tier
         if success:
             careers_patch["last_success_at"] = now_iso
             careers_patch["error"] = None
@@ -3215,6 +3245,8 @@ async def _scan_client_jobs(org_id: int, client: dict, careers_url: str = "", *,
         patch: dict = {"careers": careers_patch}
         if needs_js:
             patch["needs_js"] = True
+        if probe_blocked:
+            patch["blocked_urls"] = probe_blocked
         try:
             await playbook.record(org_id, domain, patch, run_id=run_id)
         except Exception as exc:
