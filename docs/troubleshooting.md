@@ -123,6 +123,13 @@ curl -s -X POST http://localhost:8000/api/clients/Acme/jobs/scan \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+Even with the right URL, bot-protected sites (many German corporate sites among
+them) can still come back empty: `routers/pipeline.py::_fetch_page_text` falls
+through plain GET -> Playwright `browser-service` -> Camofox (Firefox +
+fingerprint spoofing) whenever the earlier tier was blocked (403/503/429) or
+too thin, and an admin can see which tier actually served the last 50 fetches
+via `GET /api/agents/fetch-log`.
+
 ## LLM problems
 
 ```bash
