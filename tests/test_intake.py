@@ -184,6 +184,25 @@ class TestPureLogic:
         assert intake.is_active({}) is False
         assert intake.is_active(None) is False
 
+    def test_summary_present_false_without_intake(self):
+        """WP10 D8: a client that never had an intake run (meta.intake
+        absent) must not be reported as four bogus 'queued' parts waiting on
+        a brief — summary() now says so explicitly via `present: False`,
+        distinct from a real intake that just hasn't started any part yet."""
+        for meta in ({}, None, {"intake": {}}):
+            data = intake.summary(meta)
+            assert data["present"] is False
+            assert data["active"] is False
+            assert data["parts"] == {}
+            assert data["brief"] is None
+            assert data["percent"] is None
+
+    def test_summary_present_true_with_intake(self):
+        meta = {"intake": _intake_state()}
+        data = intake.summary(meta)
+        assert data["present"] is True
+        assert set(data["parts"].keys()) == set(intake.PARTS)
+
     def test_missing_lists_failed_and_pending(self):
         parts = {
             "osint": {"status": "done"},
@@ -1232,3 +1251,20 @@ class TestIntakeAPI:
         assert data["percent"] == 100
         assert data["brief"]["status"] == "written"
         assert "brief_generated_at" in data
+
+    def test_get_client_intake_present_false_without_intake(self, app_client):
+        """WP10 D8, over HTTP: a client with no metadata.intake at all gets
+        `present: False`, not four bogus 'queued' chips."""
+        fake_client = {"id": 11, "name": "OBI", "metadata": {}}
+        pool = _mock_pool(fetchrow_return=None)
+        with (
+            patch("server.db_module.get_client", new_callable=AsyncMock, return_value=fake_client),
+            patch("server.db_module._pool", pool),
+        ):
+            resp = app_client.get("/api/clients/OBI/intake", headers={"Authorization": "Bearer fake"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["present"] is False
+        assert data["active"] is False
+        assert data["parts"] == {}
+        assert data["brief"] is None

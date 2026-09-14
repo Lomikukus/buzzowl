@@ -140,11 +140,14 @@ otherwise re-checks whether the deadline, the absolute cap, or the one-time
 refresh condition has now been met.
 
 `GET /api/clients/{name}/intake` returns the live state for the client
-page's intake strip (a chip per part plus a brief-status chip). None of this
-gates the manual regenerate button: `POST /api/clients/{name}/brief` always
-runs immediately, intake open or not, and a manual brief closes an open
-intake (`written`, `missing` empty) so the collection point never overwrites
-it later.
+page's intake strip (a chip per part plus a brief-status chip). For a client
+that never had an intake run at all, it returns `present: false` (empty
+`parts`, `brief: null`) instead of four bogus `queued` chips (WP10 D8), and
+the client page hides the strip entirely in that case. None of this gates
+the manual regenerate button: `POST /api/clients/{name}/brief` always runs
+immediately, intake open or not, and a manual brief closes an open intake
+(`written`, `missing` empty) so the collection point never overwrites it
+later.
 
 ## Autonomy levels
 

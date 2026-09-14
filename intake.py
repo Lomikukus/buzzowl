@@ -171,8 +171,27 @@ def summary(meta: Optional[dict]) -> dict:
     `percent` counts terminal parts (done OR failed — a failed part isn't
     still "in progress") plus the brief itself as one more stage, out of
     len(PARTS) + 1 total: a written/refreshed/failed brief with all four
-    parts terminal reads 100%, not 80%."""
+    parts terminal reads 100%, not 80%.
+
+    A client that never had an intake run at all (`meta.intake` absent —
+    e.g. created before WP5, or never re-triggered) has no state to report:
+    `present: False` with empty/None fields, distinct from a real intake
+    that just hasn't started any part yet (WP10 D8 — this used to fall
+    through to four bogus `queued` parts and `brief: waiting`, with only
+    `active: False` telling the two cases apart)."""
     intake = (meta or {}).get("intake") or {}
+    if not intake:
+        return {
+            "active": False,
+            "present": False,
+            "trigger": None,
+            "started_at": None,
+            "deadline_at": None,
+            "attempt": None,
+            "parts": {},
+            "brief": None,
+            "percent": None,
+        }
     parts_state = intake.get("parts") or {}
     parts = {p: (parts_state.get(p) or _empty_part()) for p in PARTS}
     brief = intake.get("brief") or _empty_brief()
@@ -181,6 +200,7 @@ def summary(meta: Optional[dict]) -> dict:
     total_stages = len(PARTS) + 1
     return {
         "active": is_active(meta),
+        "present": True,
         "trigger": intake.get("trigger"),
         "started_at": intake.get("started_at"),
         "deadline_at": intake.get("deadline_at"),

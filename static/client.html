@@ -1156,7 +1156,9 @@ const INTAKE_SYMBOLS = { queued: '○', running: '⟳', done: '✓', failed: '�
 const INTAKE_STRIP_LINGER_MS = 60 * 60 * 1000; // 1 hour
 
 function _intakeShouldShow(data) {
-    if (!data || !data.trigger) return false;
+    // present === false: this client never had an intake run at all (WP10
+    // D8) — nothing to show, not even a "queued" placeholder strip.
+    if (!data || data.present === false || !data.trigger) return false;
     if (data.active) return true;
     // A brief that failed after 3 attempts has no written_at (see _finish's
     // failure branch) — without this it would never show at all, since the
