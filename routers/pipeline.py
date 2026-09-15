@@ -494,8 +494,33 @@ async def _trigger_enrichment(session_id: str, org_id: Optional[int]) -> None:
 
     run_id: Optional[int] = None
     backend = config.get("agent_service_backend", "python")
+    route_to_pi = backend in ("pi", "split")
+    # "" = let _fire_agent_service's choke point decide (org subscription, else
+    # config default). Filled in below only when we resolved the target here.
+    fire_brain, fire_model = "", ""
 
-    if DB_AVAILABLE and org_id and backend in ("pi", "split"):
+    if DB_AVAILABLE and org_id and not route_to_pi:
+        # Static config says "in-process Python loop" — but that loop needs tool
+        # calling, and this workspace may be served by the agent-pi bridge (a
+        # connected ChatGPT/Copilot subscription), which is text-only: llm.chat
+        # refuses tools on kind 'pi' and the run dies deep inside the loop with
+        # nothing written. So ask the resolver every Pi run goes through what
+        # this org's runs actually land on, and hand the work to agent-pi when
+        # that is the bridge — its 'enrichment' run type calls tools there.
+        # Any other provider keeps today's path exactly.
+        try:
+            from routers.agents import resolve_run_target
+            _provider, _brain, _model = await resolve_run_target(org_id, "", "")
+            if llm.provider_kind(_provider, org_id) == "pi":
+                route_to_pi = True
+                # Pass the resolution on rather than repeating it, so the two
+                # can't disagree (a subscription that expires between them).
+                fire_brain, fire_model = _brain, _model
+        except Exception as e:
+            # Never let a routing probe cost a session: fall back to today's path.
+            console.print(f"[dim]Enrichment target check failed for {session_id}: {e}[/dim]")
+
+    if DB_AVAILABLE and org_id and route_to_pi:
         # Route enrichment to Pi agent service
         try:
             from routers.agents import _fire_agent_service, _watch_agent_service_run
@@ -547,7 +572,7 @@ async def _trigger_enrichment(session_id: str, org_id: Optional[int]) -> None:
             _update_session_metadata(session_id, status="agent_working", agent_run_id=run_id)
             svc_url, svc_run_id = await _fire_agent_service(
                 session_id, org_id,
-                brain="", model="",   # "" = the choke point decides (org subscription, else config default)
+                brain=fire_brain, model=fire_model,   # "" = the choke point decides (org subscription, else config default)
                 task=task, agent_type="enrichment",
             )
             await db_module.update_agent_run(

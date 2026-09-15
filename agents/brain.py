@@ -63,6 +63,13 @@ class OpenAICompatibleBrain:
     async def think(self, messages: list[dict], tools: list["Tool"]) -> BrainResponse:
         import llm  # lazy — keeps brain.py importable without pulling provider config at import time
 
+        if tools:
+            # The tool-loop refusal, on the seam that always sees a warm overlay
+            # (runner._load_brain fires first but reads the cache only). Still
+            # before any tool runs — think() precedes the first tool call — and
+            # never on a text-only think(), which the Pi bridge serves fine.
+            await llm.ensure_org_overlay(self.org_id)
+            llm.ensure_tool_calling_supported(self.role, self.org_id)
         result = await llm.achat(messages, tools, role=self.role, model=self.model, org_id=self.org_id, surface="agent")
         return BrainResponse(
             content=result.get("content") or "",

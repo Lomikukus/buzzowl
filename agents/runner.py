@@ -60,6 +60,14 @@ def _load_brain(orchestrator: bool = False, brain_override: str = "", model_over
     # llm: block present → its default role owns the model choice; the legacy
     # agent_model key is only honored when synthesizing (no llm: block).
     model = model_override or (None if has_llm_block else cfg.get("agent_model"))
+    # A workspace on the agent-pi bridge (connected ChatGPT/Copilot subscription)
+    # has no in-process tool loop to offer: say so here, before the agent takes
+    # its first step, instead of dying six tool calls deep in llm.chat with
+    # "provider kind 'pi' is text-only". Cache-only, so a cold org overlay
+    # answers "don't know" and OpenAICompatibleBrain.think — which awaits the
+    # overlay — catches it on the first think(), still before any tool runs.
+    import llm as _llm    # lazy, same reason brain.py imports it lazily
+    _llm.ensure_tool_calling_supported("default", org_id)
     return OpenAICompatibleBrain(role="default", model=model, org_id=org_id)
 
 
