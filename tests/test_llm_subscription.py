@@ -6,6 +6,7 @@ the choice lives in orgs.settings.llm_subscription and is honoured only on a
 self-hosted install. These tests pin both halves.
 """
 
+import asyncio
 import time as _time
 
 import pytest
@@ -476,6 +477,166 @@ async def test_no_bare_brain_call_outside_knowledge():
     assert not offenders, (
         "these call _call_brain_sync directly instead of llm.acomplete, "
         "skipping the org overlay warm-up: " + ", ".join(offenders))
+
+
+# ── Session enrichment: in-process tool loop vs agent-pi ────────────────────
+
+@pytest.fixture
+def enrichment(monkeypatch, tmp_path):
+    """_trigger_enrichment with everything but the routing decision stubbed out.
+
+    Yields (pipeline_module, record); record["fired"] is the agent-pi payload,
+    record["legacy"] the in-process run_enrichment call — exactly one of them
+    exists after a call, and which one is the thing under test.
+    """
+    import agents._legacy.enrichment as legacy
+    import routers.agents as ag
+    import routers.pipeline as pl
+
+    record: dict = {}
+
+    async def _fire(subject, org_id, brain, model, task=None, callback_url=None,
+                    agent_type="research", brain_from_config=False):
+        record["fired"] = {"subject": subject, "org_id": org_id, "brain": brain,
+                           "model": model, "agent_type": agent_type}
+        return "http://pi", 7
+
+    async def _run_enrichment(session_id, entities, org_id, run_id):
+        record["legacy"] = {"session_id": session_id, "org_id": org_id}
+        return {"enriched": 0, "errors": []}
+
+    monkeypatch.setattr(ag, "_fire_agent_service", _fire)
+    monkeypatch.setattr(ag, "_watch_agent_service_run", AsyncMock())
+    monkeypatch.setattr(legacy, "run_enrichment", _run_enrichment)
+    monkeypatch.setattr(pl, "BASE_DIR", tmp_path)    # no session files → prep no-ops
+    monkeypatch.setattr(pl, "DB_AVAILABLE", True)
+    monkeypatch.setattr(pl, "_promote_session", lambda sid: {"ok": True})
+    monkeypatch.setattr(pl.db_module, "create_agent_run", AsyncMock(return_value=42))
+    monkeypatch.setattr(pl.db_module, "update_agent_run", AsyncMock())
+    # The backend this is all about: static config says "run it in-process".
+    monkeypatch.setitem(context.config, "agent_service_backend", "python")
+    return pl, record
+
+
+async def test_enrichment_on_a_subscription_is_handed_to_agent_pi(enrichment, monkeypatch):
+    """The in-process enrichment loop calls tools, the Pi bridge is text-only —
+    so on a subscription workspace the static "python" backend must not get the
+    last word, or the run dies inside llm.chat with nothing written."""
+    pl, record = enrichment
+    await _overlay(monkeypatch, _settings(sub=SUB))
+    try:
+        await pl._trigger_enrichment("sess-sub", ORG_ID)
+        await asyncio.sleep(0)
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert "legacy" not in record, "the in-process loop ran on a text-only provider"
+    assert record["fired"]["agent_type"] == "enrichment"
+    # The resolution is passed on, not repeated — the two can never disagree.
+    assert (record["fired"]["brain"], record["fired"]["model"]) == ("openai-codex", "gpt-5.4")
+
+
+async def test_enrichment_without_a_subscription_keeps_the_python_loop(enrichment, monkeypatch):
+    """Everything that is not the bridge keeps today's path, byte for byte."""
+    pl, record = enrichment
+    _platform_openrouter(monkeypatch)
+    await _overlay(monkeypatch, _settings())
+    try:
+        await pl._trigger_enrichment("sess-own", ORG_ID)
+        await asyncio.sleep(0)
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert "fired" not in record, "an openai-compatible provider was sent to agent-pi"
+    assert record["legacy"]["session_id"] == "sess-own"
+
+
+# ── The early refusal for the in-process tool loop ──────────────────────────
+
+async def test_tool_loop_on_the_bridge_is_refused_with_the_way_out(monkeypatch):
+    """The refusal a tool loop used to get came from deep inside llm.chat and
+    said only "text-only". At the seam where the loop is built it can say what
+    to do instead."""
+    from agents.runner import _load_brain
+
+    _platform_openrouter(monkeypatch)
+    monkeypatch.setitem(context.config, "agent_brain", "openrouter")
+    await _overlay(monkeypatch, _settings(sub=SUB))
+    try:
+        with pytest.raises(llm.LLMError) as exc:
+            _load_brain(org_id=ORG_ID)
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    msg = str(exc.value)
+    assert "agent-pi" in msg                     # where tool calling does work
+    assert "enrichment" in msg                   # and which run types do it
+    assert "Settings" in msg                     # and how to get the loop back
+
+
+async def test_tool_loop_is_not_refused_on_an_openai_compatible_provider(monkeypatch):
+    from agents.brain import OpenAICompatibleBrain
+    from agents.runner import _load_brain
+
+    own = {"ollama": {"kind": "openai-compat", "base_url": "http://x/v1", "api_key": "local"}}
+    _platform_openrouter(monkeypatch)
+    monkeypatch.setitem(context.config, "agent_brain", "openrouter")
+    await _overlay(monkeypatch, _settings(sub=SUB, own=own))
+    try:
+        brain = _load_brain(org_id=ORG_ID)
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert isinstance(brain, OpenAICompatibleBrain)
+
+
+async def test_a_brain_built_on_a_cold_overlay_still_refuses_before_any_tool_runs(monkeypatch):
+    """_load_brain reads the overlay cache only, so a brain built before the org
+    was loaded gets no refusal there — think() is the backstop, and it fires
+    before the first tool call rather than after six of them."""
+    from agents.brain import OpenAICompatibleBrain
+    from agents.tools import Tool
+
+    monkeypatch.setitem(context.config, "llm_oauth_gray_flows", True)
+    monkeypatch.setitem(context.config, "hosted", {})
+    reached = {}
+
+    async def _achat(*a, **k):
+        reached["achat"] = True
+        return {}
+
+    monkeypatch.setattr(llm, "achat", _achat)
+    tool = Tool(name="noop", description="", parameters={}, fn=lambda: None)
+    try:
+        with (
+            patch("context.db_module.get_org_settings", new_callable=AsyncMock,
+                  return_value=_settings(sub=SUB)),
+            patch("context.db_module.llm_usage_month_cost", new_callable=AsyncMock,
+                  return_value=0.0),
+        ):
+            llm.invalidate_org_overlay(ORG_ID)
+            brain = OpenAICompatibleBrain(role="default", org_id=ORG_ID)
+            with pytest.raises(llm.LLMError) as exc:
+                await brain.think([{"role": "user", "content": "hi"}], [tool])
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert "agent-pi" in str(exc.value)
+    assert not reached, "the tool loop reached llm.achat on a text-only provider"
+
+
+async def test_text_only_calls_still_run_on_the_bridge(monkeypatch):
+    """The refusal is about tool loops only: summaries, triage and NBA reasons
+    go through the same subscription provider and must keep working."""
+    seen = {}
+
+    def _fake_pi_complete(provider, model, messages, max_tokens, timeout, org_id=None):
+        seen["pi_provider"] = (provider.headers or {}).get("pi_provider")
+        return {"content": "summary text", "tool_calls": [], "_usage": None}
+
+    monkeypatch.setattr(llm, "_pi_complete", _fake_pi_complete)
+    await _overlay(monkeypatch, _settings(sub=SUB))
+    try:
+        out = await llm.acomplete("summarise this", role="summary", org_id=ORG_ID)
+    finally:
+        llm.invalidate_org_overlay(ORG_ID)
+    assert out == "summary text"
+    assert seen["pi_provider"] == "openai-codex"
 
 
 async def test_no_run_is_fired_around_the_resolver():
