@@ -96,12 +96,11 @@ reporting "no news".
 - Nothing was pushed until Konrad asked; then `main` went to `test/round2`.
 - Sonnet developers per package in git worktrees, an Opus adversarial review
   before every merge, small commits.
-- Commits carry a `Co-Authored-By: Claude Fable 5.1` trailer because that
-  session's harness required it. **This repo's own rule is "no Claude co-author
-  trailer"** (see the dev session's memory). Strip the trailers before anything
-  from `test/round2` reaches `main` (`git filter-branch --msg-filter 'grep -v
-  "^Co-Authored-By: Claude"'` over `origin/main..test/round2`, then force-push
-  the test branch), or keep them, Konrad's call.
+- This repo's rule is "no Claude co-author trailer". The round-2 commits were
+  first written with one (the thesis session's harness required it) and the
+  trailers were stripped from the whole `origin/main..test/round2` range on
+  2026-09-15 at Konrad's request (history rewrite, force-pushed to the test
+  branch only). Authorship is Konrad Firley <konrad@codexperiment.de>.
 - The local test instance was updated by fetching from the local repo, not by
   pulling from GitHub; the hosted server keeps the commit → GitHub → pull →
   rebuild flow.
