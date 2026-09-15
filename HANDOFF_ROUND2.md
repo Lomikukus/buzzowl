@@ -3,7 +3,9 @@
 Read this first when picking up Buzzowl development. It records what a separate
 Claude session (the thesis session) changed, how it was verified, what is open,
 and two new work items Konrad asked for. Branch: `test/round2` on GitHub
-(`main` on GitHub is untouched). Local `main` in `~/Youtube/buzzowl` equals it.
+(`main` on GitHub is untouched). The checkout in `~/Youtube/buzzowl` is on
+`test/round2`; local `main` tracks `origin/main` and must not receive this work
+until Konrad merges it deliberately (`git merge --ff-only test/round2` on `main`).
 
 ## 1. State in one paragraph
 
