@@ -247,6 +247,12 @@ class TestMetadataTransitions:
             patch("routers.pipeline.db_module.update_agent_run", new_callable=AsyncMock),
             patch("agents._legacy.enrichment.run_enrichment", new_callable=AsyncMock,
                   return_value={"enriched": 2, "docs": ["d1"], "errors": []}),
+            # This test exercises the in-process legacy loop (backend "python").
+            # _trigger_enrichment now probes the resolved provider and hands the
+            # run to agent-pi when it is the subscription bridge; pin the probe to
+            # a non-pi kind so the branch is deterministic regardless of the host's
+            # llm config or a real agent-pi answering on :8001.
+            patch("routers.pipeline.llm.provider_kind", return_value="openai-compat"),
             # _promote_session's DB block: get_first_org returns None → block skipped gracefully.
             # _run_coro_from_thread must be patched too so the unawaited coroutine is consumed.
             patch("routers.pipeline.db_module.get_first_org", new_callable=AsyncMock, return_value=None),
