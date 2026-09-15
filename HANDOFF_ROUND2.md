@@ -72,6 +72,19 @@ reporting "no news".
    request leaves SearXNG, so the fallback must be a Camofox-driven search on the
    engine's site with the tab exposed. Design first, then build; keep the
    session key per tab and never store what the user types.
+   **Design proposed 2026-09-15, awaiting Konrad's go (next session: build on go):**
+   two stages. Stage 1 (own Camofox fetches, ~1.5-2 days): ship
+   `deploy/camofox.config.json` (interactive on, VNC plugin on) mounted to
+   `/app/camofox.config.json`, VNC port loopback-only (Mac: `vnc://localhost`,
+   server: SSH tunnel; VNC shows the whole browser, documented); new
+   `captcha_gate.py` (in-memory per-org registry, `GET /api/agents/captcha-gates`,
+   `POST .../{id}/check`); `_fetch_page_camofox` behind config flag
+   `captcha_user_solve` holds the tab on pattern match, registers a gate,
+   notifies (client-page banner next to the intake strip + `notify_user`);
+   poller re-snapshots every 10 s, resumes the original flow when clear;
+   expiry 10 min and never past the intake part budget. Stage 2 (engine
+   CAPTCHAs, +1-2 days, decide after measuring stage 1): Camofox-driven search
+   tier on the engine's site with visible tab, same gate, per-engine SERP parse.
 2. **Tool calling for the Python enrichment loop on the subscription (Konrad,
    2026-09-15).** `llm.py` raises `LLMError("provider kind 'pi' is text-only (no
    tool calling)")` for `llm.chat`/`llm.achat` with tools (`llm.py:717-720`), so
@@ -84,6 +97,16 @@ reporting "no news".
    with `kind != "pi"`. Alternative: extend the bridge (`agent_service_ts`
    `/complete`) to a `/chat` endpoint that accepts tool definitions and returns
    tool calls; more work, same result.
+   **Decision 2026-09-15 (Claude, awaiting Konrad's go): take the recommended
+   route.** Gate on the RESOLVED provider from `resolve_run_target(org_id, "", "")`
+   (not on static `agent_service_backend`): kind `pi` -> fire agent-pi run
+   (enrichment / orchestrate), anything else -> keep the in-process Python loop.
+   Plus: `OpenAICompatibleBrain`/`_load_brain` raise an actionable early error
+   for kind `pi`, and `tests/test_llm_subscription.py` gets a case pinning it.
+   Rationale: repo rule 9 (Pi owns all agent types), the TS `enrichment` run
+   type is field-tested with tools on `openai-codex`, and a bridge `/chat`
+   would duplicate tool-loop semantics across the HTTP boundary for the same
+   result.
 3. Vorwerk (`career.vorwerk.de`, JS portal): either a manual `careers_url` or a
    listing tier that renders the portal through Camofox and reads the job cards.
 4. Trumpf: student board cached; expect the professional board after the next
