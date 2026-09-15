@@ -821,6 +821,73 @@ def provider_for_brain(brain: str) -> str:
     return {"claude": "anthropic"}.get(brain, brain or "openrouter")
 
 
+def provider_kind(name: str, org_id: Optional[int] = None) -> str:
+    """Transport kind behind a run-target provider NAME — "" when unknown.
+
+    The names that reach here come from routers.agents.resolve_run_target, i.e.
+    agent-pi provider names ("openrouter", "anthropic", "openai-codex"), and
+    those are not always keys of a providers block: a connected subscription is
+    injected into the org overlay under the synthetic __subscription__ key with
+    the real name in headers.pi_provider (see _apply_subscription_overlay). So
+    match on either, org overlay first — warm it with ensure_org_overlay before
+    asking, the way resolve()'s callers do.
+
+    Callers use this to tell "this run would go through the Pi bridge" (kind
+    'pi', text-only) from "this run has a provider we can drive in-process".
+    """
+    if not name:
+        return ""
+    ov = _org_overlay_sync(org_id) or {}
+    for block in (ov, _effective_config()):
+        for pname, raw in (block.get("providers") or {}).items():
+            if not isinstance(raw, dict):
+                continue
+            if pname == name or (raw.get("headers") or {}).get("pi_provider") == name:
+                return raw.get("kind", "openai-compat")
+    return ""
+
+
+def resolved_provider_kind(role: str = "default", org_id: Optional[int] = None) -> str:
+    """Kind of the provider a call for this ROLE would land on — "" when unknown.
+
+    Advisory: a look, not a call. With a cold org overlay it answers "" instead
+    of resolving against the platform config (resolve() would answer for the
+    wrong tenant and log about it), and it swallows resolve()'s own refusals —
+    budget, dangling role, no provider — because those belong to the real call.
+    """
+    if org_id and _org_overlay_sync(org_id) is None:
+        return ""
+    try:
+        provider, _model = resolve(role, None, org_id)
+    except LLMError:
+        return ""
+    return provider.kind
+
+
+# The Pi bridge is text-only (see chat(): kind 'pi' refuses tool definitions).
+# Told at the seam where an in-process tool loop starts, that fact needs to name
+# the way out, not just the limitation.
+PI_TOOL_LOOP_REFUSAL = (
+    "this workspace's LLM is reached through the agent-pi bridge (a connected "
+    "ChatGPT/Copilot subscription), which does text completions only — an "
+    "in-process Python tool loop cannot run on it. Tool-calling work runs inside "
+    "agent-pi instead, where the enrichment, research, osint, pain_point_research, "
+    "match_synthesis and orchestrate run types all call tools on the subscription; "
+    "session enrichment routes there by itself. To run the in-process agent loop, "
+    "configure a provider with its own API key under Settings › LLM Providers."
+)
+
+
+def ensure_tool_calling_supported(role: str = "default", org_id: Optional[int] = None) -> None:
+    """Refuse a tool loop the resolved provider cannot run, before it starts.
+
+    Only tool loops: text-only callers (complete/acomplete/stream) are served by
+    the Pi bridge and must keep working, so nothing on those paths calls this.
+    """
+    if resolved_provider_kind(role, org_id) == "pi":
+        raise LLMError(PI_TOOL_LOOP_REFUSAL)
+
+
 def status() -> list[dict]:
     """Configured providers + role assignments + cheap reachability check.
 
