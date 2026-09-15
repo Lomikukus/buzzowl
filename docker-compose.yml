@@ -191,16 +191,16 @@ services:
   # The two differ on ARM on purpose: the image tag says aarch64, the Camoufox
   # release asset for it is named lin.arm64.zip.
   camofox:
-    image: camofox-browser:135.0.1-${CAMOFOX_ARCH:-aarch64}
+    image: camofox-browser:152.0.4-${CAMOFOX_ARCH:-aarch64}
     build:
-      # Pinned to the commit behind upstream tag v1.14.0 — a first run builds
+      # Pinned to the commit behind upstream tag v1.16.0 — a first run builds
       # third-party code unattended, so the ref must be immutable (tags are not).
       # Bump the commit and the version args together.
-      context: https://github.com/jo-inc/camofox-browser.git#e5a36f5cd0332fde6597de474329a308a53a0716
+      context: https://github.com/jo-inc/camofox-browser.git#79d425be26743883a06613eaa3be5e38e7ab5409
       args:
         ARCH: ${CAMOFOX_BUILD_ARCH:-arm64}
-        CAMOUFOX_VERSION: "135.0.1"
-        CAMOUFOX_RELEASE: beta.24
+        CAMOUFOX_VERSION: "152.0.4"
+        CAMOUFOX_RELEASE: beta.28
     container_name: buzzowl_camofox
     ports:
       # Loopback only — agents reach it inside the compose network as camofox:9377.

@@ -8,13 +8,13 @@
 #   ./scripts/build-browser.sh            # auto-detects the host architecture
 #   CAMOFOX_ARCH=x86_64 ./scripts/...     # or force one
 #
-# Result: image camofox-browser:135.0.1-<arch>, exactly the tag docker-compose.yml
+# Result: image camofox-browser:152.0.4-<arch>, exactly the tag docker-compose.yml
 # references, so Compose reuses it instead of building. To skip the browser
 # entirely, start without those containers:
 #   docker compose up -d db searxng server agent-pi
 set -euo pipefail
 
-TAG_VERSION="135.0.1"
+TAG_VERSION="152.0.4"
 SRC_DIR="${CAMOFOX_SRC:-./camofox-browser}"
 UPSTREAM="https://github.com/jo-inc/camofox-browser"
 
