@@ -107,6 +107,24 @@ reporting "no news".
    type is field-tested with tools on `openai-codex`, and a bridge `/chat`
    would duplicate tool-loop semantics across the HTTP boundary for the same
    result.
+   **DONE 2026-09-16 (merged to `test/round2` @ da1a037, main untouched).**
+   `_trigger_enrichment` gates on `llm.provider_kind(resolved_provider, org_id)`
+   (new, alongside `provider_for_brain` — matches the `__subscription__` overlay's
+   `headers.pi_provider`, so the guard test stays satisfied): kind `pi` -> agent-pi
+   enrichment run with the resolution passed through; every other provider is
+   byte-identical to before. Early refusal `llm.ensure_tool_calling_supported`
+   (message `PI_TOOL_LOOP_REFUSAL`) fires at `runner._load_brain` and
+   `OpenAICompatibleBrain.think` before any tool runs; text-only acomplete on the
+   bridge is untouched. 6 new guard tests in `tests/test_llm_subscription.py`
+   (mutation-checked) plus a determinism fix to the pre-existing
+   `test_pipeline.py::...transitions_staged_to_promoted` (pin the probe). Suite
+   1284 passed / 26 skipped, tsc clean. Verified live on the test instance
+   (org `test-suite`, sub `openai-codex`): `provider_kind`->`pi`, refusal fires
+   with the actionable message, text-only summary still resolves without refusal.
+   Note: that instance runs `agent_service_backend: pi`, so enrichment already
+   went to Pi — the change's live effect there is the correct predicate and the
+   loud early error; the routing branch matters on a `backend: python` + subscription
+   install.
 3. Vorwerk (`career.vorwerk.de`, JS portal): either a manual `careers_url` or a
    listing tier that renders the portal through Camofox and reads the job cards.
 4. Trumpf: student board cached; expect the professional board after the next
